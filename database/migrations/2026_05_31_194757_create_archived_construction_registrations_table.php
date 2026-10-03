@@ -10,7 +10,7 @@ return new class extends Migration
     {
         Schema::create('archived_construction_registrations', function (Blueprint $table) {
             $table->id();
-            
+
             // Original registration data (all columns from main table)
             $table->string('registration_type');
             $table->string('purpose')->nullable();
@@ -27,7 +27,7 @@ return new class extends Migration
             $table->string('land_ownership_document')->nullable();
             $table->string('zone')->nullable();
             $table->string('section')->nullable();
-            
+
             // Construction fields
             $table->string('property_type')->nullable();
             $table->string('custom_property_type')->nullable();
@@ -36,7 +36,7 @@ return new class extends Migration
             $table->boolean('has_plans')->default(false);
             $table->date('estimated_completion')->nullable();
             $table->json('construction_documents')->nullable();
-            
+
             // Property capture fields
             $table->string('existing_property_type')->nullable();
             $table->string('existing_custom_property_type')->nullable();
@@ -46,12 +46,12 @@ return new class extends Migration
             $table->integer('year_built')->nullable();
             $table->json('property_photos')->nullable();
             $table->json('property_documents')->nullable();
-            
+
             // Tenant data
             $table->boolean('has_tenants')->default(false);
             $table->integer('tenant_count')->default(0);
             $table->json('tenant_data')->nullable();
-            
+
             // Status and tracking
             $table->string('status');
             $table->string('access_token')->nullable();
@@ -65,21 +65,21 @@ return new class extends Migration
             $table->text('info_requested')->nullable();
             $table->foreignId('assigned_to')->nullable();
             $table->timestamp('assigned_at')->nullable();
-            
+
             // Archive metadata
-            $table->timestamp('archived_at');
+            $table->timestamp('archived_at')->nullable();       // FIXED
             $table->integer('archive_year');
             $table->text('archive_reason')->nullable();
             $table->foreignId('archived_by')->nullable();
             $table->integer('original_id'); // Reference to original record ID
-            
+
             // Original timestamps
-            $table->timestamp('original_created_at');
-            $table->timestamp('original_updated_at');
+            $table->timestamp('original_created_at')->nullable();  // FIXED
+            $table->timestamp('original_updated_at')->nullable();  // FIXED
             $table->timestamp('original_deleted_at')->nullable();
-            
+
             $table->timestamps();
-            
+
             // Indexes for performance
             $table->index('archive_year');
             $table->index('status');
