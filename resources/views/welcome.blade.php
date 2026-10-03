@@ -14,6 +14,25 @@
         'total_tenants'      => 0,
         'total_landlords'    => 0,
     ];
+
+    // ⭐ Resolve storage URLs via the configured disk (works with local + S3/Spaces)
+    $logoUrl = null;
+    if (!empty($systemSettings->system_logo)) {
+        try {
+            $logoUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($systemSettings->system_logo);
+        } catch (\Throwable $e) {
+            $logoUrl = null;
+        }
+    }
+
+    $faviconUrl = null;
+    if (!empty($systemSettings->system_favicon)) {
+        try {
+            $faviconUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($systemSettings->system_favicon);
+        } catch (\Throwable $e) {
+            $faviconUrl = null;
+        }
+    }
 @endphp
 <!DOCTYPE html>
 <html lang="en">
@@ -30,13 +49,13 @@
     <meta name="author" content="{{ $systemSettings->system_name ?? 'Community Portal' }}">
     
     <!-- ============ FAVICON ============ -->
-    @if(isset($systemSettings) && method_exists($systemSettings, 'hasFavicon') && $systemSettings->hasFavicon())
-        <link rel="icon" href="{{ $systemSettings->getFaviconUrl() }}" type="image/x-icon">
-        <link rel="shortcut icon" href="{{ $systemSettings->getFaviconUrl() }}" type="image/x-icon">
-        <link rel="apple-touch-icon" href="{{ $systemSettings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="16x16" href="{{ $systemSettings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="32x32" href="{{ $systemSettings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="64x64" href="{{ $systemSettings->getFaviconUrl() }}">
+    @if($faviconUrl)
+        <link rel="icon" href="{{ $faviconUrl }}" type="image/x-icon">
+        <link rel="shortcut icon" href="{{ $faviconUrl }}" type="image/x-icon">
+        <link rel="apple-touch-icon" href="{{ $faviconUrl }}">
+        <link rel="icon" type="image/png" sizes="16x16" href="{{ $faviconUrl }}">
+        <link rel="icon" type="image/png" sizes="32x32" href="{{ $faviconUrl }}">
+        <link rel="icon" type="image/png" sizes="64x64" href="{{ $faviconUrl }}">
     @else
         <link rel="icon" href="{{ asset('favicon.ico') }}" type="image/x-icon">
         <link rel="shortcut icon" href="{{ asset('favicon.ico') }}" type="image/x-icon">
@@ -2347,10 +2366,12 @@
     <header>
         <div class="container header-container">
             <a href="/" class="logo">
-                @if(isset($systemSettings) && $systemSettings->system_logo)
-                    <img src="{{ asset('storage/' . $systemSettings->system_logo) }}" 
+                @if($logoUrl)
+                    <img src="{{ $logoUrl }}" 
                          alt="{{ $systemSettings->system_name ?? 'System Logo' }}" 
-                         class="logo-image">
+                         class="logo-image"
+                         onerror="this.style.display='none'; this.parentElement.querySelector('.logo-fallback-icon')?.style.setProperty('display','inline-block');">
+                    <i class="fas fa-building logo-fallback-icon" style="display:none;"></i>
                 @else
                     <i class="fas fa-building"></i>
                 @endif
