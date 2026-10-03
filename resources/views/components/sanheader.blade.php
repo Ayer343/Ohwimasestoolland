@@ -88,20 +88,44 @@
     <!-- Enhanced Professional Logo Section -->
     <div class="logo-section">
         @php
-            $systemSettings = \App\Models\SystemSetting::getSettings();
-            $systemLogo = $systemSettings->system_logo ?? null;
+            // Get system settings (guarded so a DB issue never breaks the sidebar)
+            try {
+                $systemSettings = \App\Models\SystemSetting::getSettings();
+            } catch (\Throwable $e) {
+                $systemSettings = null;
+            }
+
+            $systemLogo      = $systemSettings->system_logo ?? null;
             $systemShortName = $systemSettings->system_short_name ?? config('app.short_name', 'Sanitation');
-            $systemName = $systemSettings->system_name ?? config('app.name', 'Laravel');
+            $systemName      = $systemSettings->system_name ?? config('app.name', 'Laravel');
+
+            // ============ FIXED: Resolve logo URL from the SAME disk uploads use ============
+            // The `public` disk resolves to either storage/app/public (local) or
+            // DigitalOcean Spaces / S3 (production) via PUBLIC_FILESYSTEM_DRIVER.
+            // Using it here keeps local and production consistent.
+            $systemLogoUrl = null;
+            if ($systemLogo) {
+                try {
+                    $systemLogoUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($systemLogo);
+                } catch (\Throwable $e) {
+                    // Last-resort fallback: treat it as a path under /storage
+                    try {
+                        $systemLogoUrl = \Illuminate\Support\Facades\Storage::url($systemLogo);
+                    } catch (\Throwable $e2) {
+                        $systemLogoUrl = null;
+                    }
+                }
+            }
         @endphp
 
         <div class="logo-container">
             <div class="logo-wrapper">
-                @if($systemLogo)
+                @if($systemLogoUrl)
                     <div class="logo-image-container">
-                        <img src="{{ Storage::url($systemLogo) }}"
+                        <img src="{{ $systemLogoUrl }}"
                              alt="{{ $systemName }}"
                              class="logo-image"
-                             onerror="this.style.display='none'; document.getElementById('logoFallback').style.display='flex';">
+                             onerror="this.style.display='none'; var f=document.getElementById('logoFallback'); if(f) f.style.display='flex';">
                         <div id="logoFallback" class="logo-fallback" style="display: none;">
                             <i class="fas fa-trash-alt"></i>
                         </div>
@@ -643,8 +667,7 @@
                                                 <span class="ml-2 px-1.5 py-0.5 rounded-full text-[10px]" style="background-color: rgba(239, 68, 68, 0.2); color: #ef4444;">
                                                     {{ $accountUnread }} unread
                                                 </span>
-                                            @endif
-                                        </div>
+                                            @endif                                        </div>
                                     </div>
                                 </div>
                                 <div class="flex items-center space-x-1 flex-shrink-0 ml-2">

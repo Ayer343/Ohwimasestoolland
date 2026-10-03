@@ -836,7 +836,11 @@
                                         <div>
                                             <label class="flex items-center">
                                                 <input type="hidden" name="auto_generate_tenant_invoices" value="0">
-                                                <input type="checkbox" name="auto_generate_tenant_invoices" value="1" checked class="mr-2 tenant-auto-invoice-toggle">
+                                                <input type="checkbox"
+                                                       id="auto_generate_tenant_invoices"
+                                                       name="auto_generate_tenant_invoices"
+                                                       value="1" checked
+                                                       class="mr-2 tenant-auto-invoice-toggle">
                                                 <span class="font-medium">Auto-generate tenant invoices</span>
                                             </label>
                                             <p class="text-xs mt-1 ml-6" style="color: var(--text-secondary);">Automatically generate invoices for tenants each month</p>
@@ -850,7 +854,11 @@
                                         <div>
                                             <label class="flex items-center">
                                                 <input type="hidden" name="send_tenant_payment_reminders" value="0">
-                                                <input type="checkbox" name="send_tenant_payment_reminders" value="1" checked class="mr-2 tenant-reminder-toggle">
+                                                <input type="checkbox"
+                                                       id="send_tenant_payment_reminders"
+                                                       name="send_tenant_payment_reminders"
+                                                       value="1" checked
+                                                       class="mr-2 tenant-reminder-toggle">
                                                 <span class="font-medium">Send tenant payment reminders</span>
                                             </label>
                                             <p class="text-xs mt-1 ml-6" style="color: var(--text-secondary);">Send reminder notifications to tenants before due date</p>
@@ -894,6 +902,9 @@
                                     <div>Auto-generate tenant invoices: <span id="previewTenantAutoGenerate" class="text-success">Yes</span></div>
                                     <div>Send tenant reminders: <span id="previewTenantReminders" class="text-success">Yes</span></div>
                                     <div>Tenant grace period: <span id="previewTenantGracePeriod">7 days</span></div>
+                                    <div>Late payment %: <span id="previewTenantLatePenalty">Not set</span></div>
+                                    <div>Fixed penalty: <span id="previewTenantFixedPenalty">Not set</span></div>
+                                    <div class="col-span-2">Total penalty: <span id="previewTenantTotalPenalty">No penalty set</span></div>
                                 </div>
                             </div>
                         </div>
@@ -1170,13 +1181,20 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Real-time preview updates for checkbox changes
-    document.querySelectorAll('input[name="auto_generate_tenant_invoices"], input[name="send_tenant_payment_reminders"]').forEach(el => {
-        el.addEventListener('change', function() {
-            if (document.getElementById('enable_tenant_invoicing')?.checked) {
-                updateTenantPreview();
-            }
-        });
+    // ============================================================
+    // FIX: target the checkbox specifically.
+    //
+    // Each of these names has TWO inputs in the DOM: a hidden
+    // <input type="hidden" value="0"> and the visible checkbox.
+    // A bare querySelector('input[name="..."]') matches the hidden
+    // one first, so .checked always reads false. Adding
+    // [type="checkbox"] ensures we hit the real checkbox.
+    // ============================================================
+    document.querySelectorAll(
+        'input[type="checkbox"][name="auto_generate_tenant_invoices"], ' +
+        'input[type="checkbox"][name="send_tenant_payment_reminders"]'
+    ).forEach(el => {
+        el.addEventListener('change', updateTenantPreview);
     });
 });
 
@@ -1364,8 +1382,10 @@ function initializePreviewModal() {
                 enabled: true,
                 monthly_amount: document.getElementById('tenant_monthly_dues_amount')?.value || '0',
                 calculation_method: document.getElementById('tenant_calculation_method')?.value === 'fixed' ? 'Fixed Amount' : 'Per Property Unit',
-                auto_generate: document.querySelector('input[name="auto_generate_tenant_invoices"]')?.checked || false,
-                send_reminders: document.querySelector('input[name="send_tenant_payment_reminders"]')?.checked || false,
+                // FIX: target the checkbox specifically, otherwise the hidden
+                // value="0" input with the same name is matched first.
+                auto_generate: document.querySelector('input[type="checkbox"][name="auto_generate_tenant_invoices"]')?.checked || false,
+                send_reminders: document.querySelector('input[type="checkbox"][name="send_tenant_payment_reminders"]')?.checked || false,
                 grace_period: document.getElementById('tenant_grace_period_days')?.value || '7',
                 late_percentage: document.getElementById('tenant_late_payment_percentage')?.value || '0',
                 fixed_penalty: document.getElementById('tenant_fixed_penalty_amount')?.value || '0'
@@ -1662,8 +1682,8 @@ function initializeTenantInvoiceFields() {
     const tenantFields = document.querySelectorAll('.tenant-dependent-field');
     const tenantAmountField = document.getElementById('tenant_monthly_dues_amount');
     const tenantMethodField = document.getElementById('tenant_calculation_method');
-    const tenantGraceField = document.getElementById('tenant_grace_period_days');
-    const tenantLateField = document.getElementById('tenant_late_payment_percentage');
+    const tenantGraceField  = document.getElementById('tenant_grace_period_days');
+    const tenantLateField   = document.getElementById('tenant_late_payment_percentage');
     const tenantFixedPenaltyField = document.getElementById('tenant_fixed_penalty_amount');
     
     function toggleTenantFields() {
@@ -1709,93 +1729,112 @@ function initializeTenantInvoiceFields() {
             });
         }
     });
+    
+    // NOTE: the two tenant checkboxes (auto_generate_tenant_invoices,
+    // send_tenant_payment_reminders) are wired up in DOMContentLoaded
+    // with a `[type="checkbox"]` selector to avoid matching the hidden
+    // value="0" inputs. Do NOT bind them here without that qualifier.
 }
 
 function updateTenantPreview() {
     const tenantToggle = document.getElementById('enable_tenant_invoicing');
     
     if (!tenantToggle || !tenantToggle.checked) {
-        const previewAmount = document.getElementById('previewTenantAmount');
-        const previewAutoGenerate = document.getElementById('previewTenantAutoGenerate');
-        const previewReminders = document.getElementById('previewTenantReminders');
-        const previewGracePeriod = document.getElementById('previewTenantGracePeriod');
-        const previewLatePenalty = document.getElementById('previewTenantLatePenalty');
-        const previewFixedPenalty = document.getElementById('previewTenantFixedPenalty');
-        
-        if (previewAmount) { previewAmount.textContent = 'Disabled'; previewAmount.style.color = 'var(--text-secondary)'; }
-        if (previewAutoGenerate) { previewAutoGenerate.textContent = 'Disabled'; previewAutoGenerate.style.color = 'var(--text-secondary)'; }
-        if (previewReminders) { previewReminders.textContent = 'Disabled'; previewReminders.style.color = 'var(--text-secondary)'; }
-        if (previewGracePeriod) { previewGracePeriod.textContent = 'Disabled'; previewGracePeriod.style.color = 'var(--text-secondary)'; }
-        if (previewLatePenalty) { previewLatePenalty.textContent = 'Disabled'; previewLatePenalty.style.color = 'var(--text-secondary)'; }
-        if (previewFixedPenalty) { previewFixedPenalty.textContent = 'Disabled'; previewFixedPenalty.style.color = 'var(--text-secondary)'; }
+        const ids = [
+            'previewTenantAmount',
+            'previewTenantAutoGenerate',
+            'previewTenantReminders',
+            'previewTenantGracePeriod',
+            'previewTenantLatePenalty',
+            'previewTenantFixedPenalty',
+            'previewTenantTotalPenalty'
+        ];
+        ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = 'Disabled';
+                el.style.color = 'var(--text-secondary)';
+            }
+        });
         return;
     }
     
     const currencySymbol = document.getElementById('currency_symbol')?.value || 'GH₵';
     const landlordAmount = parseFloat(document.getElementById('monthly_dues_amount')?.value) || 0;
-    const tenantAmount = parseFloat(document.getElementById('tenant_monthly_dues_amount')?.value) || 0;
-    const tenantMethod = document.getElementById('tenant_calculation_method')?.value || 'fixed';
-    const autoGenerate = document.querySelector('input[name="auto_generate_tenant_invoices"]')?.checked || false;
-    const sendReminders = document.querySelector('input[name="send_tenant_payment_reminders"]')?.checked || false;
-    const gracePeriod = document.getElementById('tenant_grace_period_days')?.value || '7';
-    const latePercentage = parseFloat(document.getElementById('tenant_late_payment_percentage')?.value) || 0;
-    const fixedPenalty = parseFloat(document.getElementById('tenant_fixed_penalty_amount')?.value) || 0;
+    const tenantAmount   = parseFloat(document.getElementById('tenant_monthly_dues_amount')?.value) || 0;
+    const tenantMethod   = document.getElementById('tenant_calculation_method')?.value || 'fixed';
     
-    const previewLandlord = document.getElementById('previewLandlordAmount');
-    const previewMethod = document.getElementById('previewTenantMethod');
-    const previewAmount = document.getElementById('previewTenantAmount');
-    const previewAutoGenerate = document.getElementById('previewTenantAutoGenerate');
+    // FIX: target the checkbox specifically. There is also a hidden
+    // <input type="hidden" name="..." value="0"> with the same name, and a
+    // bare querySelector would match that hidden input first — which would
+    // always read as unchecked and falsely display "No ❌".
+    const autoGenerate  = document.querySelector('input[type="checkbox"][name="auto_generate_tenant_invoices"]')?.checked  || false;
+    const sendReminders = document.querySelector('input[type="checkbox"][name="send_tenant_payment_reminders"]')?.checked || false;
+    
+    const gracePeriod    = document.getElementById('tenant_grace_period_days')?.value || '7';
+    const latePercentage = parseFloat(document.getElementById('tenant_late_payment_percentage')?.value) || 0;
+    const fixedPenalty   = parseFloat(document.getElementById('tenant_fixed_penalty_amount')?.value) || 0;
+    
+    const previewLandlord  = document.getElementById('previewLandlordAmount');
+    const previewMethod    = document.getElementById('previewTenantMethod');
+    const previewAmount    = document.getElementById('previewTenantAmount');
+    const previewAutoGen   = document.getElementById('previewTenantAutoGenerate');
     const previewReminders = document.getElementById('previewTenantReminders');
-    const previewGracePeriod = document.getElementById('previewTenantGracePeriod');
-    const previewLatePenalty = document.getElementById('previewTenantLatePenalty');
-    const previewFixedPenalty = document.getElementById('previewTenantFixedPenalty');
-    const previewTotalPenalty = document.getElementById('previewTenantTotalPenalty');
+    const previewGrace     = document.getElementById('previewTenantGracePeriod');
+    const previewLate      = document.getElementById('previewTenantLatePenalty');
+    const previewFixed     = document.getElementById('previewTenantFixedPenalty');
+    const previewTotal     = document.getElementById('previewTenantTotalPenalty');
     
     if (previewLandlord) previewLandlord.textContent = formatCurrency(landlordAmount, currencySymbol);
-    if (previewMethod) previewMethod.textContent = tenantMethod === 'fixed' ? 'Fixed Amount' : 'Per Property Unit';
+    if (previewMethod)   previewMethod.textContent   = tenantMethod === 'fixed' ? 'Fixed Amount' : 'Per Property Unit';
+    
     if (previewAmount) {
         previewAmount.textContent = formatCurrency(tenantAmount, currencySymbol);
         previewAmount.style.color = tenantAmount > 0 ? 'var(--text-primary)' : 'rgb(220, 38, 38)';
     }
     
-    if (previewAutoGenerate) {
-        previewAutoGenerate.textContent = autoGenerate ? 'Yes ✅' : 'No ❌';
-        previewAutoGenerate.style.color = autoGenerate ? 'rgb(22, 163, 74)' : 'rgb(220, 38, 38)';
+    // ---- Auto-generate tenant invoices: ✅ / ❌ ----
+    if (previewAutoGen) {
+        previewAutoGen.textContent = autoGenerate ? 'Yes ✅' : 'No ❌';
+        previewAutoGen.style.color = autoGenerate ? 'rgb(22, 163, 74)' : 'rgb(220, 38, 38)';
+        previewAutoGen.classList.toggle('text-success', autoGenerate);
     }
     
+    // ---- Send tenant payment reminders: ✅ / ❌ ----
     if (previewReminders) {
         previewReminders.textContent = sendReminders ? 'Yes ✅' : 'No ❌';
         previewReminders.style.color = sendReminders ? 'rgb(22, 163, 74)' : 'rgb(220, 38, 38)';
+        previewReminders.classList.toggle('text-success', sendReminders);
     }
     
-    if (previewGracePeriod) previewGracePeriod.textContent = `${gracePeriod} days`;
+    if (previewGrace) previewGrace.textContent = `${gracePeriod} days`;
     
     const hasPercentagePenalty = latePercentage > 0;
-    const hasFixedPenalty = fixedPenalty > 0;
+    const hasFixedPenalty      = fixedPenalty > 0;
     
-    if (previewLatePenalty) {
-        previewLatePenalty.textContent = hasPercentagePenalty ? `${latePercentage}%` : 'Not set';
-        previewLatePenalty.style.color = hasPercentagePenalty ? 'rgb(217, 119, 6)' : 'var(--text-secondary)';
+    if (previewLate) {
+        previewLate.textContent = hasPercentagePenalty ? `${latePercentage}%` : 'Not set';
+        previewLate.style.color = hasPercentagePenalty ? 'rgb(217, 119, 6)' : 'var(--text-secondary)';
     }
     
-    if (previewFixedPenalty) {
-        previewFixedPenalty.textContent = hasFixedPenalty ? formatCurrency(fixedPenalty, currencySymbol) : 'Not set';
-        previewFixedPenalty.style.color = hasFixedPenalty ? 'rgb(217, 119, 6)' : 'var(--text-secondary)';
+    if (previewFixed) {
+        previewFixed.textContent = hasFixedPenalty ? formatCurrency(fixedPenalty, currencySymbol) : 'Not set';
+        previewFixed.style.color = hasFixedPenalty ? 'rgb(217, 119, 6)' : 'var(--text-secondary)';
     }
     
-    if (previewTotalPenalty) {
+    if (previewTotal) {
         if (hasPercentagePenalty && hasFixedPenalty) {
-            previewTotalPenalty.textContent = '⚠️ Both set (use only one)';
-            previewTotalPenalty.style.color = 'rgb(220, 38, 38)';
+            previewTotal.textContent = '⚠️ Both set (use only one)';
+            previewTotal.style.color = 'rgb(220, 38, 38)';
         } else if (hasPercentagePenalty) {
-            previewTotalPenalty.textContent = `${latePercentage}% of dues`;
-            previewTotalPenalty.style.color = 'rgb(217, 119, 6)';
+            previewTotal.textContent = `${latePercentage}% of dues`;
+            previewTotal.style.color = 'rgb(217, 119, 6)';
         } else if (hasFixedPenalty) {
-            previewTotalPenalty.textContent = formatCurrency(fixedPenalty, currencySymbol);
-            previewTotalPenalty.style.color = 'rgb(217, 119, 6)';
+            previewTotal.textContent = formatCurrency(fixedPenalty, currencySymbol);
+            previewTotal.style.color = 'rgb(217, 119, 6)';
         } else {
-            previewTotalPenalty.textContent = 'No penalty set';
-            previewTotalPenalty.style.color = 'var(--text-secondary)';
+            previewTotal.textContent = 'No penalty set';
+            previewTotal.style.color = 'var(--text-secondary)';
         }
     }
 }

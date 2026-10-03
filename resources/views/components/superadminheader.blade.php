@@ -24,11 +24,34 @@
     <!-- Enhanced Professional Logo Section -->
     <div class="logo-section">
         @php
-            // Get system settings
-            $systemSettings = \App\Models\SystemSetting::getSettings();
-            $systemLogo = $systemSettings->system_logo ?? null;
+            // Get system settings (with safety guard so a DB issue never breaks the sidebar)
+            try {
+                $systemSettings = \App\Models\SystemSetting::getSettings();
+            } catch (\Throwable $e) {
+                $systemSettings = null;
+            }
+
+            $systemLogo      = $systemSettings->system_logo ?? null;
             $systemShortName = $systemSettings->system_short_name ?? config('app.short_name', 'Admin');
-            $systemName = $systemSettings->system_name ?? config('app.name', 'Laravel');
+            $systemName      = $systemSettings->system_name ?? config('app.name', 'Laravel');
+
+            // ============ FIXED: Resolve logo URL from the SAME disk uploads use ============
+            // The `public` disk resolves to either storage/app/public (local) or
+            // DigitalOcean Spaces / S3 (production) via PUBLIC_FILESYSTEM_DRIVER.
+            // Using it here keeps local and production consistent.
+            $systemLogoUrl = null;
+            if ($systemLogo) {
+                try {
+                    $systemLogoUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($systemLogo);
+                } catch (\Throwable $e) {
+                    // Last-resort fallback: treat as a path under /storage
+                    try {
+                        $systemLogoUrl = \Illuminate\Support\Facades\Storage::url($systemLogo);
+                    } catch (\Throwable $e2) {
+                        $systemLogoUrl = null;
+                    }
+                }
+            }
 
             // ============ FIXED: Role-Based Authorization with Developer Support ============
             $user = auth()->user();
@@ -36,16 +59,16 @@
 
             // Check authorization using BOTH legacy type AND roles
             $hasSuperAdminAccess = ($currentUserType === 0) || $user->hasRole('super-admin');
-            $hasAdminAccess = ($currentUserType === 1) || $user->hasRole('admin');
-            $hasDeveloperAccess = ($currentUserType === 5) || $user->hasRole('developer');
+            $hasAdminAccess      = ($currentUserType === 1) || $user->hasRole('admin');
+            $hasDeveloperAccess  = ($currentUserType === 5) || $user->hasRole('developer');
 
             // ✅ FIXED: User is authorized if they have super admin, admin, OR developer access
             $isAuthorized = $hasSuperAdminAccess || $hasAdminAccess || $hasDeveloperAccess;
 
             // For individual menu items
             $isSuperAdmin = $hasSuperAdminAccess;
-            $isAdmin = $hasAdminAccess;
-            $isDeveloper = $hasDeveloperAccess;
+            $isAdmin      = $hasAdminAccess;
+            $isDeveloper  = $hasDeveloperAccess;
 
             // Get current role from session OR detect from current route for sidebar display
             $sidebarCurrentRole = session('selected_role');
@@ -97,9 +120,6 @@
 
             // Only proceed if authorized
             if ($isAuthorized) {
-                // Get unread notifications count - NOW USING THE SAFE VARIABLE
-                // $sidebarUnreadCount is already defined at the top of this file
-
                 // Get pending ownership transfers count
                 $pendingOwnershipTransfers = \App\Models\PropertyOwnershipTransfer::where('status', 'pending')->count();
 
@@ -205,8 +225,6 @@
                     $totalWhatsAppProviders = is_array($whatsappProviders) ? count($whatsappProviders) : 0;
 
                     // Determine whether at least one WhatsApp provider is configured.
-                    // WhatsApp service reports "configured" / "enabled" keys at top level
-                    // (see WhatsAppService::getSystemStatus()).
                     $whatsappProviderConfigured = (bool) (
                         ($whatsappSystemStatus['configured'] ?? false)
                         || ($whatsappSystemStatus['enabled'] ?? false)
@@ -237,12 +255,12 @@
         @if($isAuthorized)
         <div class="logo-container">
             <div class="logo-wrapper">
-                @if($systemLogo)
+                @if($systemLogoUrl)
                     <div class="logo-image-container">
-                        <img src="{{ Storage::url($systemLogo) }}"
+                        <img src="{{ $systemLogoUrl }}"
                              alt="{{ $systemName }}"
                              class="logo-image"
-                             onerror="this.style.display='none'; document.getElementById('logoFallback').style.display='flex';">
+                             onerror="this.style.display='none'; var f=document.getElementById('logoFallback'); if(f) f.style.display='flex';">
                         <div id="logoFallback" class="logo-fallback" style="display: none;">
                             <i class="fas fa-building"></i>
                         </div>
@@ -361,12 +379,9 @@
             $superAdmin = \App\Models\User::where('type', 0)->first(); // type 0 = Super Admin
 
             if ($isSuperAdmin || $isAdmin) {
-                // Super Admin: Show their own accounts
-                // Admin: Show ONLY the Super Admin's accounts (shared)
                 if ($isSuperAdmin) {
                     $emailAccounts = auth()->user()->emailAccounts()->get();
                 } else {
-                    // Admin: Get only Super Admin's email accounts
                     if ($superAdmin) {
                         $emailAccounts = $superAdmin->emailAccounts()->get();
                     } else {
@@ -374,16 +389,10 @@
                     }
                 }
 
-                // Also get all accounts if user is Super Admin (for full view)
-                if ($isSuperAdmin) {
-                    $emailAccounts = auth()->user()->emailAccounts()->get();
-                }
-
                 $pendingEmailCount = $emailAccounts->where('status', 'pending')->count();
                 $failedEmailCount = $emailAccounts->where('status', 'failed')->count();
                 $totalEmailIssues = $pendingEmailCount + $failedEmailCount;
 
-                // Get total unread emails across all accounts
                 $totalUnreadEmails = 0;
                 foreach ($emailAccounts as $account) {
                     try {
@@ -393,7 +402,6 @@
                     }
                 }
             } else {
-                // For other users (Developer, Landlord, Tenant), show their own accounts
                 $emailAccounts = $user ? $user->emailAccounts()->get() : collect();
                 $pendingEmailCount = $emailAccounts->where('status', 'pending')->count();
                 $failedEmailCount = $emailAccounts->where('status', 'failed')->count();
@@ -978,18 +986,14 @@
 
             {{-- Email Account Stats Summary --}}
             @php
-                // ✅ FIX: Get the Super Admin user
                 $superAdmin = \App\Models\User::where('type', 0)->first();
 
                 if ($isSuperAdmin) {
-                    // Super Admin: Show their own accounts
                     $emailAccounts = auth()->user()->emailAccounts()->get();
                     $userNames = [];
                 } elseif ($isAdmin) {
-                    // Admin: Show ONLY the Super Admin's email accounts
                     if ($superAdmin) {
                         $emailAccounts = $superAdmin->emailAccounts()->get();
-                        // Get Super Admin's name for display
                         $userNames = [];
                         foreach ($emailAccounts as $account) {
                             try {
@@ -1003,7 +1007,6 @@
                         $userNames = [];
                     }
                 } else {
-                    // For other users, show their own accounts
                     $emailAccounts = $user ? $user->emailAccounts()->get() : collect();
                     $userNames = [];
                 }
@@ -1081,7 +1084,6 @@
                     <i class="fas fa-bolt mr-2" style="color: var(--primary);"></i>Quick Actions
                 </h4>
                 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                    {{-- ⚠️ Admin cannot link accounts - only Super Admin can --}}
                     @if($isSuperAdmin)
                         <a href="{{ route('email-accounts.create') }}" class="quick-action-btn group flex items-center p-3 rounded-lg transition-all duration-200"
                            style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"

@@ -6,24 +6,47 @@
     <!-- Enhanced Professional Logo Section -->
     <div class="logo-section">
         @php
-            // Get system settings
-            $systemSettings = \App\Models\SystemSetting::getSettings();
-            $systemLogo = $systemSettings->system_logo ?? null;
+            // Get system settings (guarded so a DB issue never breaks the sidebar)
+            try {
+                $systemSettings = \App\Models\SystemSetting::getSettings();
+            } catch (\Throwable $e) {
+                $systemSettings = null;
+            }
+
+            $systemLogo      = $systemSettings->system_logo ?? null;
             $systemShortName = $systemSettings->system_short_name ?? config('app.short_name', 'Tenant');
-            $systemName = $systemSettings->system_name ?? config('app.name', 'Laravel');
-            
+            $systemName      = $systemSettings->system_name ?? config('app.name', 'Laravel');
+
+            // ============ FIXED: Resolve logo URL from the SAME disk uploads use ============
+            // The `public` disk resolves to either storage/app/public (local) or
+            // DigitalOcean Spaces / S3 (production) via PUBLIC_FILESYSTEM_DRIVER.
+            // Using it here keeps local and production consistent.
+            $systemLogoUrl = null;
+            if ($systemLogo) {
+                try {
+                    $systemLogoUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($systemLogo);
+                } catch (\Throwable $e) {
+                    // Last-resort fallback: treat it as a path under /storage
+                    try {
+                        $systemLogoUrl = \Illuminate\Support\Facades\Storage::url($systemLogo);
+                    } catch (\Throwable $e2) {
+                        $systemLogoUrl = null;
+                    }
+                }
+            }
+
             // FIX: Ensure sidebarUnreadCount is always defined
             if (!isset($sidebarUnreadCount)) {
                 $sidebarUnreadCount = auth()->check() ? auth()->user()->unreadNotifications()->count() : 0;
             }
-            
+
             // Get email accounts for tenant
             $user = auth()->user();
             $emailAccounts = $user ? $user->emailAccounts()->get() : collect();
             $pendingEmailCount = $emailAccounts->where('status', 'pending')->count();
             $failedEmailCount = $emailAccounts->where('status', 'failed')->count();
             $totalEmailIssues = $pendingEmailCount + $failedEmailCount;
-            
+
             $totalUnreadEmails = 0;
             foreach ($emailAccounts as $account) {
                 try {
@@ -33,16 +56,16 @@
                 }
             }
         @endphp
-        
+
         <div class="logo-container">
             <div class="logo-wrapper">
-                @if($systemLogo)
+                @if($systemLogoUrl)
                     <!-- Professional logo display with proper error handling -->
                     <div class="logo-image-container">
-                        <img src="{{ Storage::url($systemLogo) }}" 
-                             alt="{{ $systemName }}" 
+                        <img src="{{ $systemLogoUrl }}"
+                             alt="{{ $systemName }}"
                              class="logo-image"
-                             onerror="this.style.display='none'; document.getElementById('logoFallback').style.display='flex';">
+                             onerror="this.style.display='none'; var f=document.getElementById('logoFallback'); if(f) f.style.display='flex';">
                         <!-- Professional fallback - initially hidden -->
                         <div id="logoFallback" class="logo-fallback" style="display: none;">
                             <i class="fas fa-home"></i>
@@ -55,7 +78,7 @@
                     </div>
                 @endif
             </div>
-            
+
             <div class="logo-content">
                 <div class="logo-text-container">
                     <div class="logo-shortname" style="color: var(--sidebar-text);" title="{{ $systemName }}">
@@ -69,46 +92,46 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="toggle-sidebar" id="toggleSidebarDesktop">
             <i class="fas fa-chevron-left"></i>
         </div>
     </div>
-    
+
     <!-- Professional separator -->
     <div class="logo-separator"></div>
-    
+
     <!-- Compact navigation with minimal gap -->
     <nav class="mt-2">
         <div class="nav-divider">
             <span class="menu-text">MAIN NAVIGATION</span>
         </div>
-        
+
         <a href="{{ route('tenant.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('tenant.dashboard') ? 'active' : '' }}">
             <i class="fas fa-home mr-4"></i>
             <span class="nav-text">Dashboard</span>
         </a>
-        
+
         <!-- My Unit Link -->
         <a href="{{ route('tenant.property-units.my-unit') }}" class="nav-item flex items-center py-2 px-6">
             <i class="fas fa-building mr-4"></i>
             <span class="nav-text">My Unit</span>
         </a>
-        
+
         <!-- My Invoices Link -->
         <a href="{{ route('tenant.invoices.index') }}" class="nav-item flex items-center py-2 px-6">
             <i class="fas fa-file-invoice mr-4"></i>
             <span class="nav-text">My Invoices</span>
         </a>
-        
+
         <!-- Payment History -->
         <a href="#" class="nav-item flex items-center py-2 px-6">
             <i class="fas fa-credit-card mr-4"></i>
             <span class="nav-text">Payment History</span>
         </a>
-        
+
         <!-- Maintenance Requests - Using tenant routes -->
-        <a href="{{ route('tenant.maintenance.index') }}" 
+        <a href="{{ route('tenant.maintenance.index') }}"
            class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('tenant.maintenance*') ? 'active' : '' }}">
             <i class="fas fa-tools mr-4"></i>
             <span class="nav-text">Maintenance</span>
@@ -123,7 +146,7 @@
                 </span>
             @endif
         </a>
-        
+
         <!-- ============================================ -->
         <!-- 💬 COMMUNICATION SECTION - NEW -->
         <!-- ============================================ -->
@@ -147,18 +170,18 @@
                 <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
             @endif
         </button>
-        
+
         <!-- Minimal spacing between sections -->
         <div class="nav-divider mt-1">
             <span class="menu-text">ACCOUNT</span>
         </div>
-        
+
         <!-- Profile Settings Link -->
         <a href="{{ route('tenant.profile.edit') }}" class="nav-item flex items-center py-2 px-6">
             <i class="fas fa-user-cog mr-4"></i>
             <span class="nav-text">Profile Settings</span>
         </a>
-        
+
         <!-- ✅ UPDATED: Notifications link with live count -->
         <a href="{{ route('tenant.notifications.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('*.notifications.*') ? 'active' : '' }}" id="sidebarNotificationsLink">
             <i class="fas fa-bell mr-4"></i>
@@ -167,25 +190,25 @@
                 <span class="bg-red-500 text-white text-xs px-2 py-1 rounded-full"></span>
             </span>
         </a>
-        
+
         <!-- Minimal spacing between sections -->
         <div class="nav-divider mt-1">
             <span class="menu-text">SUPPORT</span>
         </div>
-        
+
         <!-- Help & Support Link -->
         <a href="#" class="nav-item flex items-center py-2 px-6">
             <i class="fas fa-question-circle mr-4"></i>
             <span class="nav-text">Help & Support</span>
         </a>
-        
+
         <!-- Contact Management -->
         <a href="#" class="nav-item flex items-center py-2 px-6">
             <i class="fas fa-envelope mr-4"></i>
             <span class="nav-text">Contact Management</span>
         </a>
     </nav>
-    
+
     <!-- Settings Button - Compact positioning -->
     <div class="absolute bottom-0 w-full p-3">
         <button id="themeSettingsButton" class="nav-item flex items-center py-2 px-6 w-full justify-center" title="Theme Settings">
@@ -197,8 +220,8 @@
 <!-- ============ EMAIL ACCOUNT MANAGEMENT MODAL ============ -->
 @if(auth()->check())
 <div id="emailManagementModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 2rem; padding-bottom: 2rem;">
-    <div class="email-modal relative mx-auto my-auto" 
-         style="background-color: var(--card-bg); 
+    <div class="email-modal relative mx-auto my-auto"
+         style="background-color: var(--card-bg);
                 border: 1px solid var(--border-color);
                 box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
                 animation: modalSlideUp 0.3s ease-out;
@@ -209,7 +232,7 @@
                 flex-direction: column;
                 border-radius: 16px;
                 overflow: hidden;">
-        
+
         <!-- Modal Header -->
         <div class="modal-header flex justify-between items-center p-6 border-b flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--card-bg);">
@@ -222,16 +245,16 @@
                     Manage your email accounts and communication
                 </p>
             </div>
-            <button id="closeEmailModal" 
+            <button id="closeEmailModal"
                     class="p-2 rounded-full transition-colors duration-200 hover:bg-opacity-20"
                     style="color: var(--text-secondary);">
                 <i class="fas fa-times text-lg"></i>
             </button>
         </div>
-        
+
         <!-- Modal Body -->
         <div class="modal-body p-6 overflow-y-auto" style="max-height: calc(100vh - 12rem); scroll-behavior: smooth;">
-            
+
             {{-- Email Account Stats Summary --}}
             @php
                 $user = auth()->user();
@@ -251,7 +274,7 @@
                     }
                 }
             @endphp
-            
+
             <!-- Stats Cards -->
             <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
                 <div class="stat-card p-3 rounded-lg text-center" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
@@ -279,7 +302,7 @@
                     <div class="text-xs" style="color: var(--text-secondary);">Unread</div>
                 </div>
             </div>
-            
+
             <!-- Quick Actions -->
             <div class="mb-6">
                 <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
@@ -297,7 +320,7 @@
                             <div class="text-xs" style="color: var(--text-secondary);">Add new email</div>
                         </div>
                     </a>
-                    
+
                     <a href="{{ route('email-accounts.index') }}" class="quick-action-btn group flex items-center p-3 rounded-lg transition-all duration-200"
                        style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"
                        onclick="closeEmailModal()">
@@ -309,7 +332,7 @@
                             <div class="text-xs" style="color: var(--text-secondary);">View all linked</div>
                         </div>
                     </a>
-                    
+
                     <a href="{{ route('email-accounts.inbox') }}" class="quick-action-btn group flex items-center p-3 rounded-lg transition-all duration-200"
                        style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"
                        onclick="closeEmailModal()">
@@ -323,7 +346,7 @@
                             </div>
                         </div>
                     </a>
-                    
+
                     <a href="{{ route('email-accounts.compose') }}" class="quick-action-btn group flex items-center p-3 rounded-lg transition-all duration-200"
                        style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"
                        onclick="closeEmailModal()">
@@ -335,7 +358,7 @@
                             <div class="text-xs" style="color: var(--text-secondary);">Write new email</div>
                         </div>
                     </a>
-                    
+
                     <a href="{{ route('email-accounts.sent') }}" class="quick-action-btn group flex items-center p-3 rounded-lg transition-all duration-200"
                        style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"
                        onclick="closeEmailModal()">
@@ -347,7 +370,7 @@
                             <div class="text-xs" style="color: var(--text-secondary);">View sent emails</div>
                         </div>
                     </a>
-                    
+
                     <a href="#" class="quick-action-btn group flex items-center p-3 rounded-lg transition-all duration-200"
                        style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"
                        onclick="event.preventDefault(); syncAllEmails();">
@@ -361,7 +384,7 @@
                     </a>
                 </div>
             </div>
-            
+
             <!-- Email Accounts List -->
             @if($totalAccounts > 0)
                 <div>
@@ -423,34 +446,34 @@
                                 </div>
                                 <div class="flex items-center space-x-1 flex-shrink-0 ml-2">
                                     @if(!$account->is_primary && $account->status === 'verified')
-                                        <button onclick="setPrimaryAccount('{{ $account->id }}')" 
+                                        <button onclick="setPrimaryAccount('{{ $account->id }}')"
                                                 class="p-1.5 rounded transition-colors duration-200 hover:bg-opacity-20"
                                                 style="color: var(--text-secondary);"
                                                 title="Set as primary">
                                             <i class="fas fa-star text-xs"></i>
                                         </button>
                                     @endif
-                                    <a href="{{ route('email-accounts.show', $account) }}" 
+                                    <a href="{{ route('email-accounts.show', $account) }}"
                                        class="p-1.5 rounded transition-colors duration-200 hover:bg-opacity-20"
                                        style="color: var(--text-secondary);"
                                        onclick="closeEmailModal()"
                                        title="View account">
                                         <i class="fas fa-eye text-xs"></i>
                                     </a>
-                                    <a href="{{ route('email-accounts.edit', $account) }}" 
+                                    <a href="{{ route('email-accounts.edit', $account) }}"
                                        class="p-1.5 rounded transition-colors duration-200 hover:bg-opacity-20"
                                        style="color: var(--text-secondary);"
                                        onclick="closeEmailModal()"
                                        title="Edit account">
                                         <i class="fas fa-edit text-xs"></i>
                                     </a>
-                                    <button onclick="syncAccount('{{ $account->id }}')" 
+                                    <button onclick="syncAccount('{{ $account->id }}')"
                                             class="p-1.5 rounded transition-colors duration-200 hover:bg-opacity-20"
                                             style="color: var(--text-secondary);"
                                             title="Sync emails">
                                         <i class="fas fa-sync text-xs"></i>
                                     </button>
-                                    <button onclick="deleteAccount('{{ $account->id }}', '{{ $account->email }}')" 
+                                    <button onclick="deleteAccount('{{ $account->id }}', '{{ $account->email }}')"
                                             class="p-1.5 rounded transition-colors duration-200 hover:bg-opacity-20"
                                             style="color: var(--text-secondary);"
                                             title="Delete account">
@@ -478,19 +501,19 @@
                 </div>
             @endif
         </div>
-        
+
         <!-- Modal Footer -->
         <div class="modal-footer p-4 border-t flex justify-between flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <div>
-                <a href="{{ route('email-accounts.index') }}" 
+                <a href="{{ route('email-accounts.index') }}"
                    class="text-sm px-3 py-1.5 rounded-lg transition-colors duration-200"
                    style="background-color: var(--primary); color: white;"
                    onclick="closeEmailModal()">
                     <i class="fas fa-arrow-right mr-1"></i> Manage All Accounts
                 </a>
             </div>
-            <button id="cancelEmailModal" 
+            <button id="cancelEmailModal"
                     class="px-4 py-2 text-sm font-medium rounded-lg transition-colors duration-200"
                     style="color: var(--text-secondary);">
                 Close
@@ -512,14 +535,14 @@
                 <i class="fas fa-times"></i>
             </button>
         </div>
-        
+
         <!-- Modal Body -->
         <div class="theme-modal-body-compact">
             <!-- Appearance Selection -->
             <div class="mb-6">
                 <h4 class="section-header-compact">Appearance</h4>
                 <p class="section-description-compact">Choose how the application looks</p>
-                
+
                 <div class="appearance-grid-compact">
                     <div class="appearance-option-compact relative" data-theme="light">
                         <div class="appearance-icon-compact bg-white border border-gray-300">
@@ -527,14 +550,14 @@
                         </div>
                         <span class="appearance-label-compact">Light</span>
                     </div>
-                    
+
                     <div class="appearance-option-compact relative" data-theme="dark">
                         <div class="appearance-icon-compact bg-gray-800 border border-gray-700">
                             <i class="fas fa-moon text-blue-300"></i>
                         </div>
                         <span class="appearance-label-compact">Dark</span>
                     </div>
-                    
+
                     <div class="appearance-option-compact relative" data-theme="system">
                         <div class="appearance-icon-compact bg-gradient-to-r from-gray-100 to-gray-800 border border-gray-300">
                             <i class="fas fa-desktop text-gray-600"></i>
@@ -543,33 +566,33 @@
                     </div>
                 </div>
             </div>
-            
+
             <!-- Sidebar Themes -->
             <div class="mb-4">
                 <h4 class="section-header-compact">Sidebar Theme</h4>
                 <p class="section-description-compact">Customize your sidebar appearance</p>
-                
+
                 <div class="theme-grid-compact">
                     <div class="theme-option-compact relative" data-theme="default">
                         <div class="theme-preview-compact bg-gradient-to-br from-purple-500 to-purple-600"></div>
                         <span class="theme-label-compact">Default</span>
                     </div>
-                    
+
                     <div class="theme-option-compact relative" data-theme="dark">
                         <div class="theme-preview-compact bg-gradient-to-br from-gray-800 to-gray-900"></div>
                         <span class="theme-label-compact">Dark</span>
                     </div>
-                    
+
                     <div class="theme-option-compact relative" data-theme="light">
                         <div class="theme-preview-compact bg-gradient-to-br from-white to-gray-100 border border-gray-200"></div>
                         <span class="theme-label-compact">Light</span>
                     </div>
-                    
+
                     <div class="theme-option-compact relative" data-theme="blue">
                         <div class="theme-preview-compact bg-gradient-to-br from-blue-600 to-blue-800"></div>
                         <span class="theme-label-compact">Blue</span>
                     </div>
-                    
+
                     <div class="theme-option-compact relative" data-theme="green">
                         <div class="theme-preview-compact bg-gradient-to-br from-green-600 to-green-800"></div>
                         <span class="theme-label-compact">Green</span>
@@ -577,7 +600,7 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- Modal Footer -->
         <div class="theme-modal-footer-compact flex justify-end">
             <button id="closeThemeModalBtn" class="px-3 py-1.5 text-sm font-medium transition-colors duration-200">
@@ -599,7 +622,7 @@
                 <i class="fas fa-times text-lg"></i>
             </button>
         </div>
-        
+
         <!-- Modal Body -->
         <div class="p-6">
             <!-- Search Input -->
@@ -607,10 +630,10 @@
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Search Term
                 </label>
-                <input type="text" id="globalSearchInput" placeholder="Search invoices, maintenance requests..." 
+                <input type="text" id="globalSearchInput" placeholder="Search invoices, maintenance requests..."
                        class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white">
             </div>
-            
+
             <!-- Search Category -->
             <div class="mb-6">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -624,7 +647,7 @@
                     <option value="notifications">Notifications</option>
                 </select>
             </div>
-            
+
             <!-- Search Filters -->
             <div class="mb-6">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -645,7 +668,7 @@
                     </div>
                 </div>
             </div>
-            
+
             <!-- Recent Searches -->
             <div id="recentSearches" class="hidden">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -656,7 +679,7 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- Modal Footer -->
         <div class="px-6 py-4 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-700 flex justify-between">
             <button id="clearSearch" class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200">
@@ -709,7 +732,7 @@
             </button>
             <h2 class="text-xl font-semibold" style="color: var(--text-primary);">@yield('title', 'Tenant Dashboard')</h2>
         </div>
-        
+
         <div class="flex items-center space-x-4">
             <!-- Enhanced Search Bar -->
             <div class="relative">
@@ -717,8 +740,8 @@
                     <!-- Quick Search Input -->
                     <div class="relative hidden md:block">
                         <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2" style="color: var(--text-secondary);"></i>
-                        <input type="text" id="quickSearchInput" placeholder="Search invoices or requests..." 
-                               class="header-search pl-10 pr-10" 
+                        <input type="text" id="quickSearchInput" placeholder="Search invoices or requests..."
+                               class="header-search pl-10 pr-10"
                                style="color: var(--text-primary); background-color: var(--bg-secondary); border: 1px solid transparent;"
                                data-toggle="tooltip" title="Press / to focus">
                         <!-- Advanced Search Button - Now opens modal on click -->
@@ -726,14 +749,14 @@
                             <i class="fas fa-sliders-h text-sm"></i>
                         </button>
                     </div>
-                    
+
                     <!-- Mobile Search Button -->
                     <button id="mobileSearchBtn" class="md:hidden p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
                         <i class="fas fa-search text-gray-600 dark:text-gray-300"></i>
                     </button>
                 </div>
             </div>
-            
+
             <!-- ✅ UPDATED: Notification Bell with Live Counter -->
             <div class="header-buttons flex items-center space-x-2">
                 <div class="relative">
@@ -744,13 +767,13 @@
                         </span>
                     </button>
                 </div>
-                
+
                 <button class="relative p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
                     <i class="far fa-envelope text-gray-600 dark:text-gray-300"></i>
                     <span class="notification-dot"></span>
                 </button>
             </div>
-            
+
            <div class="dropdown relative">
     <button id="userMenuButton" class="flex items-center space-x-2">
         <div class="avatar-minimal">
@@ -767,25 +790,25 @@
         </div>
         <i class="fas fa-chevron-down text-xs" style="color: var(--text-secondary);"></i>
     </button>
-                
+
                 <div id="userDropdown" class="dropdown-menu" style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
                     <!-- Updated Profile Link -->
                     <a href="{{ route('tenant.profile.edit') }}" class="dropdown-item">
                         <i class="far fa-user mr-3" style="color: var(--text-secondary);"></i>
                         <span style="color: var(--text-primary);">My Profile</span>
                     </a>
-                    
+
                     <div class="border-t my-1" style="border-color: var(--border-color);"></div>
-                    
+
                     <!-- ✅ UPDATED: Notifications with live count -->
                     <a href="{{ route('tenant.notifications.index') }}" class="dropdown-item" id="dropdownNotificationsLink">
                         <i class="far fa-bell mr-3" style="color: var(--text-secondary);"></i>
                         <span style="color: var(--text-primary);">Notifications</span>
                         <span id="dropdownNotificationBadge" class="ml-auto bg-red-500 text-white text-xs px-2 py-1 rounded-full hidden">0</span>
                     </a>
-                    
+
                     <div class="border-t my-1" style="border-color: var(--border-color);"></div>
-                    
+
                     <!-- Logout -->
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf
@@ -1015,16 +1038,16 @@
     .header {
         padding: 10px 16px;
     }
-    
+
     .avatar-minimal {
         width: 28px;
         height: 28px;
     }
-    
+
     .header-buttons {
         gap: 6px;
     }
-    
+
     .notifications-dropdown {
         position: fixed;
         top: 60px;
@@ -1287,13 +1310,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // ============================================
     // NOTIFICATION SYSTEM
     // ============================================
-    
+
     let unreadCount = 0;
     let updateInterval = null;
-    
+
     // Get user role
     const userRole = 'tenant';
-    
+
     // Notification functions
     async function fetchUnreadCount() {
         try {
@@ -1307,7 +1330,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return 0;
         }
     }
-    
+
     async function fetchRecentNotifications(limit = 10) {
         try {
             const response = await fetch(`/api/notifications/recent?limit=${limit}`);
@@ -1319,7 +1342,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return [];
         }
     }
-    
+
     async function markNotificationAsRead(notificationId) {
         try {
             const response = await fetch(`/api/notifications/${notificationId}/read`, {
@@ -1329,7 +1352,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
                 }
             });
-            
+
             if (response.ok) {
                 fetchUnreadCount();
                 fetchRecentNotifications();
@@ -1340,7 +1363,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         return false;
     }
-    
+
     async function markAllAsRead() {
         try {
             const response = await fetch('/api/notifications/read-all', {
@@ -1350,7 +1373,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
                 }
             });
-            
+
             if (response.ok) {
                 fetchUnreadCount();
                 fetchRecentNotifications();
@@ -1363,12 +1386,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         return false;
     }
-    
+
     async function clearAllNotifications() {
         if (!confirm('Are you sure you want to clear all notifications? This action cannot be undone.')) {
             return;
         }
-        
+
         try {
             const response = await fetch('/api/notifications', {
                 method: 'DELETE',
@@ -1377,7 +1400,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
                 }
             });
-            
+
             if (response.ok) {
                 fetchUnreadCount();
                 fetchRecentNotifications();
@@ -1390,18 +1413,18 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         return false;
     }
-    
+
     function updateNotificationBadges(count) {
         // Update bell badge
         const badge = document.getElementById('notificationBadge');
         const badgeCount = badge?.querySelector('span');
-        
+
         if (count > 0) {
             if (badgeCount) {
                 badgeCount.textContent = count > 99 ? '99+' : count;
             }
             badge?.classList.remove('hidden');
-            
+
             // Update sidebar badge
             const sidebarBadge = document.getElementById('sidebarNotificationBadge');
             if (sidebarBadge) {
@@ -1409,7 +1432,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (badgeSpan) badgeSpan.textContent = count > 99 ? '99+' : count;
                 sidebarBadge.style.display = 'block';
             }
-            
+
             // Update dropdown badge
             const dropdownBadge = document.getElementById('dropdownNotificationBadge');
             if (dropdownBadge) {
@@ -1420,16 +1443,16 @@ document.addEventListener('DOMContentLoaded', function() {
             badge?.classList.add('hidden');
             const sidebarBadge = document.getElementById('sidebarNotificationBadge');
             if (sidebarBadge) sidebarBadge.style.display = 'none';
-            
+
             const dropdownBadge = document.getElementById('dropdownNotificationBadge');
             if (dropdownBadge) dropdownBadge.classList.add('hidden');
         }
     }
-    
+
     function renderNotificationsDropdown(notifications) {
         const container = document.getElementById('notificationsList');
         if (!container) return;
-        
+
         if (!notifications || notifications.length === 0) {
             container.innerHTML = `
                 <div class="notifications-empty">
@@ -1440,7 +1463,7 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
             return;
         }
-        
+
         container.innerHTML = notifications.map(notification => `
             <div class="notification-item ${!notification.is_read ? 'unread' : ''}" data-id="${notification.id}">
                 <div class="flex items-start space-x-3">
@@ -1455,18 +1478,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             </div>
         `).join('');
-        
+
         // Add click handlers
         container.querySelectorAll('.notification-item').forEach(item => {
             item.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const notificationId = item.dataset.id;
                 const notification = notifications.find(n => n.id === notificationId);
-                
+
                 if (notification && !notification.is_read) {
                     await markNotificationAsRead(notificationId);
                 }
-                
+
                 // Redirect if action URL exists
                 if (notification?.action_url) {
                     window.location.href = notification.action_url;
@@ -1478,7 +1501,7 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     }
-    
+
     function formatTimeAgo(dateString) {
         const date = new Date(dateString);
         const now = new Date();
@@ -1486,21 +1509,21 @@ document.addEventListener('DOMContentLoaded', function() {
         const diffMins = Math.floor(diffMs / 60000);
         const diffHours = Math.floor(diffMs / 3600000);
         const diffDays = Math.floor(diffMs / 86400000);
-        
+
         if (diffMins < 1) return 'Just now';
         if (diffMins < 60) return `${diffMins} minute${diffMins === 1 ? '' : 's'} ago`;
         if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
         if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
-        
+
         return date.toLocaleDateString();
     }
-    
+
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
-    
+
     function showToast(message, type = 'info') {
         const toast = document.createElement('div');
         toast.className = `fixed bottom-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-white ${
@@ -1510,12 +1533,12 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 3000);
     }
-    
+
     // Initialize notification system
     function initNotificationSystem() {
         fetchUnreadCount();
         fetchRecentNotifications();
-        
+
         // Set up polling every 30 seconds
         if (updateInterval) clearInterval(updateInterval);
         updateInterval = setInterval(() => {
@@ -1526,11 +1549,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }, 30000);
     }
-    
+
     // Notification dropdown toggle
     const notificationBell = document.getElementById('notificationBellBtn');
     const notificationsDropdown = document.getElementById('notificationsDropdown');
-    
+
     if (notificationBell && notificationsDropdown) {
         notificationBell.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -1539,7 +1562,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 await fetchRecentNotifications();
             }
         });
-        
+
         // Close dropdown when clicking outside
         document.addEventListener('click', (e) => {
             if (!notificationsDropdown.contains(e.target) && !notificationBell.contains(e.target)) {
@@ -1547,7 +1570,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // Mark all as read button
     const markAllReadBtn = document.getElementById('markAllReadBtn');
     if (markAllReadBtn) {
@@ -1556,7 +1579,7 @@ document.addEventListener('DOMContentLoaded', function() {
             await markAllAsRead();
         });
     }
-    
+
     // Clear all notifications button
     const clearAllBtn = document.getElementById('clearAllNotificationsBtn');
     if (clearAllBtn) {
@@ -1565,19 +1588,19 @@ document.addEventListener('DOMContentLoaded', function() {
             await clearAllNotifications();
         });
     }
-    
+
     // Start notification system
     initNotificationSystem();
-    
+
     // ============================================
     // 📧 EMAIL MANAGEMENT MODAL
     // ============================================
-    
+
     const emailModal = document.getElementById('emailManagementModal');
     const emailBtn = document.getElementById('emailManagementBtn');
     const closeEmailModalBtn = document.getElementById('closeEmailModal');
     const cancelEmailModalBtn = document.getElementById('cancelEmailModal');
-    
+
     if (emailBtn && emailModal) {
         emailBtn.addEventListener('click', function(e) {
             e.preventDefault();
@@ -1586,21 +1609,21 @@ document.addEventListener('DOMContentLoaded', function() {
             document.body.style.overflow = 'hidden';
         });
     }
-    
+
     function closeEmailModalFunc() {
         if (emailModal) {
             emailModal.classList.add('hidden');
             document.body.style.overflow = '';
         }
     }
-    
+
     if (closeEmailModalBtn) {
         closeEmailModalBtn.addEventListener('click', closeEmailModalFunc);
     }
     if (cancelEmailModalBtn) {
         cancelEmailModalBtn.addEventListener('click', closeEmailModalFunc);
     }
-    
+
     if (emailModal) {
         emailModal.addEventListener('click', function(e) {
             if (e.target === this) {
@@ -1608,31 +1631,31 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // Close email modal with Escape key
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape' && emailModal && !emailModal.classList.contains('hidden')) {
             closeEmailModalFunc();
         }
     });
-    
+
     // Make close function globally accessible
     window.closeEmailModal = closeEmailModalFunc;
-    
+
     // ============================================
     // 📧 EMAIL ACCOUNT FUNCTIONS
     // ============================================
-    
+
     function syncAccount(accountId) {
         if (!confirm('Sync this email account to fetch new emails?')) return;
-        
+
         const button = event?.target?.closest('button');
         if (!button) return;
-        
+
         const originalHtml = button.innerHTML;
         button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
         button.disabled = true;
-        
+
         fetch(`/email-accounts/${accountId}/sync`, {
             method: 'POST',
             headers: {
@@ -1662,22 +1685,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function syncAllEmails() {
         if (!confirm('Sync all your email accounts to fetch new emails?')) return;
-        
+
         const accounts = document.querySelectorAll('.account-item');
         let synced = 0;
         let total = accounts.length;
-        
+
         if (total === 0) {
             showToast('No email accounts to sync.', 'info');
             return;
         }
-        
+
         showToast(`Syncing ${total} account(s)...`, 'info');
-        
+
         accounts.forEach((account, index) => {
-            const accountId = account.getAttribute('data-account-id') || 
+            const accountId = account.getAttribute('data-account-id') ||
                              account.querySelector('[onclick*="syncAccount"]')?.getAttribute('onclick')?.match(/\d+/)?.[0];
-            
+
             if (accountId) {
                 fetch(`/email-accounts/${accountId}/sync`, {
                     method: 'POST',
@@ -1711,7 +1734,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function setPrimaryAccount(accountId) {
         if (!confirm('Set this as your primary email account?')) return;
-        
+
         fetch(`/email-accounts/${accountId}/set-primary`, {
             method: 'POST',
             headers: {
@@ -1738,7 +1761,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function deleteAccount(accountId, email) {
         if (!confirm(`Are you sure you want to unlink the email account "${email}"?`)) return;
         if (!confirm(`This will permanently remove access to "${email}". Continue?`)) return;
-        
+
         fetch(`/email-accounts/${accountId}`, {
             method: 'DELETE',
             headers: {
@@ -1761,18 +1784,18 @@ document.addEventListener('DOMContentLoaded', function() {
             showToast('An error occurred. Please try again.', 'error');
         });
     }
-    
+
     // Make functions globally accessible
     window.syncAccount = syncAccount;
     window.syncAllEmails = syncAllEmails;
     window.setPrimaryAccount = setPrimaryAccount;
     window.deleteAccount = deleteAccount;
     window.closeEmailModal = closeEmailModalFunc;
-    
+
     // ============================================
     // SEARCH MODAL FUNCTIONALITY
     // ============================================
-    
+
     const advancedSearchBtn = document.getElementById('advancedSearchBtn');
     const searchModal = document.getElementById('searchModal');
     const closeSearchModal = document.getElementById('closeSearchModal');
@@ -1782,7 +1805,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const quickSearchInput = document.getElementById('quickSearchInput');
     const globalSearchInput = document.getElementById('globalSearchInput');
     const searchCategory = document.getElementById('searchCategory');
-    
+
     if (advancedSearchBtn && searchModal) {
         advancedSearchBtn.addEventListener('click', function(e) {
             e.preventDefault();
@@ -1792,21 +1815,21 @@ document.addEventListener('DOMContentLoaded', function() {
             updateRecentSearches();
         });
     }
-    
+
     function closeSearchModalFunc() {
         searchModal.classList.add('hidden');
         document.body.style.overflow = 'auto';
     }
-    
+
     if (closeSearchModal) closeSearchModal.addEventListener('click', closeSearchModalFunc);
     if (cancelSearch) cancelSearch.addEventListener('click', closeSearchModalFunc);
-    
+
     if (searchModal) {
         searchModal.addEventListener('click', function(e) {
             if (e.target === searchModal) closeSearchModalFunc();
         });
     }
-    
+
     if (clearSearch) {
         clearSearch.addEventListener('click', function() {
             if (globalSearchInput) globalSearchInput.value = '';
@@ -1817,14 +1840,14 @@ document.addEventListener('DOMContentLoaded', function() {
             if (caseSensitive) caseSensitive.checked = false;
         });
     }
-    
+
     if (performSearch) {
         performSearch.addEventListener('click', function() {
             const searchTerm = globalSearchInput ? globalSearchInput.value.trim() : '';
             const category = searchCategory ? searchCategory.value : 'all';
             const exactMatch = document.getElementById('filterExactMatch')?.checked || false;
             const caseSensitive = document.getElementById('filterCaseSensitive')?.checked || false;
-            
+
             if (searchTerm) {
                 addToRecentSearches(searchTerm, category);
                 performGlobalSearch(searchTerm, category, exactMatch, caseSensitive);
@@ -1832,7 +1855,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     if (quickSearchInput) {
         quickSearchInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
@@ -1843,7 +1866,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         });
-        
+
         document.addEventListener('keydown', function(e) {
             if (e.key === '/' && !e.ctrlKey && !e.metaKey && document.activeElement !== quickSearchInput) {
                 e.preventDefault();
@@ -1851,7 +1874,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     const mobileSearchBtn = document.getElementById('mobileSearchBtn');
     if (mobileSearchBtn) {
         mobileSearchBtn.addEventListener('click', function() {
@@ -1861,9 +1884,9 @@ document.addEventListener('DOMContentLoaded', function() {
             updateRecentSearches();
         });
     }
-    
+
     let recentSearches = JSON.parse(localStorage.getItem('tenantRecentSearches') || '[]');
-    
+
     function addToRecentSearches(term, category) {
         const search = { term, category, timestamp: Date.now() };
         recentSearches = recentSearches.filter(s => !(s.term === term && s.category === category));
@@ -1871,11 +1894,11 @@ document.addEventListener('DOMContentLoaded', function() {
         recentSearches = recentSearches.slice(0, 10);
         localStorage.setItem('tenantRecentSearches', JSON.stringify(recentSearches));
     }
-    
+
     function updateRecentSearches() {
         const container = document.getElementById('recentSearchesList');
         const parent = document.getElementById('recentSearches');
-        
+
         if (recentSearches.length > 0 && parent && container) {
             parent.classList.remove('hidden');
             container.innerHTML = '';
@@ -1893,38 +1916,38 @@ document.addEventListener('DOMContentLoaded', function() {
             parent.classList.add('hidden');
         }
     }
-    
+
     function performGlobalSearch(term, category, exactMatch, caseSensitive) {
         const searchParams = new URLSearchParams();
         searchParams.append('search', term);
         if (category !== 'all') searchParams.append('category', category);
         if (exactMatch) searchParams.append('exact_match', '1');
         if (caseSensitive) searchParams.append('case_sensitive', '1');
-        
+
         const currentPath = window.location.pathname;
         let searchUrl = '#';
-        
+
         if (currentPath.includes('/invoices')) {
             searchUrl = '{{ route("tenant.invoices.index") }}?' + searchParams.toString();
         } else {
             searchUrl = '{{ route("tenant.dashboard") }}?' + searchParams.toString();
         }
-        
+
         window.location.href = searchUrl;
     }
-    
+
     // ============================================
     // THEME SETTINGS MODAL FUNCTIONALITY
     // ============================================
-    
+
     const themeSettingsButton = document.getElementById('themeSettingsButton');
     const themeSettingsModal = document.getElementById('themeSettingsModal');
     const closeThemeModal = document.getElementById('closeThemeModal');
     const closeThemeModalBtn = document.getElementById('closeThemeModalBtn');
-    
+
     let selectedSidebarTheme = localStorage.getItem('sidebarTheme') || 'default';
     let selectedAppearance = localStorage.getItem('appearance') || 'system';
-    
+
     function getCurrentAppearance() {
         const currentTheme = document.body.getAttribute('data-theme');
         if (currentTheme === 'light' || currentTheme === 'dark') return currentTheme;
@@ -1932,11 +1955,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if (savedAppearance === 'light' || savedAppearance === 'dark') return savedAppearance;
         return 'system';
     }
-    
+
     function getSystemAppearance() {
         return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
-    
+
     function applyAppearance(appearance) {
         if (appearance === 'system') {
             const systemTheme = getSystemAppearance();
@@ -1948,9 +1971,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         localStorage.setItem('appearance', selectedAppearance);
     }
-    
+
     selectedAppearance = getCurrentAppearance();
-    
+
     if (themeSettingsButton && themeSettingsModal) {
         themeSettingsButton.addEventListener('click', function() {
             themeSettingsModal.classList.remove('hidden');
@@ -1961,21 +1984,21 @@ document.addEventListener('DOMContentLoaded', function() {
             setAppearanceSelection(selectedAppearance);
         });
     }
-    
+
     const closeThemeModalFunc = function() {
         themeSettingsModal.classList.add('hidden');
         document.body.style.overflow = 'auto';
     };
-    
+
     if (closeThemeModal) closeThemeModal.addEventListener('click', closeThemeModalFunc);
     if (closeThemeModalBtn) closeThemeModalBtn.addEventListener('click', closeThemeModalFunc);
-    
+
     if (themeSettingsModal) {
         themeSettingsModal.addEventListener('click', function(e) {
             if (e.target === themeSettingsModal) closeThemeModalFunc();
         });
     }
-    
+
     const themeOptions = document.querySelectorAll('#themeSettingsModal .theme-option-compact');
     themeOptions.forEach(option => {
         option.addEventListener('click', function() {
@@ -1986,7 +2009,7 @@ document.addEventListener('DOMContentLoaded', function() {
             localStorage.setItem('sidebarTheme', theme);
         });
     });
-    
+
     const appearanceOptions = document.querySelectorAll('#themeSettingsModal .appearance-option-compact');
     appearanceOptions.forEach(option => {
         option.addEventListener('click', function() {
@@ -1995,7 +2018,7 @@ document.addEventListener('DOMContentLoaded', function() {
             applyAppearance(appearance);
         });
     });
-    
+
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             if (searchModal && !searchModal.classList.contains('hidden')) closeSearchModalFunc();
@@ -2004,12 +2027,12 @@ document.addEventListener('DOMContentLoaded', function() {
             if (emailModal && !emailModal.classList.contains('hidden')) closeEmailModalFunc();
         }
     });
-    
+
     function setThemeSelection(theme) {
         themeOptions.forEach(opt => {
             const existingIndicator = opt.querySelector('.current-selection');
             if (existingIndicator) existingIndicator.remove();
-            
+
             if (opt.getAttribute('data-theme') === theme) {
                 opt.classList.add('active');
                 const indicator = document.createElement('div');
@@ -2021,12 +2044,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     function setAppearanceSelection(appearance) {
         appearanceOptions.forEach(opt => {
             const existingIndicator = opt.querySelector('.current-selection');
             if (existingIndicator) existingIndicator.remove();
-            
+
             if (opt.getAttribute('data-theme') === appearance) {
                 opt.classList.add('active');
                 const indicator = document.createElement('div');
@@ -2038,13 +2061,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     const savedSidebarTheme = localStorage.getItem('sidebarTheme') || 'default';
     const savedAppearance = localStorage.getItem('appearance') || 'system';
-    
+
     document.body.setAttribute('data-sidebar-theme', savedSidebarTheme);
     applyAppearance(savedAppearance);
-    
+
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
         if (selectedAppearance === 'system') applyAppearance('system');
     });
