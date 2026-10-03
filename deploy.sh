@@ -1,8 +1,11 @@
 #!/bin/bash
 set -e
 
-echo "==> Clearing config cache..."
-php artisan config:clear
+echo "==> Dumping optimized autoloader..."
+composer dump-autoload --optimize --no-dev
+
+echo "==> Clearing all caches..."
+php artisan optimize:clear
 
 echo "==> Rebuilding config cache..."
 php artisan config:cache
