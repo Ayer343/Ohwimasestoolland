@@ -49,12 +49,6 @@ RUN mkdir -p /var/www/html/bootstrap/cache \
 # Install dependencies
 RUN composer install --no-interaction --optimize-autoloader --no-dev
 
-# Generate app key (only if not set in environment)
-RUN php artisan key:generate --no-interaction || true
-
-# Cache configuration (skip if no .env exists)
-RUN php artisan config:cache --no-interaction || echo "Config cache skipped"
-
 # Set permissions
 RUN chown -R www-data:www-data /var/www/html \
     && chmod -R 755 /var/www/html/storage \
