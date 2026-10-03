@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+*.log
+*.sqlite
+node_modules
+vendor
+tests
+storage/*.key
+public/hot
+public/storage
+.DS_Store
+.phpunit.result.cache
+docker-compose.yml
+docker-compose.override.yml

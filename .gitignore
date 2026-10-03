@@ -1,0 +1,110 @@
+@"
+# ============================================
+# LARAVEL DEFAULT IGNORES
+# ============================================
+/vendor/
+/node_modules/
+/bootstrap/cache/
+/public/build/
+/public/hot
+/public/storage
+/storage/*.key
+/storage/framework/
+/storage/logs/
+/storage/pail/
+
+# ============================================
+# ENVIRONMENT FILES
+# ============================================
+.env
+.env.*
+!.env.example
+!.env.testing
+
+# ============================================
+# LOGS & CACHE
+# ============================================
+*.log
+*.cache
+*.sqlite
+*.sqlite-journal
+.phpunit.result.cache
+.composer.cache
+
+# ============================================
+# IDE FILES
+# ============================================
+/.fleet
+/.idea
+/.nova
+/.phpunit.cache
+/.vscode
+/.zed
+.vs/
+*.vsidx
+*.wsuo
+*.bin
+
+# ============================================
+# SYSTEM FILES
+# ============================================
+.DS_Store
+Thumbs.db
+Homestead.json
+Homestead.yaml
+auth.json
+.phpactor.json
+
+# ============================================
+# SERVER FILES
+# ============================================
+rr
+.rr.yaml
+
+# ============================================
+# TEMPORARY FILES
+# ============================================
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# ============================================
+# DEBUG / JUNK FILES (project-specific)
+# ============================================
+billing-out.txt
+output.txt
+body.json
+push-error.txt
+test.php
+remove-bom.php
+public/test.php
+public/test.html
+public/test-cors.php
+routes/test-db-quick.php
+app/Http/Controllers/Api/V1/remove-bom.php
+
+# ============================================
+# BACKUP FILES
+# ============================================
+*.bak
+*.bak2
+*.bak3
+*.bak4
+*.bak-*
+*.orig
+
+# ============================================
+# BUILD ARTIFACTS / ARCHIVES
+# ============================================
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+*.pem
+*.p12
+*.pfx
+*.key
+"@ | Set-Content .gitignore

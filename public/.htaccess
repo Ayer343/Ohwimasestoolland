@@ -1,0 +1,51 @@
+# ═════════════════════════════════════════════════════════════════════
+# Laravel Public Directory .htaccess
+# ═════════════════════════════════════════════════════════════════════
+
+# NOTE on CORS:
+#
+# CORS for /api/* routes is handled by Laravel's HandleCors middleware,
+# which reads config/cors.php. We do NOT set Access-Control-* headers
+# in this file — Apache and Laravel would both add them, and the merge
+# produces duplicate/garbled headers that some browsers reject.
+#
+# Apache-level CORS is only needed for /storage/* static assets, which
+# are served directly by Apache without booting PHP. That's handled by
+# storage/app/public/.htaccess, not by this file.
+
+# ── Disable directory indexing and content negotiation ──
+<IfModule mod_negotiation.c>
+    Options -MultiViews -Indexes
+</IfModule>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # ── Forward the Authorization header to PHP ──
+    # Laravel reads this via $_SERVER['HTTP_AUTHORIZATION'].
+    # Required for Bearer token auth behind Apache CGI/FastCGI.
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # ── Redirect trailing slashes if not a folder ──
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} (.+)/$
+    RewriteRule ^ %1 [L,R=301]
+
+    # ── Send requests to the front controller ──
+    #
+    # NOTE: There is intentionally NO `RewriteCond %{REQUEST_METHOD} OPTIONS`
+    # block here. OPTIONS preflights MUST reach Laravel's HandleCors
+    # middleware, which attaches the Access-Control-* response headers.
+    # Short-circuiting them in Apache returns a bare 204 with no CORS
+    # headers, causing the browser to reject every cross-origin API call
+    # from Flutter web (login, system-settings, notifications, etc.).
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
+
+# ── Fallback: block access to dotfiles ──
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>

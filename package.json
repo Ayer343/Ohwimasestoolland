@@ -1,0 +1,33 @@
+{
+    "$schema": "https://json.schemastore.org/package.json",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "vite build",
+        "dev": "vite",
+        "queue": "php artisan queue:work",
+        "queue-listen": "php artisan queue:listen",
+        "dev-with-queue": "concurrently \"npm run dev\" \"npm run queue\"",
+        "dev-all": "concurrently \"npm run dev\" \"php artisan serve\" \"npm run queue\"",
+        "dev-full": "concurrently \"npm run dev\" \"php artisan serve\" \"php artisan queue:work --queue=high,default,low\"",
+        "start": "npm run dev-all",
+        "horizon": "php artisan horizon",
+        "dev-with-horizon": "concurrently \"npm run dev\" \"php artisan horizon\""
+    },
+    "devDependencies": {
+        "@tailwindcss/vite": "^4.0.0",
+        "axios": "^1.11.0",
+        "concurrently": "^9.0.1",
+        "laravel-vite-plugin": "^2.0.0",
+        "tailwindcss": "^4.1.13",
+        "vite": "^7.0.4"
+    },
+    "dependencies": {
+        "@alpinejs/collapse": "^3.15.3",
+        "@alpinejs/focus": "^3.15.3",
+        "alpinejs": "^3.15.3",
+        "laravel-echo": "^2.2.7",
+        "lozad": "^1.16.0",
+        "pusher-js": "^8.4.0"
+    }
+}
