@@ -6,12 +6,9 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-        // Create trusted_devices table
+        // ---- trusted_devices ----
         if (!Schema::hasTable('trusted_devices')) {
             Schema::create('trusted_devices', function (Blueprint $table) {
                 $table->id();
@@ -26,8 +23,7 @@ return new class extends Migration
                 $table->timestamp('expires_at')->nullable();
                 $table->timestamp('last_used_at')->nullable();
                 $table->timestamps();
-                
-                // Indexes for performance
+
                 $table->index(['user_id', 'device_fingerprint']);
                 $table->index('expires_at');
                 $table->index('user_id');
@@ -35,34 +31,34 @@ return new class extends Migration
             });
         }
 
-        // Create device_tokens table for push notifications - FIXED
+        // ---- device_tokens ----
         if (!Schema::hasTable('device_tokens')) {
             Schema::create('device_tokens', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('user_id')->constrained()->onDelete('cascade');
                 $table->string('device_name', 255);
-                $table->string('token', 191); // Changed from text to string with length
-                $table->string('platform', 50)->nullable(); // ios, android, web
+                $table->string('token', 191);
+                $table->string('platform', 50)->nullable();
                 $table->string('device_model', 100)->nullable();
                 $table->string('os_version', 50)->nullable();
                 $table->string('app_version', 50)->nullable();
                 $table->timestamp('last_used_at')->nullable();
                 $table->boolean('is_active')->default(true);
                 $table->timestamps();
-                
+
                 $table->index(['user_id', 'device_name']);
-                $table->index('token'); // Now this works because token is string(191)
+                $table->index('token');
                 $table->index('is_active');
             });
         }
 
-        // Create login_activities table for tracking
+        // ---- login_activities ----
         if (!Schema::hasTable('login_activities')) {
             Schema::create('login_activities', function (Blueprint $table) {
                 $table->id();
                 $table->foreignId('user_id')->nullable()->constrained()->onDelete('set null');
-                $table->string('action', 50); // login, logout, failed, 2fa_verify, password_change
-                $table->string('type', 20)->default('web'); // web, mobile, api, social
+                $table->string('action', 50);
+                $table->string('type', 20)->default('web');
                 $table->string('ip_address', 45)->nullable();
                 $table->text('user_agent')->nullable();
                 $table->string('device', 50)->nullable();
@@ -71,8 +67,9 @@ return new class extends Migration
                 $table->json('location')->nullable();
                 $table->json('metadata')->nullable();
                 $table->boolean('success')->default(true);
-                $table->timestamp('created_at')->nullable();
-                
+                $table->timestamp('created_at')->useCurrent();
+                $table->timestamp('updated_at')->nullable();
+
                 $table->index(['user_id', 'created_at']);
                 $table->index(['action', 'created_at']);
                 $table->index('ip_address');
@@ -80,130 +77,71 @@ return new class extends Migration
             });
         }
 
-        // Add columns to users table - Check if each column exists first
-        Schema::table('users', function (Blueprint $table) {
-            // Device and session management
-            if (!Schema::hasColumn('users', 'devices')) {
-                $table->json('devices')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'device_trusts')) {
-                $table->json('device_trusts')->nullable();
-            }
-            
-            // Activity tracking
-            if (!Schema::hasColumn('users', 'last_activity_at')) {
-                $table->timestamp('last_activity_at')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'login_count')) {
-                $table->integer('login_count')->default(0);
-            }
-            if (!Schema::hasColumn('users', 'last_login_ip')) {
-                $table->string('last_login_ip', 45)->nullable();
-            }
-            if (!Schema::hasColumn('users', 'last_login_at')) {
-                $table->timestamp('last_login_at')->nullable();
-            }
-            
-            // Two-factor authentication
-            if (!Schema::hasColumn('users', 'two_factor_backup_codes')) {
-                $table->json('two_factor_backup_codes')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'two_factor_method')) {
-                $table->string('two_factor_method')->nullable(); // email, sms, authenticator
-            }
-            if (!Schema::hasColumn('users', 'two_factor_enabled_at')) {
-                $table->timestamp('two_factor_enabled_at')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'two_factor_secret')) {
-                $table->string('two_factor_secret')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'two_factor_enabled')) {
-                $table->boolean('two_factor_enabled')->default(false);
-            }
-            
-            // Password management
-            if (!Schema::hasColumn('users', 'password_changed_at')) {
-                $table->timestamp('password_changed_at')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'password_history')) {
-                $table->json('password_history')->nullable(); // Store last 5 password hashes
-            }
-            if (!Schema::hasColumn('users', 'temp_password')) {
-                $table->boolean('temp_password')->default(false);
-            }
-            
-            // User preferences
-            if (!Schema::hasColumn('users', 'notification_settings')) {
-                $table->json('notification_settings')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'preferred_language')) {
-                $table->string('preferred_language', 10)->default('en');
-            }
-            if (!Schema::hasColumn('users', 'timezone')) {
-                $table->string('timezone', 50)->nullable();
-            }
-            if (!Schema::hasColumn('users', 'metadata')) {
-                $table->json('metadata')->nullable();
-            }
-            
-            // Account status
-            if (!Schema::hasColumn('users', 'account_locked_until')) {
-                $table->timestamp('account_locked_until')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'failed_login_attempts')) {
-                $table->integer('failed_login_attempts')->default(0);
-            }
-            if (!Schema::hasColumn('users', 'last_failed_login_at')) {
-                $table->timestamp('last_failed_login_at')->nullable();
-            }
-            
-            // Email verification
-            if (!Schema::hasColumn('users', 'email_verified_at')) {
-                $table->timestamp('email_verified_at')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'email_verification_token')) {
-                $table->string('email_verification_token')->nullable();
-            }
-            if (!Schema::hasColumn('users', 'email_verification_sent_at')) {
-                $table->timestamp('email_verification_sent_at')->nullable();
-            }
-        });
+        // ---- Users table: add columns one at a time, fresh check each time ----
+        $userColumns = [
+            ['devices',                    fn(Blueprint $t) => $t->json('devices')->nullable()],
+            ['device_trusts',              fn(Blueprint $t) => $t->json('device_trusts')->nullable()],
+            ['last_activity_at',           fn(Blueprint $t) => $t->timestamp('last_activity_at')->nullable()],
+            ['login_count',                fn(Blueprint $t) => $t->integer('login_count')->default(0)],
+            ['last_login_ip',              fn(Blueprint $t) => $t->string('last_login_ip', 45)->nullable()],
+            ['last_login_at',              fn(Blueprint $t) => $t->timestamp('last_login_at')->nullable()],
+            ['two_factor_backup_codes',    fn(Blueprint $t) => $t->json('two_factor_backup_codes')->nullable()],
+            ['two_factor_method',          fn(Blueprint $t) => $t->string('two_factor_method')->nullable()],
+            ['two_factor_enabled_at',      fn(Blueprint $t) => $t->timestamp('two_factor_enabled_at')->nullable()],
+            ['two_factor_secret',          fn(Blueprint $t) => $t->string('two_factor_secret')->nullable()],
+            ['two_factor_enabled',         fn(Blueprint $t) => $t->boolean('two_factor_enabled')->default(false)],
+            ['password_changed_at',        fn(Blueprint $t) => $t->timestamp('password_changed_at')->nullable()],
+            ['password_history',           fn(Blueprint $t) => $t->json('password_history')->nullable()],
+            ['temp_password',              fn(Blueprint $t) => $t->boolean('temp_password')->default(false)],
+            ['notification_settings',      fn(Blueprint $t) => $t->json('notification_settings')->nullable()],
+            ['preferred_language',         fn(Blueprint $t) => $t->string('preferred_language', 10)->default('en')],
+            ['timezone',                   fn(Blueprint $t) => $t->string('timezone', 50)->nullable()],
+            ['metadata',                   fn(Blueprint $t) => $t->json('metadata')->nullable()],
+            ['account_locked_until',       fn(Blueprint $t) => $t->timestamp('account_locked_until')->nullable()],
+            ['failed_login_attempts',      fn(Blueprint $t) => $t->integer('failed_login_attempts')->default(0)],
+            ['last_failed_login_at',       fn(Blueprint $t) => $t->timestamp('last_failed_login_at')->nullable()],
+            ['email_verified_at',          fn(Blueprint $t) => $t->timestamp('email_verified_at')->nullable()],
+            ['email_verification_token',   fn(Blueprint $t) => $t->string('email_verification_token')->nullable()],
+            ['email_verification_sent_at', fn(Blueprint $t) => $t->timestamp('email_verification_sent_at')->nullable()],
+        ];
 
-        // Add device_info to personal_access_tokens table
-        if (Schema::hasTable('personal_access_tokens')) {
-            Schema::table('personal_access_tokens', function (Blueprint $table) {
-                if (!Schema::hasColumn('personal_access_tokens', 'device_info')) {
-                    $table->json('device_info')->nullable();
-                }
-                if (!Schema::hasColumn('personal_access_tokens', 'ip_address')) {
-                    $table->string('ip_address', 45)->nullable();
-                }
-                if (!Schema::hasColumn('personal_access_tokens', 'user_agent')) {
-                    $table->text('user_agent')->nullable();
-                }
-                if (!Schema::hasColumn('personal_access_tokens', 'expires_at')) {
-                    $table->timestamp('expires_at')->nullable();
-                }
-            });
+        foreach ($userColumns as [$name, $adder]) {
+            if (!Schema::hasColumn('users', $name)) {
+                Schema::table('users', function (Blueprint $table) use ($adder) {
+                    $adder($table);
+                });
+            }
         }
 
-        // Create password_reset_tokens table (Laravel 11+)
+        // ---- personal_access_tokens columns ----
+        if (Schema::hasTable('personal_access_tokens')) {
+            $patColumns = [
+                ['device_info', fn(Blueprint $t) => $t->json('device_info')->nullable()],
+                ['ip_address',  fn(Blueprint $t) => $t->string('ip_address', 45)->nullable()],
+                ['user_agent',  fn(Blueprint $t) => $t->text('user_agent')->nullable()],
+                ['expires_at',  fn(Blueprint $t) => $t->timestamp('expires_at')->nullable()],
+            ];
+
+            foreach ($patColumns as [$name, $adder]) {
+                if (!Schema::hasColumn('personal_access_tokens', $name)) {
+                    Schema::table('personal_access_tokens', function (Blueprint $table) use ($adder) {
+                        $adder($table);
+                    });
+                }
+            }
+        }
+
+        // ---- password reset tables ----
         if (!Schema::hasTable('password_reset_tokens') && !Schema::hasTable('password_resets')) {
             Schema::create('password_reset_tokens', function (Blueprint $table) {
                 $table->string('email')->primary();
-                $table->string('token', 191); // Fixed: added length
+                $table->string('token', 191);
                 $table->timestamp('created_at')->nullable();
                 $table->index('token');
             });
-        } elseif (!Schema::hasTable('password_resets')) {
-            Schema::create('password_resets', function (Blueprint $table) {
-                $table->string('email')->index();
-                $table->string('token', 191); // Fixed: added length
-                $table->timestamp('created_at')->nullable();
-            });
         }
 
-        // Create sessions table for better session management
+        // ---- sessions ----
         if (!Schema::hasTable('sessions')) {
             Schema::create('sessions', function (Blueprint $table) {
                 $table->string('id')->primary();
@@ -215,7 +153,7 @@ return new class extends Migration
             });
         }
 
-        // Create failed_jobs table for queue handling
+        // ---- failed_jobs ----
         if (!Schema::hasTable('failed_jobs')) {
             Schema::create('failed_jobs', function (Blueprint $table) {
                 $table->id();
@@ -228,7 +166,7 @@ return new class extends Migration
             });
         }
 
-        // Create jobs table for background processing
+        // ---- jobs ----
         if (!Schema::hasTable('jobs')) {
             Schema::create('jobs', function (Blueprint $table) {
                 $table->id();
@@ -242,7 +180,7 @@ return new class extends Migration
             });
         }
 
-        // Create cache table for rate limiting
+        // ---- cache / cache_locks ----
         if (!Schema::hasTable('cache')) {
             Schema::create('cache', function (Blueprint $table) {
                 $table->string('key')->primary();
@@ -260,67 +198,31 @@ return new class extends Migration
         }
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        // Drop tables in reverse order to avoid foreign key constraints
         Schema::dropIfExists('trusted_devices');
         Schema::dropIfExists('device_tokens');
         Schema::dropIfExists('login_activities');
-        
-        // Drop columns from users table - Only drop if they exist
-        Schema::table('users', function (Blueprint $table) {
-            $columns = [
-                'devices',
-                'device_trusts',
-                'last_activity_at',
-                'login_count',
-                'last_login_ip',
-                'last_login_at',
-                'two_factor_backup_codes',
-                'two_factor_method',
-                'two_factor_enabled_at',
-                'two_factor_secret',
-                'two_factor_enabled',
-                'password_changed_at',
-                'password_history',
-                'temp_password',
-                'notification_settings',
-                'preferred_language',
-                'timezone',
-                'metadata',
-                'account_locked_until',
-                'failed_login_attempts',
-                'last_failed_login_at',
-                'email_verified_at',
-                'email_verification_token',
-                'email_verification_sent_at'
-            ];
-            
-            foreach ($columns as $column) {
-                if (Schema::hasColumn('users', $column)) {
+
+        $userColumns = [
+            'devices', 'device_trusts', 'last_activity_at', 'login_count', 'last_login_ip',
+            'last_login_at', 'two_factor_backup_codes', 'two_factor_method',
+            'two_factor_enabled_at', 'two_factor_secret', 'two_factor_enabled',
+            'password_changed_at', 'password_history', 'temp_password',
+            'notification_settings', 'preferred_language', 'timezone', 'metadata',
+            'account_locked_until', 'failed_login_attempts', 'last_failed_login_at',
+            'email_verification_token', 'email_verification_sent_at',
+        ];
+
+        foreach ($userColumns as $column) {
+            if (Schema::hasColumn('users', $column)) {
+                Schema::table('users', function (Blueprint $table) use ($column) {
                     $table->dropColumn($column);
-                }
+                });
             }
-        });
-        
-        // Drop columns from personal_access_tokens table
-        if (Schema::hasTable('personal_access_tokens')) {
-            Schema::table('personal_access_tokens', function (Blueprint $table) {
-                $columns = ['device_info', 'ip_address', 'user_agent', 'expires_at'];
-                foreach ($columns as $column) {
-                    if (Schema::hasColumn('personal_access_tokens', $column)) {
-                        $table->dropColumn($column);
-                    }
-                }
-            });
         }
-        
-        // Drop optional tables if they exist
+
         Schema::dropIfExists('password_reset_tokens');
-        Schema::dropIfExists('password_resets');
         Schema::dropIfExists('sessions');
         Schema::dropIfExists('failed_jobs');
         Schema::dropIfExists('jobs');
