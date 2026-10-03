@@ -10,4 +10,7 @@ php artisan config:cache
 echo "==> Running migrations..."
 php artisan migrate --force
 
-echo "==> Done."
+echo "==> Creating storage symlink..."
+php artisan storage:link || true
+
+echo "==> Deploy complete."
