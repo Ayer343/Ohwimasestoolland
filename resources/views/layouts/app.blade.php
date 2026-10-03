@@ -6,18 +6,55 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
 
-    <!-- ============ FAVICON ============ -->
+    <!-- ============ FAVICON + GLOBAL STORAGE HELPER ============ -->
     @php
-        $settings = \App\Models\SystemSetting::getSettings();
+        use Illuminate\Support\Facades\Storage;
+
+        // Safe storage URL resolver — works locally AND on DO Spaces
+        if (!function_exists('storage_url_for_blade')) {
+            function storage_url_for_blade(?string $path): ?string {
+                if (empty($path)) return null;
+                try {
+                    return Storage::disk('public')->url($path);
+                } catch (\Throwable $e) {
+                    return null;
+                }
+            }
+        }
+
+        try {
+            $settings = \App\Models\SystemSetting::getSettings();
+        } catch (\Throwable $e) {
+            $settings = null;
+        }
+
+        $faviconUrl = $settings && !empty($settings->system_favicon)
+            ? storage_url_for_blade($settings->system_favicon)
+            : null;
+
+        // Resolve logged-in user's avatar / profile photo URL safely
+        $__authUser = auth()->user();
+        $__userPhotoUrl = null;
+        if ($__authUser) {
+            $__photoField = $__authUser->profile_photo
+                ?? $__authUser->avatar
+                ?? $__authUser->photo
+                ?? null;
+
+            if (!empty($__photoField)) {
+                $__userPhotoUrl = storage_url_for_blade($__photoField);
+            }
+        }
     @endphp
-    @if($settings->hasFavicon())
-        <link rel="icon" href="{{ $settings->getFaviconUrl() }}" type="image/x-icon">
-        <link rel="shortcut icon" href="{{ $settings->getFaviconUrl() }}" type="image/x-icon">
-        <link rel="apple-touch-icon" href="{{ $settings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="16x16" href="{{ $settings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="32x32" href="{{ $settings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="64x64" href="{{ $settings->getFaviconUrl() }}">
-        <meta name="msapplication-TileImage" content="{{ $settings->getFaviconUrl() }}">
+
+    @if($faviconUrl)
+        <link rel="icon" href="{{ $faviconUrl }}" type="image/x-icon">
+        <link rel="shortcut icon" href="{{ $faviconUrl }}" type="image/x-icon">
+        <link rel="apple-touch-icon" href="{{ $faviconUrl }}">
+        <link rel="icon" type="image/png" sizes="16x16" href="{{ $faviconUrl }}">
+        <link rel="icon" type="image/png" sizes="32x32" href="{{ $faviconUrl }}">
+        <link rel="icon" type="image/png" sizes="64x64" href="{{ $faviconUrl }}">
+        <meta name="msapplication-TileImage" content="{{ $faviconUrl }}">
         <meta name="msapplication-TileColor" content="#667eea">
     @else
         <link rel="icon" href="{{ asset('favicon.ico') }}" type="image/x-icon">
