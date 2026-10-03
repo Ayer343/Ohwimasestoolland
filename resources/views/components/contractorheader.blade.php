@@ -692,26 +692,22 @@
                 </button>
             </div>
             
-            <div class="dropdown relative">
-                <button id="userMenuButton" class="flex items-center space-x-2">
-                    <!-- Updated Profile Avatar with reduced border -->
-                    <div class="avatar-minimal">
-                        @if(Auth::user()->photo)
-                            <img src="{{ Storage::url('public/users/photos/' . Auth::user()->photo) }}" 
-                                 alt="{{ Auth::user()->name }}" 
-                                 class="w-8 h-8 rounded-full object-cover"
-                                 style="border: 1px solid var(--border-color);">
-                        @else
-                            <div class="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold"
-                                 style="background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
-                                        border: 1px solid var(--border-color);">
-                                {{ substr(Auth::user()->name, 0, 2) }}
-                            </div>
-                        @endif
-                    </div>
-                    <!-- Removed username text -->
-                    <i class="fas fa-chevron-down text-xs" style="color: var(--text-secondary);"></i>
-                </button>
+           <div class="dropdown relative">
+    <button id="userMenuButton" class="flex items-center space-x-2">
+        <div class="avatar-minimal">
+            @if(Auth::user()->photo)
+                <img src="{{ Storage::disk('public')->url('users/photos/' . Auth::user()->photo) }}"
+                     alt="{{ Auth::user()->name }}"
+                     class="w-8 h-8 rounded-full object-cover"
+                     onerror="this.onerror=null;this.src='{{ asset('images/default-avatar.png') }}';">
+            @else
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-semibold">
+                    {{ substr(Auth::user()->name, 0, 2) }}
+                </div>
+            @endif
+        </div>
+        <i class="fas fa-chevron-down text-xs" style="color: var(--text-secondary);"></i>
+    </button>
                 
                 <div id="userDropdown" class="dropdown-menu" 
                      style="background-color: var(--card-bg); 
