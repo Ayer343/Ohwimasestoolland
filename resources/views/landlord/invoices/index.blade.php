@@ -1,205 +1,276 @@
+{{-- resources/views/landlord/invoices/index.blade.php --}}
 @extends('layouts.landlord')
 
 @section('title', 'My Invoices')
 
+@php
+    use Carbon\Carbon;
+
+    // ── Normalize controller data ──
+    $properties  = $properties  ?? collect();
+    $bulkCoverages = $bulkCoverages ?? [];
+    $settings    = $settings    ?? \App\Models\SystemSetting::getSettings();
+
+    $invoices = $invoices instanceof \Illuminate\Pagination\LengthAwarePaginator
+        ? $invoices
+        : new \Illuminate\Pagination\LengthAwarePaginator([], 0, 15);
+
+    $totalDue             = $totalDue ?? 0;
+    $outstandingInvoices  = $outstandingInvoices ?? 0;
+    $totalCoveredMonths   = $totalCoveredMonths ?? 0;
+    $remindersEnabled     = $remindersEnabled ?? false;
+    $reminderDays         = $reminderDays ?? 7;
+    $gracePeriodDays      = $gracePeriodDays ?? 7;
+    $availableMethods     = $availableMethods ?? [];
+
+    // Precompute counts once (not per-row, not inline deep in markup)
+    $payableCount = 0;
+    $consolidatedCount = 0;
+    $processingCount = 0;
+    $regularPaidCount = 0;
+    $bulkPaidCount = 0;
+
+    foreach ($invoices as $invoice) {
+        if ($invoice->status === 'consolidated') {
+            $consolidatedCount++;
+        } elseif ($invoice->status === 'processing') {
+            $processingCount++;
+        }
+
+        if ($invoice->status === 'paid' && !$invoice->bulk_payment_id && !$invoice->is_bulk_payment) {
+            $regularPaidCount++;
+        } elseif ($invoice->is_bulk_payment && $invoice->status === 'paid') {
+            $bulkPaidCount++;
+        }
+
+        if (in_array($invoice->status, ['pending', 'overdue', 'processing'])
+            && !$invoice->bulk_payment_id
+            && !$invoice->is_bulk_payment) {
+            $payableCount++;
+        }
+    }
+
+    $totalPaidInvoices = $regularPaidCount + $bulkPaidCount;
+
+    // Bulk coverage aggregate
+    $activeBulkCount = 0;
+    foreach ($bulkCoverages as $propertyCoverages) {
+        if (is_array($propertyCoverages)) {
+            $activeBulkCount += count($propertyCoverages);
+        }
+    }
+
+    $currencySymbol   = $settings->currency_symbol   ?? '₵';
+    $decimalPlaces    = (int) ($settings->decimal_places ?? 2);
+    $currencyPosition = $settings->currency_position ?? 'left';
+@endphp
+
 @section('content')
 <div class="grid grid-cols-1 gap-6 mb-6">
-    <!-- Header Card -->
+
+    {{-- ============================================================
+         HEADER CARD
+    ============================================================ --}}
     <div class="card">
-        <div class="flex flex-col md:flex-row justify-between items-start md:items-center p-6">
-            <h2 class="text-xl font-semibold mb-4 md:mb-0" style="color: var(--text-primary);">My Invoices</h2>
-            
-            <!-- Export Buttons -->
-            <div class="flex space-x-2">
-                <button onclick="openExportModal()" class="px-4 py-2 rounded flex items-center" style="background-color: #dc2626; color: white;">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center p-6 gap-4">
+            <div class="flex items-center">
+                <div class="mr-4">
+                    <div class="w-16 h-16 rounded-full flex items-center justify-center border-2 icon-circle-primary">
+                        <i class="fas fa-file-invoice text-xl"></i>
+                    </div>
+                </div>
+                <div>
+                    <h2 class="text-xl font-semibold flex items-center flex-wrap gap-2 text-primary">
+                        <i class="fas fa-file-invoice icon-primary"></i>
+                        My Invoices
+                        @if($outstandingInvoices > 0)
+                        <span class="pill pill-warning">
+                            <i class="fas fa-clock mr-1"></i> {{ $outstandingInvoices }} outstanding
+                        </span>
+                        @endif
+                    </h2>
+                    <div class="text-sm flex items-center mt-1 flex-wrap gap-2 text-secondary">
+                        <i class="fas fa-info-circle"></i>
+                        <span>Manage your monthly dues across {{ $properties->count() }} {{ Str::plural('property', $properties->count()) }}</span>
+                        <span>•</span>
+                        <i class="fas fa-circle status-dot status-dot-success"></i>
+                        <span class="font-medium">{{ number_format($totalDue, $decimalPlaces) }} {{ $currencySymbol }} total due</span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" onclick="openExportModal()" class="btn-export">
                     <i class="fas fa-file-pdf mr-2"></i> Export PDF
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- Statistics Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <div class="card p-4" style="background-color: rgba(var(--primary-rgb), 0.1);">
-            <div class="flex justify-between items-center">
-                <div>
-                    <div class="text-sm" style="color: var(--text-secondary);">Total Due</div>
-                    <div class="text-2xl font-semibold" style="color: var(--text-primary);">
-                        {{ $settings->formatAmount($totalDue) }}
-                    </div>
+    {{-- ============================================================
+         FLASH MESSAGES
+    ============================================================ --}}
+    @foreach(['success' => 'check-circle', 'error' => 'exclamation-circle', 'warning' => 'exclamation-triangle', 'info' => 'info-circle'] as $type => $icon)
+        @if(session($type))
+        <div class="card" data-flash>
+            <div class="flex items-center p-4 rounded-lg flash-{{ $type === 'error' ? 'danger' : $type }}">
+                <div class="flex-shrink-0">
+                    <i class="fas fa-{{ $icon }} text-xl icon-{{ $type === 'error' ? 'danger' : $type }}"></i>
                 </div>
-                <i class="fas fa-money-bill-wave text-2xl opacity-70" style="color: var(--primary);"></i>
+                <div class="ml-3 flex-1">
+                    <p class="font-medium text-{{ $type === 'error' ? 'danger' : $type }}">{{ session($type) }}</p>
+                </div>
+                <button type="button" class="ml-auto flash-close" aria-label="Dismiss">
+                    <i class="fas fa-times text-secondary"></i>
+                </button>
             </div>
         </div>
-        
-        <div class="card p-4" style="background-color: rgba(var(--warning-rgb), 0.1);">
-            <div class="flex justify-between items-center">
+        @endif
+    @endforeach
+
+    {{-- ============================================================
+         STATS CARDS
+    ============================================================ --}}
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div class="card stat-card stat-primary">
+            <div class="flex items-center justify-between">
                 <div>
-                    <div class="text-sm" style="color: var(--text-secondary);">Outstanding</div>
-                    <div class="text-2xl font-semibold" style="color: var(--text-primary);">{{ $outstandingInvoices }}</div>
+                    <p class="text-sm font-medium mb-1 text-secondary">Total Due</p>
+                    <p class="text-2xl font-bold text-primary">{{ $settings->formatAmount($totalDue) }}</p>
+                    <p class="text-xs mt-1 text-secondary">Pending + overdue</p>
                 </div>
-                <i class="fas fa-clock text-2xl opacity-70" style="color: var(--warning);"></i>
+                <div class="w-12 h-12 rounded-full flex items-center justify-center icon-circle-primary">
+                    <i class="fas fa-money-bill-wave text-lg"></i>
+                </div>
             </div>
         </div>
-        
-        <div class="card p-4" style="background-color: rgba(var(--info-rgb), 0.1);">
-            <div class="flex justify-between items-center">
+
+        <div class="card stat-card stat-warning">
+            <div class="flex items-center justify-between">
                 <div>
-                    <div class="text-sm" style="color: var(--text-secondary);">Properties</div>
-                    <div class="text-2xl font-semibold" style="color: var(--text-primary);">{{ $properties->count() }}</div>
+                    <p class="text-sm font-medium mb-1 text-secondary">Outstanding</p>
+                    <p class="text-2xl font-bold text-warning">{{ number_format($outstandingInvoices) }}</p>
+                    <p class="text-xs mt-1 text-secondary">Invoice(s)</p>
                 </div>
-                <i class="fas fa-building text-2xl opacity-70" style="color: var(--info);"></i>
+                <div class="w-12 h-12 rounded-full flex items-center justify-center icon-circle-warning">
+                    <i class="fas fa-clock text-lg"></i>
+                </div>
             </div>
         </div>
-        
-        <div class="card p-4" style="background-color: rgba(var(--success-rgb), 0.1);">
-            <div class="flex justify-between items-center">
+
+        <div class="card stat-card stat-info">
+            <div class="flex items-center justify-between">
                 <div>
-                    <div class="text-sm" style="color: var(--text-secondary);">Active Coverage</div>
-                    <div class="text-2xl font-semibold" style="color: var(--success);">
-                        @php
-                            $totalCoveredMonths = 0;
-                            $activeBulkCount = 0;
-                            if(isset($bulkCoverages) && is_array($bulkCoverages)) {
-                                foreach($bulkCoverages as $propertyCoverages) {
-                                    if(is_array($propertyCoverages)) {
-                                        $activeBulkCount += count($propertyCoverages);
-                                        foreach($propertyCoverages as $coverage) {
-                                            $totalCoveredMonths += is_array($coverage) ? ($coverage['months_covered'] ?? count($coverage['periods'] ?? [])) : 0;
-                                        }
-                                    }
-                                }
-                            }
-                        @endphp
-                        {{ $totalCoveredMonths }}
-                    </div>
+                    <p class="text-sm font-medium mb-1 text-secondary">Properties</p>
+                    <p class="text-2xl font-bold text-info">{{ number_format($properties->count()) }}</p>
+                    <p class="text-xs mt-1 text-secondary">Registered</p>
                 </div>
-                <i class="fas fa-shield-alt text-2xl opacity-70" style="color: var(--success);"></i>
+                <div class="w-12 h-12 rounded-full flex items-center justify-center icon-circle-info">
+                    <i class="fas fa-building text-lg"></i>
+                </div>
             </div>
-            @if($activeBulkCount > 0)
-                <p class="text-xs mt-1" style="color: var(--text-secondary);">
-                    {{ $activeBulkCount }} active bulk payment(s)
-                </p>
-            @endif
         </div>
-        
-        <div class="card p-4" style="background-color: rgba(var(--success-rgb), 0.05);">
-            <div class="flex justify-between items-center">
+
+        <div class="card stat-card stat-success">
+            <div class="flex items-center justify-between">
                 <div>
-                    <div class="text-sm" style="color: var(--text-secondary);">Paid Invoices</div>
-                    <div class="text-2xl font-semibold" style="color: var(--success);">
-                        @php
-                            $regularPaidCount = $invoices->filter(function($invoice) {
-                                return $invoice->status === 'paid' && 
-                                       $invoice->status !== 'consolidated' && 
-                                       !$invoice->bulk_payment_id &&
-                                       $invoice->is_bulk_payment === false;
-                            })->count();
-                            
-                            $bulkPaidCount = $invoices->filter(function($invoice) {
-                                return $invoice->is_bulk_payment && $invoice->status === 'paid';
-                            })->count();
-                            
-                            $totalPaidInvoices = $regularPaidCount + $bulkPaidCount;
-                        @endphp
-                        {{ $totalPaidInvoices }}
-                    </div>
-                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                    <p class="text-sm font-medium mb-1 text-secondary">Active Coverage</p>
+                    <p class="text-2xl font-bold text-success">{{ number_format($totalCoveredMonths) }}</p>
+                    <p class="text-xs mt-1 text-secondary">
+                        {{ $activeBulkCount }} bulk payment(s)
+                    </p>
+                </div>
+                <div class="w-12 h-12 rounded-full flex items-center justify-center icon-circle-success">
+                    <i class="fas fa-shield-alt text-lg"></i>
+                </div>
+            </div>
+        </div>
+
+        <div class="card stat-card stat-success">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-sm font-medium mb-1 text-secondary">Paid Invoices</p>
+                    <p class="text-2xl font-bold text-success">{{ number_format($totalPaidInvoices) }}</p>
+                    <p class="text-xs mt-1 text-secondary">
                         @if($bulkPaidCount > 0)
-                            ({{ $regularPaidCount }} regular + {{ $bulkPaidCount }} bulk)
+                            {{ $regularPaidCount }} regular + {{ $bulkPaidCount }} bulk
                         @else
-                            Regular invoices only
+                            Regular only
                         @endif
-                    </div>
+                    </p>
                 </div>
-                <i class="fas fa-check-circle text-2xl opacity-70" style="color: var(--success);"></i>
+                <div class="w-12 h-12 rounded-full flex items-center justify-center icon-circle-success">
+                    <i class="fas fa-check-circle text-lg"></i>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Explanation Card for Statistics -->
-    <div class="card p-4" style="background-color: rgba(var(--info-rgb), 0.05);">
-        <div class="flex items-start">
-            <i class="fas fa-info-circle mr-3 mt-1" style="color: var(--info);"></i>
-            <div class="text-sm" style="color: var(--text-secondary);">
-                <strong class="font-semibold" style="color: var(--text-primary);">Understanding Your Invoice Statistics:</strong>
-                <ul class="mt-1 space-y-1">
-                    <li>• <strong class="text-success">Paid Invoices</strong> - Regular invoices you've paid individually</li>
-                    <li>• <strong class="text-success">Bulk Payments</strong> - Multi-month payments that cover future months</li>
-                    <li>• <strong class="text-info">Consolidated Invoices</strong> - Original invoices now covered by a bulk payment (not counted separately)</li>
-                    <li>• <strong class="text-primary">Active Coverage</strong> - Months already paid for via bulk payments</li>
+    {{-- ============================================================
+         EXPLANATION CARD
+    ============================================================ --}}
+    <div class="card">
+        <div class="flex items-start p-4 rounded-lg flash-info">
+            <i class="fas fa-info-circle icon-info text-xl mt-1 mr-3"></i>
+            <div class="text-sm text-secondary">
+                <strong class="font-semibold text-primary">Understanding Your Invoice Statistics:</strong>
+                <ul class="mt-2 space-y-1">
+                    <li>• <strong class="text-success">Paid Invoices</strong> — Regular invoices you've paid individually</li>
+                    <li>• <strong class="text-success">Bulk Payments</strong> — Multi-month payments covering future months</li>
+                    <li>• <strong class="text-info">Consolidated Invoices</strong> — Original invoices now covered by a bulk payment (not counted separately)</li>
+                    <li>• <strong class="text-primary">Active Coverage</strong> — Months already paid for via bulk payments</li>
                 </ul>
                 <p class="mt-2 text-xs">
-                    <i class="fas fa-lightbulb mr-1"></i> 
-                    When you make a bulk payment, the original invoices become "Consolidated" and are no longer counted as separate paid invoices to prevent double counting.
+                    <i class="fas fa-lightbulb mr-1"></i>
+                    When you make a bulk payment, the original invoices become "Consolidated" and are no longer counted as separate paid invoices.
                 </p>
             </div>
         </div>
     </div>
 
-    <!-- Success/Error Messages -->
-    @if(session('success'))
-    <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative mb-4" role="alert">
-        <strong class="font-bold">Success!</strong>
-        <span class="block sm:inline">{{ session('success') }}</span>
-        <button type="button" class="absolute top-0 bottom-0 right-0 px-4 py-3" onclick="this.parentElement.style.display='none'">
-            <i class="fas fa-times"></i>
-        </button>
-    </div>
-    @endif
-
-    @if(session('error'))
-    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
-        <strong class="font-bold">Error!</strong>
-        <span class="block sm:inline">{{ session('error') }}</span>
-        <button type="button" class="absolute top-0 bottom-0 right-0 px-4 py-3" onclick="this.parentElement.style.display='none'">
-            <i class="fas fa-times"></i>
-        </button>
-    </div>
-    @endif
-
-    <!-- Bulk Coverage Summary Cards -->
-    @if(isset($bulkCoverages) && is_array($bulkCoverages) && count($bulkCoverages) > 0)
+    {{-- ============================================================
+         ACTIVE BULK COVERAGE BANNERS
+    ============================================================ --}}
+    @if(count($bulkCoverages) > 0)
         @foreach($bulkCoverages as $propertyId => $coverages)
             @if(is_array($coverages) && count($coverages) > 0)
                 @foreach($coverages as $coverage)
                     @if(is_array($coverage) && !empty($coverage))
                         @php
                             $property = $properties->firstWhere('id', $propertyId);
-                            $periods = $coverage['periods'] ?? [];
-                            $formattedPeriods = collect($periods)->map(function($p) {
-                                return $p ? \Carbon\Carbon::parse($p . '-01')->format('M Y') : '';
-                            })->filter()->values()->toArray();
+                            $periods  = $coverage['periods'] ?? [];
+                            $formattedPeriods = collect($periods)
+                                ->map(fn ($p) => $p ? Carbon::parse($p . '-01')->format('M Y') : '')
+                                ->filter()
+                                ->values()
+                                ->toArray();
                         @endphp
-                        <div class="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded relative mb-4" role="alert">
-                            <div class="flex items-start">
-                                <i class="fas fa-shield-alt text-green-600 text-xl mr-3 mt-1"></i>
+                        <div class="card" data-coverage-banner>
+                            <div class="flex items-start p-4 rounded-lg flash-success">
+                                <i class="fas fa-shield-alt icon-success text-xl mt-1 mr-3"></i>
                                 <div class="flex-1">
-                                    <div class="flex items-center justify-between">
+                                    <div class="flex items-center justify-between flex-wrap gap-2">
                                         <div>
-                                            <strong class="font-bold text-green-800">✅ Active Bulk Coverage</strong>
-                                            <span class="ml-2 text-sm text-green-600">
+                                            <strong class="font-bold text-success">✅ Active Bulk Coverage</strong>
+                                            <span class="ml-2 text-sm text-secondary">
                                                 {{ $property->property_name ?? ($property->street_name ?? 'Property') }}
                                             </span>
                                         </div>
-                                        <span class="text-xs px-2 py-1 bg-green-200 text-green-800 rounded-full">
-                                            {{ count($periods) }} months covered
-                                        </span>
+                                        <span class="pill pill-success">{{ count($periods) }} months covered</span>
                                     </div>
-                                    <p class="text-sm mt-2 text-green-700">
+                                    <p class="text-sm mt-2 text-secondary">
                                         <i class="fas fa-calendar-check mr-1"></i>
-                                        Covered periods: 
+                                        Covered periods:
                                         {{ implode(', ', array_slice($formattedPeriods, 0, 3)) }}
                                         @if(count($formattedPeriods) > 3)
                                             and {{ count($formattedPeriods) - 3 }} more
                                         @endif
                                     </p>
-                                    <div class="flex items-center justify-between mt-2">
-                                        <p class="text-xs text-green-600">
+                                    <div class="flex items-center justify-between mt-2 flex-wrap gap-2">
+                                        <p class="text-xs text-secondary">
                                             <i class="fas fa-check-circle mr-1"></i>
                                             No invoices will be generated for these months.
                                         </p>
-                                        <a href="{{ route('landlord.invoices.show', $coverage['invoice_id']) }}" class="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 transition">
+                                        <a href="{{ route('landlord.invoices.show', $coverage['invoice_id']) }}" class="btn-soft-success">
                                             <i class="fas fa-eye mr-1"></i> View Bulk Invoice
                                         </a>
                                     </div>
@@ -212,20 +283,17 @@
         @endforeach
     @endif
 
-    <!-- Consolidated Invoices Info Banner -->
-    @php
-        $consolidatedCount = $invoices->where('status', 'consolidated')->count();
-        $processingCount = $invoices->where('status', 'processing')->count();
-    @endphp
-    
+    {{-- ============================================================
+         CONSOLIDATED / PROCESSING INFO BANNERS
+    ============================================================ --}}
     @if($consolidatedCount > 0)
-    <div class="bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded relative mb-4" role="alert">
-        <div class="flex items-start">
-            <i class="fas fa-info-circle text-xl mr-3 mt-1"></i>
+    <div class="card">
+        <div class="flex items-start p-4 rounded-lg flash-info">
+            <i class="fas fa-info-circle icon-info text-xl mt-1 mr-3"></i>
             <div>
-                <strong class="font-bold">Consolidated Invoices</strong>
-                <p class="text-sm mt-1">
-                    You have {{ $consolidatedCount }} consolidated invoice(s) that are part of bulk payments. 
+                <strong class="font-bold text-info">Consolidated Invoices</strong>
+                <p class="text-sm mt-1 text-secondary">
+                    You have {{ $consolidatedCount }} consolidated invoice(s) that are part of bulk payments.
                     These are shown for reference but cannot be paid individually.
                 </p>
             </div>
@@ -233,184 +301,164 @@
     </div>
     @endif
 
-    <!-- Processing Invoices Info Banner -->
     @if($processingCount > 0)
-    <div class="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded relative mb-4" role="alert">
-        <div class="flex items-start">
-            <i class="fas fa-clock text-xl mr-3 mt-1"></i>
+    <div class="card">
+        <div class="flex items-start p-4 rounded-lg flash-warning">
+            <i class="fas fa-clock icon-warning text-xl mt-1 mr-3"></i>
             <div>
-                <strong class="font-bold">Processing Invoices</strong>
-                <p class="text-sm mt-1">
-                    You have {{ $processingCount }} invoice(s) currently in <span class="font-semibold">Processing</span> status. 
-                    These are payments that were initiated but may have failed or been cancelled. 
-                    You can retry payment using the <span class="font-semibold">Retry Payment</span> button.
+                <strong class="font-bold text-warning">Processing Invoices</strong>
+                <p class="text-sm mt-1 text-secondary">
+                    You have {{ $processingCount }} invoice(s) currently in <strong>Processing</strong> status.
+                    These are payments that were initiated but may have failed or been cancelled.
+                    You can retry payment using the <strong>Retry Payment</strong> button.
                 </p>
             </div>
         </div>
     </div>
     @endif
 
-    <!-- Filters Card -->
+    {{-- ============================================================
+         FILTERS CARD
+    ============================================================ --}}
     <div class="card p-6">
-        <form method="GET" action="{{ route('landlord.invoices') }}" id="filterForm" class="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <div>
-                <label class="block text-sm mb-2" style="color: var(--text-secondary);">Property</label>
-                <select name="property_id" class="w-full p-2 border rounded" style="border-color: var(--border-color); background-color: var(--bg-primary); color: var(--text-primary);">
+        <form method="GET" action="{{ route('landlord.invoices') }}" id="filterForm">
+            <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                <select name="property_id" class="form-select">
                     <option value="">All Properties</option>
                     @foreach($properties as $property)
-                        <option value="{{ $property->id }}" {{ request('property_id') == $property->id ? 'selected' : '' }}>
-                            @if($property->property_name)
-                                {{ $property->property_name }} - 
-                            @endif
+                        <option value="{{ $property->id }}" @selected(request('property_id') == $property->id)>
+                            @if($property->property_name){{ $property->property_name }} — @endif
                             {{ $property->house_number ?? '#' }} {{ $property->street_name }}
                         </option>
                     @endforeach
                 </select>
-            </div>
 
-            <div>
-                <label class="block text-sm mb-2" style="color: var(--text-secondary);">Status</label>
-                <select name="status" class="w-full p-2 border rounded" style="border-color: var(--border-color); background-color: var(--bg-primary); color: var(--text-primary);">
+                <select name="status" class="form-select">
                     <option value="">All Statuses</option>
-                    <option value="pending" {{ request('status') == 'pending' ? 'selected' : '' }}>Pending</option>
-                    <option value="processing" {{ request('status') == 'processing' ? 'selected' : '' }}>Processing</option>
-                    <option value="paid" {{ request('status') == 'paid' ? 'selected' : '' }}>Paid</option>
-                    <option value="overdue" {{ request('status') == 'overdue' ? 'selected' : '' }}>Overdue</option>
-                    <option value="consolidated" {{ request('status') == 'consolidated' ? 'selected' : '' }}>Consolidated</option>
+                    @foreach(['pending','processing','paid','overdue','consolidated'] as $s)
+                        <option value="{{ $s }}" @selected(request('status') === $s)>{{ ucfirst($s) }}</option>
+                    @endforeach
                 </select>
-            </div>
 
-            <div>
-                <label class="block text-sm mb-2" style="color: var(--text-secondary);">Invoice Type</label>
-                <select name="type" class="w-full p-2 border rounded" style="border-color: var(--border-color); background-color: var(--bg-primary); color: var(--text-primary);">
+                <select name="type" class="form-select">
                     <option value="">All Types</option>
-                    <option value="regular" {{ request('type') == 'regular' ? 'selected' : '' }}>Regular Monthly</option>
-                    <option value="bulk" {{ request('type') == 'bulk' ? 'selected' : '' }}>Bulk Payment</option>
+                    <option value="regular" @selected(request('type') === 'regular')>Regular Monthly</option>
+                    <option value="bulk"    @selected(request('type') === 'bulk')>Bulk Payment</option>
                 </select>
-            </div>
 
-            <div>
-                <label class="block text-sm mb-2" style="color: var(--text-secondary);">Coverage</label>
-                <select name="coverage" class="w-full p-2 border rounded" style="border-color: var(--border-color); background-color: var(--bg-primary); color: var(--text-primary);">
+                <select name="coverage" class="form-select">
                     <option value="">All Invoices</option>
-                    <option value="covered" {{ request('coverage') == 'covered' ? 'selected' : '' }}>Covered by Bulk</option>
-                    <option value="not_covered" {{ request('coverage') == 'not_covered' ? 'selected' : '' }}>Not Covered</option>
+                    <option value="covered"     @selected(request('coverage') === 'covered')>Covered by Bulk</option>
+                    <option value="not_covered" @selected(request('coverage') === 'not_covered')>Not Covered</option>
                 </select>
-            </div>
 
-            <div class="flex items-end space-x-2">
-                <button type="submit" class="px-4 py-2 rounded flex-1" style="background-color: var(--primary); color: white;">
-                    <i class="fas fa-filter mr-2"></i> Filter
-                </button>
-                <a href="{{ route('landlord.invoices') }}" class="px-4 py-2 rounded" style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--text-secondary);">
-                    <i class="fas fa-redo"></i>
-                </a>
+                <div class="flex gap-2">
+                    <button type="submit" class="btn-primary flex-1">
+                        <i class="fas fa-filter mr-2"></i> Filter
+                    </button>
+                    <a href="{{ route('landlord.invoices') }}" class="btn-secondary" title="Reset">
+                        <i class="fas fa-redo"></i>
+                    </a>
+                </div>
             </div>
         </form>
     </div>
 
-    <!-- Payment Methods Available -->
-    @if(isset($availableMethods) && count($availableMethods) > 0)
+    {{-- ============================================================
+         AVAILABLE PAYMENT METHODS
+    ============================================================ --}}
+    @if(count($availableMethods) > 0)
     <div class="card p-6">
-        <h3 class="font-medium mb-4" style="color: var(--text-primary);">Available Payment Methods</h3>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <h3 class="font-medium mb-4 text-primary">Available Payment Methods</h3>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
             @foreach($availableMethods as $method)
-                <div class="p-3 rounded-lg text-center" style="background-color: rgba(var(--primary-rgb), 0.05);">
-                    @if($method == 'mtn_momo')
-                        <i class="fas fa-mobile-alt text-2xl mb-2" style="color: var(--primary);"></i>
-                        <p class="text-sm font-medium" style="color: var(--text-primary);">MTN Mobile Money</p>
-                    @elseif($method == 'telecel_cash')
-                        <i class="fas fa-sim-card text-2xl mb-2" style="color: var(--info);"></i>
-                        <p class="text-sm font-medium" style="color: var(--text-primary);">Telecel Cash</p>
-                    @elseif($method == 'airteltigo_cash')
-                        <i class="fas fa-wifi text-2xl mb-2" style="color: var(--success);"></i>
-                        <p class="text-sm font-medium" style="color: var(--text-primary);">AirtelTigo Cash</p>
-                    @elseif($method == 'bank_transfer')
-                        <i class="fas fa-university text-2xl mb-2" style="color: var(--warning);"></i>
-                        <p class="text-sm font-medium" style="color: var(--text-primary);">Bank Transfer</p>
-                    @else
-                        <i class="fas fa-credit-card text-2xl mb-2" style="color: var(--text-secondary);"></i>
-                        <p class="text-sm font-medium" style="color: var(--text-primary);">{{ ucfirst(str_replace('_', ' ', $method)) }}</p>
-                    @endif
+                @php
+                    [$icon, $color] = match($method) {
+                        'mtn_momo'        => ['fas fa-mobile-alt',  'primary'],
+                        'telecel_cash'    => ['fas fa-sim-card',    'info'],
+                        'airteltigo_cash' => ['fas fa-wifi',        'success'],
+                        'bank_transfer'   => ['fas fa-university',  'warning'],
+                        default           => ['fas fa-credit-card', 'secondary'],
+                    };
+                @endphp
+                <div class="flex items-center p-3 rounded-lg" style="background-color: rgba(var(--{{ $color }}-rgb), 0.05); border: 1px solid rgba(var(--{{ $color }}-rgb), 0.1);">
+                    <i class="{{ $icon }} text-xl mr-3 icon-{{ $color }}"></i>
+                    <span class="text-sm text-primary font-medium">
+                        {{ ucfirst(str_replace('_', ' ', $method)) }}
+                    </span>
                 </div>
             @endforeach
         </div>
     </div>
     @endif
 
-    <!-- Results Count and Actions -->
+    {{-- ============================================================
+         INVOICES TABLE CARD
+    ============================================================ --}}
     <div class="card p-6">
-        <div class="flex flex-col md:flex-row md:items-center justify-between mb-4">
-            <p class="text-sm" style="color: var(--text-secondary);">
-                Showing {{ $invoices->firstItem() ?? 0 }} to {{ $invoices->lastItem() ?? 0 }} of {{ $invoices->total() }} results
-                @if(request('status') != 'consolidated')
+        <div class="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
+            <p class="text-sm text-secondary">
+                Showing
+                <span class="font-medium text-primary">{{ $invoices->firstItem() ?? 0 }}</span>–
+                <span class="font-medium text-primary">{{ $invoices->lastItem() ?? 0 }}</span>
+                of <span class="font-medium text-primary">{{ $invoices->total() }}</span> results
+                @if(request('status') !== 'consolidated')
                     <span class="ml-2 text-xs">(consolidated invoices hidden by default)</span>
                 @endif
-                @if(request('status') == 'processing')
-                    <span class="ml-2 text-xs" style="color: var(--warning);">(Showing failed/processing payments that can be retried)</span>
-                @endif
             </p>
-            
-            <div class="flex space-x-2 mt-2 md:mt-0">
-                <button onclick="loadOutstandingInvoices()" class="text-sm px-3 py-1 rounded" style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);">
+
+            <div class="flex flex-wrap gap-2">
+                <button type="button" onclick="loadOutstandingInvoices()" class="btn-soft-warning">
                     <i class="fas fa-sync-alt mr-1"></i> Refresh
                 </button>
-                <a href="{{ route('landlord.invoices', ['status' => 'consolidated']) }}" class="text-sm px-3 py-1 rounded" style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
-                    <i class="fas fa-layer-group mr-1"></i> View Consolidated
+                <a href="{{ route('landlord.invoices', ['status' => 'consolidated']) }}" class="btn-soft-info">
+                    <i class="fas fa-layer-group mr-1"></i> Consolidated
                 </a>
-                <a href="{{ route('landlord.invoices', ['status' => 'processing']) }}" class="text-sm px-3 py-1 rounded" style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);">
-                    <i class="fas fa-clock mr-1"></i> View Processing
+                <a href="{{ route('landlord.invoices', ['status' => 'processing']) }}" class="btn-soft-warning">
+                    <i class="fas fa-clock mr-1"></i> Processing
                 </a>
-                <button onclick="showCoverageSummary()" class="text-sm px-3 py-1 rounded" style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
-                    <i class="fas fa-shield-alt mr-1"></i> Coverage Summary
+                <button type="button" onclick="showCoverageSummary()" class="btn-soft-success">
+                    <i class="fas fa-shield-alt mr-1"></i> Coverage
                 </button>
             </div>
         </div>
 
-        <!-- Invoice Selection Section -->
-        @if($invoices->whereIn('status', ['pending', 'overdue', 'processing'])->where('bulk_payment_id', null)->count() > 0)
-        <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(var(--primary-rgb), 0.1);">
-            <div id="invoiceSelectionForm">
-                <div class="flex flex-col md:flex-row md:items-center justify-between">
-                    <div class="flex-1">
-                        <p class="font-medium mb-2" style="color: var(--text-primary);">Select Invoices to Pay</p>
-                        <p class="text-sm" style="color: var(--text-secondary);">
-                            Select one or more invoices to pay at once (consolidated invoices cannot be selected)
-                            @if($processingCount > 0)
-                                <span class="ml-2 text-xs" style="color: var(--warning);">(Processing invoices can be retried)</span>
-                            @endif
-                        </p>
-                        
-                        <div id="selectedInvoicesSummary" class="mt-3 hidden">
-                            <div class="flex items-center justify-between p-3 rounded" style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.2);">
-                                <div>
-                                    <p class="text-sm font-medium" style="color: var(--text-primary);">
-                                        <span id="selectedCount">0</span> invoice(s) selected
-                                    </p>
-                                    <p class="text-xs" style="color: var(--text-secondary);">
-                                        Total amount: <span id="selectedTotal" class="font-medium">{{ $settings->formatAmount(0) }}</span>
-                                    </p>
-                                    <div id="bulkPaymentInfo" class="hidden mt-2">
-                                        <div class="flex items-center text-xs text-green-600">
-                                            <i class="fas fa-shield-alt mr-1"></i>
-                                            <span>Creating a bulk payment will cover future months and prevent duplicate invoices</span>
-                                        </div>
+        {{-- Payment selection bar --}}
+        @if($payableCount > 0)
+        <div class="mb-6 p-4 rounded-lg flash-info">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div class="flex-1">
+                    <p class="font-medium text-primary mb-1">Select Invoices to Pay</p>
+                    <p class="text-sm text-secondary">
+                        Select one or more invoices to pay at once. Consolidated invoices cannot be selected.
+                        @if($processingCount > 0)
+                            <span class="ml-2 text-xs text-warning">(Processing invoices can be retried)</span>
+                        @endif
+                    </p>
+
+                    <div id="selectedInvoicesSummary" class="hidden mt-3">
+                        <div class="flex items-center justify-between p-3 rounded-lg flash-success flex-wrap gap-2">
+                            <div>
+                                <p class="text-sm font-medium text-primary">
+                                    <span id="selectedCount">0</span> invoice(s) selected
+                                </p>
+                                <p class="text-xs text-secondary">
+                                    Total: <span id="selectedTotal" class="font-medium text-primary">{{ $settings->formatAmount(0) }}</span>
+                                </p>
+                                <div id="bulkPaymentInfo" class="hidden mt-2">
+                                    <div class="flex items-center text-xs text-success">
+                                        <i class="fas fa-shield-alt mr-1"></i>
+                                        <span>Creating a bulk payment will cover future months and prevent duplicate invoices</span>
                                     </div>
                                 </div>
-                                <div class="flex space-x-2">
-                                    <button type="button" 
-                                            onclick="processSelectedInvoices('invoices')" 
-                                            class="px-4 py-2 rounded flex items-center" 
-                                            style="background-color: var(--primary); color: white;">
-                                        <i class="fas fa-credit-card mr-2"></i> Pay Selected
-                                    </button>
-                                    <button type="button" 
-                                            onclick="processSelectedInvoices('bulk')" 
-                                            class="px-4 py-2 rounded flex items-center" 
-                                            style="background-color: var(--success); color: white;">
-                                        <i class="fas fa-layer-group mr-2"></i> Create Bulk Payment
-                                    </button>
-                                </div>
+                            </div>
+                            <div class="flex gap-2">
+                                <button type="button" onclick="processSelectedInvoices('invoices')" class="btn-primary">
+                                    <i class="fas fa-credit-card mr-2"></i> Pay Selected
+                                </button>
+                                <button type="button" onclick="processSelectedInvoices('bulk')" class="btn-success">
+                                    <i class="fas fa-layer-group mr-2"></i> Create Bulk
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -419,375 +467,260 @@
         </div>
         @endif
 
-        <!-- Loading Indicator -->
         <div id="loadingIndicator" class="hidden mb-4">
             <div class="flex items-center justify-center p-4">
                 <div class="animate-spin rounded-full h-8 w-8 border-b-2" style="border-color: var(--primary);"></div>
-                <span class="ml-3 text-sm" style="color: var(--text-secondary);">Loading...</span>
+                <span class="ml-3 text-sm text-secondary">Loading…</span>
             </div>
         </div>
 
-        <!-- Invoices Table -->
         <div class="overflow-x-auto">
-            <table class="w-full">
+            <table class="table w-full">
                 <thead>
-                    <tr class="border-b" style="border-color: var(--border-color);">
-                        @if($invoices->whereIn('status', ['pending', 'overdue', 'processing'])->where('bulk_payment_id', null)->count() > 0)
-                        <th class="text-left p-3 font-medium" style="color: var(--text-secondary); width: 40px;">
+                    <tr>
+                        @if($payableCount > 0)
+                        <th class="table-th w-10">
                             <input type="checkbox" id="selectAll" title="Select all payable invoices">
                         </th>
                         @endif
-                        <th class="text-left p-3 font-medium" style="color: var(--text-secondary);">Invoice No.</th>
-                        <th class="text-left p-3 font-medium" style="color: var(--text-secondary);">Property Info</th>
-                        <th class="text-left p-3 font-medium" style="color: var(--text-secondary);">Period</th>
-                        <th class="text-left p-3 font-medium" style="color: var(--text-secondary);">Amount</th>
-                        <th class="text-left p-3 font-medium" style="color: var(--text-secondary);">Due Date</th>
-                        <th class="text-left p-3 font-medium" style="color: var(--text-secondary);">Status</th>
-                        <th class="text-left p-3 font-medium" style="color: var(--text-secondary);">Actions</th>
+                        <th class="table-th">Invoice No.</th>
+                        <th class="table-th">Property</th>
+                        <th class="table-th">Period</th>
+                        <th class="table-th">Amount</th>
+                        <th class="table-th">Due Date</th>
+                        <th class="table-th">Status</th>
+                        <th class="table-th">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="invoicesTableBody">
                     @forelse($invoices as $invoice)
-                    @php
-                        $isCoveredByBulk = false;
-                        $coveringBulkInvoice = null;
-                        
-                        if(isset($bulkCoverages) && is_array($bulkCoverages) && isset($bulkCoverages[$invoice->property_id])) {
-                            foreach($bulkCoverages[$invoice->property_id] as $coverage) {
-                                if(is_array($coverage) && isset($coverage['periods']) && in_array($invoice->period, $coverage['periods'])) {
-                                    $isCoveredByBulk = true;
-                                    $coveringBulkInvoice = $coverage;
-                                    break;
+                        @php
+                            // Coverage check — flatten and precompute once per invoice
+                            $isCoveredByBulk = false;
+                            $coveringBulkInvoice = null;
+
+                            if (isset($bulkCoverages[$invoice->property_id])) {
+                                foreach ($bulkCoverages[$invoice->property_id] as $coverage) {
+                                    if (is_array($coverage) && isset($coverage['periods']) && in_array($invoice->period, $coverage['periods'])) {
+                                        $isCoveredByBulk = true;
+                                        $coveringBulkInvoice = $coverage;
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        
-                        $isProcessing = $invoice->status === 'processing';
-                        $isPayable = in_array($invoice->status, ['pending', 'overdue', 'processing']) && 
-                                     !$invoice->is_bulk_payment && 
-                                     !$invoice->bulk_payment_id && 
-                                     !$isCoveredByBulk;
-                    @endphp
-                    <tr class="border-b invoice-row {{ $invoice->status == 'consolidated' ? 'opacity-75' : '' }} {{ $isCoveredByBulk ? 'bg-green-50' : '' }} {{ $isProcessing ? 'bg-yellow-50' : '' }}" 
-                        style="border-color: var(--border-color); background-color: var(--bg-primary);" 
-                        data-invoice-id="{{ $invoice->id }}" 
-                        data-amount="{{ $invoice->total_amount }}" 
-                        data-property-id="{{ $invoice->property_id }}"
-                        data-status="{{ $invoice->status }}"
-                        data-is-bulk="{{ $invoice->is_bulk_payment ? 'true' : 'false' }}"
-                        data-has-parent="{{ $invoice->bulk_payment_id ? 'true' : 'false' }}"
-                        data-covered-by-bulk="{{ $isCoveredByBulk ? 'true' : 'false' }}">
-                        
-                        @if($invoices->whereIn('status', ['pending', 'overdue', 'processing'])->where('bulk_payment_id', null)->count() > 0)
-                        <td class="p-3">
-                            @if(in_array($invoice->status, ['pending', 'overdue', 'processing']) && !$invoice->bulk_payment_id && !$invoice->is_bulk_payment && !$isCoveredByBulk)
-                                <input type="checkbox" name="invoice_ids[]" value="{{ $invoice->id }}" class="invoice-checkbox" data-amount="{{ $invoice->total_amount }}">
-                            @elseif($invoice->status == 'consolidated')
-                                <span class="text-xs px-2 py-1 rounded" style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
-                                    <i class="fas fa-link mr-1"></i> Consolidated
-                                </span>
-                            @elseif($invoice->bulk_payment_id)
-                                <span class="text-xs px-2 py-1 rounded" style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--text-secondary);">
-                                    <i class="fas fa-layer-group mr-1"></i> Part of Bulk
-                                </span>
-                            @elseif($isCoveredByBulk)
-                                <span class="text-xs px-2 py-1 rounded" style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
-                                    <i class="fas fa-shield-alt mr-1"></i> Covered
-                                </span>
-                            @endif
-                        </td>
-                        @endif
-                        
-                        <td class="p-3">
-                            <p class="font-medium" style="color: var(--text-primary);">
-                                @if($invoice->is_bulk_payment)
-                                    <i class="fas fa-layer-group mr-1 text-xs" style="color: var(--info);"></i>
-                                @elseif($invoice->bulk_payment_id)
-                                    <i class="fas fa-link mr-1 text-xs" style="color: var(--info);"></i>
-                                @elseif($isCoveredByBulk)
-                                    <i class="fas fa-shield-alt mr-1 text-xs" style="color: var(--success);"></i>
-                                @elseif($isProcessing)
-                                    <i class="fas fa-clock mr-1 text-xs" style="color: var(--warning);"></i>
-                                @endif
-                                {{ $invoice->invoice_number ?? 'INV-'.str_pad($invoice->id, 6, '0', STR_PAD_LEFT) }}
-                            </p>
-                            @if($invoice->payment_reference)
-                                <p class="text-sm" style="color: var(--text-secondary);">Ref: {{ $invoice->payment_reference }}</p>
-                            @endif
-                            @if($isProcessing)
-                                <p class="text-xs" style="color: var(--warning);">
-                                    <i class="fas fa-exclamation-triangle mr-1"></i>
-                                    Payment failed or cancelled - click retry
-                                </p>
-                            @endif
-                        </td>
-                        
-                        <td class="p-3">
-                            @if($invoice->property)
-                            <div class="flex items-start space-x-3">
-                                <div class="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                                    <i class="fas fa-home text-blue-600 text-sm"></i>
-                                </div>
-                                <div>
-                                    @if($invoice->property->property_name)
-                                        <p class="font-medium text-sm" style="color: var(--text-primary);">
-                                            {{ $invoice->property->property_name }}
-                                        </p>
-                                    @endif
-                                    <p class="text-xs" style="color: var(--text-secondary);">
-                                        {{ $invoice->property->house_number ?? '#' }} {{ $invoice->property->street_name }}
-                                    </p>
-                                </div>
-                            </div>
-                            @endif
-                        </td>
-                        
-                        <td class="p-3">
-                            @php
-                                $periodDisplay = $invoice->period;
-                                if($invoice->is_bulk_payment && $invoice->bulk_coverage_start && $invoice->bulk_coverage_end) {
-                                    $periodDisplay = \Carbon\Carbon::parse($invoice->bulk_coverage_start . '-01')->format('M Y') . ' - ' . 
-                                                    \Carbon\Carbon::parse($invoice->bulk_coverage_end . '-01')->format('M Y');
-                                } elseif(preg_match('/^\d{4}-\d{2}$/', $invoice->period)) {
-                                    $periodDisplay = \Carbon\Carbon::parse($invoice->period . '-01')->format('F Y');
-                                }
-                            @endphp
-                            <p class="font-medium" style="color: var(--text-primary);">{{ $periodDisplay }}</p>
-                            @if($invoice->is_bulk_payment)
-                                <p class="text-xs" style="color: var(--text-secondary);">
-                                    {{ $invoice->childInvoices->count() ?? 0 }} invoices consolidated
-                                </p>
-                            @endif
-                        </td>
-                        
-                        <td class="p-3">
-                            <p class="font-medium" style="color: var(--text-primary);">{{ $settings->formatAmount($invoice->total_amount) }}</p>
-                            @if($invoice->penalty_amount > 0)
-                                <p class="text-xs" style="color: var(--danger);">
-                                    +{{ $settings->formatAmount($invoice->penalty_amount) }} penalty
-                                </p>
-                            @endif
-                        </td>
-                        
-                        <td class="p-3">
-                            <p class="font-medium" style="color: var(--text-primary);">{{ \Carbon\Carbon::parse($invoice->due_date)->format('M d, Y') }}</p>
-                            @if(!in_array($invoice->status, ['paid', 'consolidated', 'cancelled']) && !$isCoveredByBulk)
-                            <p class="text-sm" style="color: var(--text-secondary);">
-                                @php
-                                    $daysDiff = \Carbon\Carbon::parse($invoice->due_date)->diffInDays(now(), false);
-                                @endphp
-                                @if($daysDiff > 0)
-                                    <span style="color: var(--danger);">{{ $daysDiff }} days overdue</span>
-                                @elseif($daysDiff == 0)
-                                    <span style="color: var(--warning);">Due today</span>
-                                @else
-                                    In {{ abs($daysDiff) }} days
-                                @endif
-                            </p>
-                            @endif
-                        </td>
-                        
-                        <td class="p-3">
-                            @php
-                                $statusColors = [
-                                    'paid' => ['bg' => 'success', 'icon' => 'check-circle'],
-                                    'pending' => ['bg' => 'warning', 'icon' => 'clock'],
-                                    'processing' => ['bg' => 'warning', 'icon' => 'spinner'],
-                                    'overdue' => ['bg' => 'danger', 'icon' => 'exclamation-triangle'],
-                                    'consolidated' => ['bg' => 'info', 'icon' => 'link']
-                                ];
-                                $statusConfig = $statusColors[$invoice->status] ?? ['bg' => 'secondary', 'icon' => 'question-circle'];
-                            @endphp
-                            
-                            @if($isCoveredByBulk && $invoice->status != 'paid')
-                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs" 
-                                      style="background-color: rgba(var(--success-rgb), 0.2); color: var(--success);">
-                                    <i class="fas fa-shield-alt mr-1"></i> Covered
-                                </span>
-                            @else
-                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs" 
-                                      style="background-color: rgba(var(--{{ $statusConfig['bg'] }}-rgb), 0.2); color: var(--{{ $statusConfig['bg'] }});">
-                                    <i class="fas fa-{{ $statusConfig['icon'] }} mr-1"></i>
-                                    {{ $invoice->status == 'consolidated' ? 'In Bulk' : ucfirst($invoice->status) }}
-                                </span>
-                            @endif
-                        </td>
-                        
-                        <td class="p-3">
-                            <div class="flex space-x-2">
-                                <a href="{{ route('landlord.invoices.show', $invoice->id) }}" class="p-2 rounded" style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);" title="View Details">
-                                    <i class="fas fa-eye"></i>
-                                </a>
-                                
-                                <!-- Pay Now / Retry Payment - Regular Invoice -->
+
+                            $isProcessing = $invoice->status === 'processing';
+                            $isPayable = in_array($invoice->status, ['pending', 'overdue', 'processing'])
+                                && !$invoice->is_bulk_payment
+                                && !$invoice->bulk_payment_id
+                                && !$isCoveredByBulk;
+                        @endphp
+                        <tr class="invoice-row {{ $invoice->status === 'consolidated' ? 'row-consolidated' : '' }} {{ $isCoveredByBulk ? 'row-covered' : '' }} {{ $isProcessing ? 'row-processing' : '' }}"
+                            data-invoice-id="{{ $invoice->id }}"
+                            data-amount="{{ $invoice->total_amount }}"
+                            data-property-id="{{ $invoice->property_id }}"
+                            data-status="{{ $invoice->status }}"
+                            data-is-bulk="{{ $invoice->is_bulk_payment ? 'true' : 'false' }}"
+                            data-has-parent="{{ $invoice->bulk_payment_id ? 'true' : 'false' }}"
+                            data-covered-by-bulk="{{ $isCoveredByBulk ? 'true' : 'false' }}">
+
+                            @if($payableCount > 0)
+                            <td class="table-td">
                                 @if($isPayable)
-                                <form method="GET" action="{{ route('landlord.payments.create', ['propertyId' => $invoice->property_id]) }}" class="inline pay-form" data-invoice-id="{{ $invoice->id }}">
-                                    <input type="hidden" name="invoice_ids[]" value="{{ $invoice->id }}">
-                                    <input type="hidden" name="property_id" value="{{ $invoice->property_id }}">
-                                    <input type="hidden" name="payment_type" value="invoices">
-                                    <input type="hidden" name="pre_selected" value="true">
-                                    <button type="submit" class="p-2 rounded relative group" 
-                                            style="background-color: {{ $isProcessing ? 'rgba(var(--warning-rgb), 0.2)' : 'rgba(var(--success-rgb), 0.1)' }}; 
-                                                   color: {{ $isProcessing ? 'var(--warning)' : 'var(--success)' }};" 
-                                            title="{{ $isProcessing ? 'Retry Payment (Previous attempt failed or was cancelled)' : 'Pay Now' }}">
-                                        @if($isProcessing)
-                                            <i class="fas fa-sync-alt"></i>
-                                        @else
-                                            <i class="fas fa-credit-card"></i>
-                                        @endif
-                                    </button>
-                                </form>
+                                    <input type="checkbox" name="invoice_ids[]" value="{{ $invoice->id }}"
+                                           class="invoice-checkbox" data-amount="{{ $invoice->total_amount }}">
+                                @elseif($invoice->status === 'consolidated')
+                                    <span class="pill pill-info"><i class="fas fa-link mr-1"></i> Consolidated</span>
+                                @elseif($invoice->bulk_payment_id)
+                                    <span class="pill pill-secondary"><i class="fas fa-layer-group mr-1"></i> In Bulk</span>
+                                @elseif($isCoveredByBulk)
+                                    <span class="pill pill-success"><i class="fas fa-shield-alt mr-1"></i> Covered</span>
                                 @endif
-                                
-                                <!-- Pay Now - Bulk Invoice -->
-                                @if($invoice->is_bulk_payment && in_array($invoice->status, ['pending', 'overdue', 'processing']))
-                                <form method="GET" action="{{ route('landlord.payments.create', ['propertyId' => $invoice->property_id]) }}" class="inline pay-form" data-invoice-id="{{ $invoice->id }}">
-                                    <input type="hidden" name="invoice_ids[]" value="{{ $invoice->id }}">
-                                    <input type="hidden" name="property_id" value="{{ $invoice->property_id }}">
-                                    <input type="hidden" name="payment_type" value="bulk">
-                                    <input type="hidden" name="pre_selected" value="true">
-                                    <button type="submit" class="p-2 rounded relative group" 
-                                            style="background-color: {{ $isProcessing ? 'rgba(var(--warning-rgb), 0.2)' : 'rgba(var(--success-rgb), 0.1)' }}; 
-                                                   color: {{ $isProcessing ? 'var(--warning)' : 'var(--success)' }};" 
-                                            title="{{ $isProcessing ? 'Retry Bulk Payment (Previous attempt failed)' : 'Pay Bulk Invoice' }}">
-                                        @if($isProcessing)
-                                            <i class="fas fa-sync-alt"></i>
-                                        @else
-                                            <i class="fas fa-layer-group"></i>
-                                        @endif
-                                    </button>
-                                </form>
+                            </td>
+                            @endif
+
+                            <td class="table-td">
+                                <p class="font-medium text-primary">
+                                    @if($invoice->is_bulk_payment)
+                                        <i class="fas fa-layer-group mr-1 text-xs icon-info"></i>
+                                    @elseif($invoice->bulk_payment_id)
+                                        <i class="fas fa-link mr-1 text-xs icon-info"></i>
+                                    @elseif($isCoveredByBulk)
+                                        <i class="fas fa-shield-alt mr-1 text-xs icon-success"></i>
+                                    @elseif($isProcessing)
+                                        <i class="fas fa-clock mr-1 text-xs icon-warning"></i>
+                                    @endif
+                                    {{ $invoice->invoice_number ?? 'INV-' . str_pad($invoice->id, 6, '0', STR_PAD_LEFT) }}
+                                </p>
+                                @if($invoice->payment_reference)
+                                    <p class="text-xs text-secondary">Ref: {{ $invoice->payment_reference }}</p>
                                 @endif
-                                
-                                <button onclick="exportSinglePDF({{ $invoice->id }})" class="p-2 rounded" style="background-color: rgba(var(--danger-rgb), 0.1); color: #dc2626;" title="Export PDF">
-                                    <i class="fas fa-file-pdf"></i>
-                                </button>
-                                
-                                <a href="{{ route('landlord.invoices.print', $invoice->id) }}" target="_blank" class="p-2 rounded" style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--text-secondary);" title="Print Invoice">
-                                    <i class="fas fa-print"></i>
-                                </a>
-                            </div>
-                        </td>
-                    </tr>
+                                @if($isProcessing)
+                                    <p class="text-xs text-warning">
+                                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                                        Failed or cancelled — retry available
+                                    </p>
+                                @endif
+                            </td>
+
+                            <td class="table-td">
+                                @if($invoice->property)
+                                    <div class="flex items-start gap-2">
+                                        <div class="w-8 h-8 rounded-full flex items-center justify-center icon-circle-info flex-shrink-0">
+                                            <i class="fas fa-home text-xs"></i>
+                                        </div>
+                                        <div>
+                                            @if($invoice->property->property_name)
+                                                <p class="font-medium text-sm text-primary">{{ $invoice->property->property_name }}</p>
+                                            @endif
+                                            <p class="text-xs text-secondary">
+                                                {{ $invoice->property->house_number ?? '#' }} {{ $invoice->property->street_name }}
+                                            </p>
+                                        </div>
+                                    </div>
+                                @endif
+                            </td>
+
+                            <td class="table-td">
+                                @php
+                                    $periodDisplay = $invoice->period;
+                                    if ($invoice->is_bulk_payment && $invoice->bulk_coverage_start && $invoice->bulk_coverage_end) {
+                                        $periodDisplay = Carbon::parse($invoice->bulk_coverage_start . '-01')->format('M Y')
+                                            . ' – ' .
+                                            Carbon::parse($invoice->bulk_coverage_end . '-01')->format('M Y');
+                                    } elseif (preg_match('/^\d{4}-\d{2}$/', (string) $invoice->period)) {
+                                        $periodDisplay = Carbon::parse($invoice->period . '-01')->format('F Y');
+                                    }
+                                @endphp
+                                <p class="font-medium text-primary">{{ $periodDisplay }}</p>
+                                @if($invoice->is_bulk_payment)
+                                    <p class="text-xs text-secondary">
+                                        {{ $invoice->childInvoices->count() ?? 0 }} invoices consolidated
+                                    </p>
+                                @endif
+                            </td>
+
+                            <td class="table-td">
+                                <p class="font-medium text-primary">{{ $settings->formatAmount($invoice->total_amount) }}</p>
+                                @if($invoice->penalty_amount > 0)
+                                    <p class="text-xs text-danger">+{{ $settings->formatAmount($invoice->penalty_amount) }} penalty</p>
+                                @endif
+                            </td>
+
+                            <td class="table-td">
+                                <p class="font-medium text-primary">{{ Carbon::parse($invoice->due_date)->format('M d, Y') }}</p>
+                                @if(!in_array($invoice->status, ['paid', 'consolidated', 'cancelled']) && !$isCoveredByBulk)
+                                    @php
+                                        $daysDiff = Carbon::parse($invoice->due_date)->diffInDays(now(), false);
+                                    @endphp
+                                    <p class="text-xs text-secondary">
+                                        @if($daysDiff > 0)
+                                            <span class="text-danger">{{ $daysDiff }} days overdue</span>
+                                        @elseif($daysDiff == 0)
+                                            <span class="text-warning">Due today</span>
+                                        @else
+                                            In {{ abs($daysDiff) }} days
+                                        @endif
+                                    </p>
+                                @endif
+                            </td>
+
+                            <td class="table-td">
+                                @php
+                                    $statusColors = [
+                                        'paid'         => ['bg' => 'success', 'icon' => 'check-circle'],
+                                        'pending'      => ['bg' => 'warning', 'icon' => 'clock'],
+                                        'processing'   => ['bg' => 'warning', 'icon' => 'spinner'],
+                                        'overdue'      => ['bg' => 'danger',  'icon' => 'exclamation-triangle'],
+                                        'consolidated' => ['bg' => 'info',    'icon' => 'link'],
+                                    ];
+                                    $statusConfig = $statusColors[$invoice->status] ?? ['bg' => 'secondary', 'icon' => 'question-circle'];
+                                @endphp
+                                @if($isCoveredByBulk && $invoice->status !== 'paid')
+                                    <span class="pill pill-success">
+                                        <i class="fas fa-shield-alt mr-1"></i> Covered
+                                    </span>
+                                @else
+                                    <span class="pill pill-{{ $statusConfig['bg'] }}">
+                                        <i class="fas fa-{{ $statusConfig['icon'] }} mr-1"></i>
+                                        {{ $invoice->status === 'consolidated' ? 'In Bulk' : ucfirst($invoice->status) }}
+                                    </span>
+                                @endif
+                            </td>
+
+                            <td class="table-td">
+                                <div class="flex flex-wrap gap-1">
+                                    <a href="{{ route('landlord.invoices.show', $invoice->id) }}" class="action-btn action-info" title="View Details">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+
+                                    {{-- Pay / retry — regular --}}
+                                    @if($isPayable)
+                                        <a href="{{ route('landlord.invoices.payment.form', $invoice->property_id) }}?invoice_ids[]={{ $invoice->id }}&payment_type=invoices&pre_selected=true"
+                                           class="action-btn {{ $isProcessing ? 'action-warning' : 'action-success' }}"
+                                           title="{{ $isProcessing ? 'Retry Payment' : 'Pay Now' }}">
+                                            <i class="fas fa-{{ $isProcessing ? 'sync-alt' : 'credit-card' }}"></i>
+                                        </a>
+                                    @endif
+
+                                    {{-- Pay — bulk invoice --}}
+                                    @if($invoice->is_bulk_payment && in_array($invoice->status, ['pending','overdue','processing']))
+                                        <a href="{{ route('landlord.invoices.payment.form', $invoice->property_id) }}?invoice_ids[]={{ $invoice->id }}&payment_type=bulk&pre_selected=true"
+                                           class="action-btn {{ $isProcessing ? 'action-warning' : 'action-success' }}"
+                                           title="{{ $isProcessing ? 'Retry Bulk Payment' : 'Pay Bulk Invoice' }}">
+                                            <i class="fas fa-{{ $isProcessing ? 'sync-alt' : 'layer-group' }}"></i>
+                                        </a>
+                                    @endif
+
+                                    <button type="button" onclick="exportSinglePDF({{ $invoice->id }})" class="action-btn action-danger" title="Export PDF">
+                                        <i class="fas fa-file-pdf"></i>
+                                    </button>
+
+                                    <a href="{{ route('landlord.invoices.print', $invoice->id) }}" target="_blank"
+                                       class="action-btn action-secondary" title="Print">
+                                        <i class="fas fa-print"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
                     @empty
-                    <tr>
-                        <td colspan="{{ $invoices->whereIn('status', ['pending', 'overdue', 'processing'])->where('bulk_payment_id', null)->count() > 0 ? 8 : 7 }}" class="p-8 text-center">
-                            <div class="flex flex-col items-center justify-center" style="color: var(--text-secondary);">
-                                <i class="fas fa-file-invoice text-4xl mb-4 opacity-50"></i>
-                                <p class="text-lg font-medium mb-2">No invoices found</p>
-                                <p class="text-sm">You don't have any invoices for your properties yet.</p>
-                            </div>
-                        </td>
-                    </tr>
+                        <tr>
+                            <td colspan="{{ $payableCount > 0 ? 8 : 7 }}" class="p-8 text-center">
+                                <div class="flex flex-col items-center justify-center text-secondary">
+                                    <i class="fas fa-file-invoice text-4xl mb-4 opacity-50"></i>
+                                    <p class="text-lg font-medium mb-2">No invoices found</p>
+                                    <p class="text-sm">You don't have any invoices for your properties yet.</p>
+                                </div>
+                            </td>
+                        </tr>
                     @endforelse
                 </tbody>
             </table>
         </div>
 
-        <!-- Pagination -->
         @if($invoices->hasPages())
-        <div class="mt-6">
+        <div class="flex justify-center mt-6">
             {{ $invoices->withQueryString()->links() }}
         </div>
         @endif
     </div>
 </div>
 
-<!-- Export PDF Modal -->
-<div id="exportModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-    <div class="card m-4 max-w-md w-full">
-        <div class="p-6">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-semibold" style="color: var(--text-primary);">Export Invoices as PDF</h3>
-                <button type="button" onclick="closeExportModal()" class="text-gray-500 hover:text-gray-700">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-            
-            <div class="space-y-4">
-                <div class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
-                    <div class="flex">
-                        <div class="flex-shrink-0">
-                            <i class="fas fa-info-circle text-blue-400"></i>
-                        </div>
-                        <div class="ml-3">
-                            <p class="text-sm text-blue-700">
-                                Select the invoices you want to export as PDF.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="space-y-3">
-                    <button onclick="exportCurrentPagePDF()" class="w-full p-3 border rounded-lg flex items-center justify-between transition-colors" style="border-color: var(--border-color); background-color: var(--bg-secondary); color: var(--text-primary);">
-                        <div class="flex items-center">
-                            <i class="fas fa-file-pdf text-red-500 text-xl mr-3"></i>
-                            <div class="text-left">
-                                <p class="font-medium">Export Current Page</p>
-                                <p class="text-xs" style="color: var(--text-secondary);">Export only the invoices visible on this page ({{ $invoices->count() }} invoices)</p>
-                            </div>
-                        </div>
-                        <i class="fas fa-chevron-right text-gray-400"></i>
-                    </button>
-                    
-                    <button onclick="exportAllInvoices()" class="w-full p-3 border rounded-lg flex items-center justify-between transition-colors" style="border-color: var(--border-color); background-color: var(--bg-secondary); color: var(--text-primary);">
-                        <div class="flex items-center">
-                            <i class="fas fa-database text-blue-500 text-xl mr-3"></i>
-                            <div class="text-left">
-                                <p class="font-medium">Export All My Invoices</p>
-                                <p class="text-xs" style="color: var(--text-secondary);">Export all your invoices ({{ $invoices->total() }} total)</p>
-                            </div>
-                        </div>
-                        <i class="fas fa-chevron-right text-gray-400"></i>
-                    </button>
-                    
-                    <button onclick="openBulkExportFromModal()" class="w-full p-3 border rounded-lg flex items-center justify-between transition-colors" style="border-color: var(--border-color); background-color: var(--bg-secondary); color: var(--text-primary);">
-                        <div class="flex items-center">
-                            <i class="fas fa-check-square text-green-500 text-xl mr-3"></i>
-                            <div class="text-left">
-                                <p class="font-medium">Export Selected Invoices</p>
-                                <p class="text-xs" style="color: var(--text-secondary);">
-                                    Export <span id="modalSelectedCount">0</span> selected invoice(s)
-                                </p>
-                            </div>
-                        </div>
-                        <i class="fas fa-chevron-right text-gray-400"></i>
-                    </button>
-                </div>
-            </div>
-            
-            <div class="flex justify-end space-x-2 mt-6">
-                <button type="button" onclick="closeExportModal()" class="px-4 py-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
-                    Cancel
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
+{{-- ============================================================
+     MODALS
+============================================================ --}}
+@include('landlord.invoices.partials.modals')
 
-<!-- PDF Loading Modal -->
-<div id="pdfLoadingModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-    <div class="card p-8 text-center">
-        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-        <p class="text-lg font-semibold" style="color: var(--text-primary);">Generating PDF...</p>
-        <p class="text-sm mt-2" style="color: var(--text-secondary);">Please wait while we prepare your document</p>
-    </div>
-</div>
-
-<!-- Hidden forms for PDF export -->
+{{-- Hidden forms for exports --}}
 <form id="currentPageExportForm" method="GET" action="{{ route('landlord.invoices.export-current-page') }}" target="_blank">
-    @foreach(request()->all() as $key => $value)
-        @if($key != '_token' && $key != 'page')
-            <input type="hidden" name="{{ $key }}" value="{{ $value }}">
-        @endif
+    @foreach(request()->except(['_token','page']) as $key => $value)
+        <input type="hidden" name="{{ $key }}" value="{{ $value }}">
     @endforeach
 </form>
 
 <form id="allInvoicesExportForm" method="GET" action="{{ route('landlord.invoices.export-all') }}" target="_blank">
-    @foreach(request()->all() as $key => $value)
-        @if($key != '_token' && $key != 'page')
-            <input type="hidden" name="{{ $key }}" value="{{ $value }}">
-        @endif
+    @foreach(request()->except(['_token','page']) as $key => $value)
+        <input type="hidden" name="{{ $key }}" value="{{ $value }}">
     @endforeach
 </form>
 
@@ -795,480 +728,245 @@
     @csrf
     <input type="hidden" name="invoice_ids" id="bulkInvoiceIds">
 </form>
-
-<!-- No Payment Methods Modal -->
-<div id="noPaymentMethodsModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50">
-    <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md" style="background-color: var(--bg-primary); border-color: var(--border-color);">
-        <div class="mt-3 text-center">
-            <i class="fas fa-exclamation-triangle text-4xl mb-4" style="color: var(--warning);"></i>
-            <h3 class="text-lg font-medium mb-2" style="color: var(--text-primary);">No Payment Methods Available</h3>
-            <p class="text-sm mb-4" style="color: var(--text-secondary);">
-                There are no payment methods currently configured. Please contact the administrator to set up payment methods.
-            </p>
-            <button type="button" onclick="closeNoPaymentMethodsModal()" class="px-4 py-2 rounded" style="background-color: var(--primary); color: white;">
-                OK
-            </button>
-        </div>
-    </div>
-</div>
-
-<!-- Coverage Summary Modal -->
-<div id="coverageSummaryModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50">
-    <div class="relative top-20 mx-auto p-5 border w-[600px] shadow-lg rounded-md" style="background-color: var(--bg-primary); border-color: var(--border-color);">
-        <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg font-medium" style="color: var(--text-primary);">Active Bulk Coverage Summary</h3>
-            <button onclick="closeCoverageSummaryModal()" class="text-gray-500 hover:text-gray-700">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-        
-        <div class="max-h-96 overflow-y-auto">
-            @if(isset($bulkCoverages) && is_array($bulkCoverages) && count($bulkCoverages) > 0)
-                @foreach($bulkCoverages as $propertyId => $coverages)
-                    @if(is_array($coverages) && count($coverages) > 0)
-                        @php
-                            $property = $properties->firstWhere('id', $propertyId);
-                        @endphp
-                        <div class="mb-6 last:mb-0">
-                            <h4 class="font-medium mb-2" style="color: var(--text-primary);">
-                                {{ $property->property_name ?? ($property->street_name ?? 'Property') }}
-                            </h4>
-                            
-                            @foreach($coverages as $coverage)
-                                @if(is_array($coverage) && !empty($coverage))
-                                    @php
-                                        $periods = $coverage['periods'] ?? [];
-                                        $formattedPeriods = collect($periods)->map(function($p) {
-                                            return $p ? \Carbon\Carbon::parse($p . '-01')->format('M Y') : '';
-                                        })->filter()->values()->toArray();
-                                    @endphp
-                                    <div class="p-4 rounded-lg mb-3" style="background-color: rgba(var(--success-rgb), 0.05); border: 1px solid rgba(var(--success-rgb), 0.2);">
-                                        <div class="flex items-center justify-between mb-2">
-                                            <span class="text-sm font-medium" style="color: var(--text-primary);">
-                                                <i class="fas fa-shield-alt text-success mr-1"></i>
-                                                {{ $coverage['invoice_number'] ?? 'INV-'.str_pad($coverage['invoice_id'], 6, '0', STR_PAD_LEFT) }}
-                                            </span>
-                                            <span class="text-xs px-2 py-1 rounded-full" style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
-                                                {{ count($periods) }} months
-                                            </span>
-                                        </div>
-                                        
-                                        <p class="text-sm mb-2" style="color: var(--text-secondary);">
-                                            <i class="fas fa-calendar-alt mr-1"></i>
-                                            Covered periods:
-                                        </p>
-                                        
-                                        <div class="grid grid-cols-3 gap-2 mb-3">
-                                            @foreach(array_slice($formattedPeriods, 0, 6) as $period)
-                                                <span class="text-xs px-2 py-1 rounded text-center" style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
-                                                    {{ $period }}
-                                                </span>
-                                            @endforeach
-                                            @if(count($formattedPeriods) > 6)
-                                                <span class="text-xs px-2 py-1 rounded text-center" style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--text-secondary);">
-                                                    +{{ count($formattedPeriods) - 6 }} more
-                                                </span>
-                                            @endif
-                                        </div>
-                                        
-                                        <div class="flex items-center justify-between text-xs">
-                                            <span style="color: var(--text-secondary);">
-                                                Paid: {{ $coverage['formatted_payment_date'] ?? ($coverage['payment_date'] ? \Carbon\Carbon::parse($coverage['payment_date'])->format('M d, Y') : 'N/A') }}
-                                            </span>
-                                            <a href="{{ route('landlord.invoices.show', $coverage['invoice_id']) }}" class="text-success hover:underline">
-                                                View Invoice <i class="fas fa-arrow-right ml-1"></i>
-                                            </a>
-                                        </div>
-                                    </div>
-                                @endif
-                            @endforeach
-                        </div>
-                    @endif
-                @endforeach
-            @else
-                <div class="text-center py-8" style="color: var(--text-secondary);">
-                    <i class="fas fa-shield-alt text-4xl mb-4 opacity-50"></i>
-                    <p class="text-lg font-medium mb-2">No Active Coverage</p>
-                    <p class="text-sm">You don't have any active bulk coverage at the moment.</p>
-                </div>
-            @endif
-        </div>
-        
-        <div class="mt-6 text-right">
-            <button onclick="closeCoverageSummaryModal()" class="px-4 py-2 rounded" style="background-color: var(--primary); color: white;">
-                Close
-            </button>
-        </div>
-    </div>
-</div>
 @endsection
 
 @section('scripts')
 <script>
-let selectedInvoices = new Set();
+'use strict';
 
-document.addEventListener('DOMContentLoaded', function() {
-    const messages = document.querySelectorAll('.bg-green-100, .bg-red-100, .bg-blue-100, .bg-yellow-100');
-    messages.forEach(message => {
+const APP_CONFIG = {
+    currencySymbol:   @json($currencySymbol),
+    decimalPlaces:    {{ $decimalPlaces }},
+    currencyPosition: @json($currencyPosition),
+    csrfToken:        @json(csrf_token()),
+    routes: {
+        outstandingInvoices: @json(route('landlord.outstanding-invoices')),
+        exportSinglePdf:     (id) => @json(url('/landlord/invoices')) + `/${id}/export-pdf`,
+    },
+};
+
+const selectedInvoices = new Set();
+
+function formatAmount(amount) {
+    const n = Number(amount) || 0;
+    const formatted = n.toLocaleString('en-US', {
+        minimumFractionDigits: APP_CONFIG.decimalPlaces,
+        maximumFractionDigits: APP_CONFIG.decimalPlaces,
+    });
+    return APP_CONFIG.currencyPosition.startsWith('right')
+        ? `${formatted} ${APP_CONFIG.currencySymbol}`
+        : `${APP_CONFIG.currencySymbol}${formatted}`;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Auto-dismiss flash banners
+    document.querySelectorAll('[data-flash]').forEach(el => {
         setTimeout(() => {
-            message.style.display = 'none';
+            el.style.transition = 'opacity .4s';
+            el.style.opacity = '0';
+            setTimeout(() => el.remove(), 400);
         }, 5000);
     });
 
-    const coverageBanners = document.querySelectorAll('.bg-green-50');
-    coverageBanners.forEach(banner => {
+    document.querySelectorAll('.flash-close').forEach(btn => {
+        btn.addEventListener('click', () => btn.closest('.card')?.remove());
+    });
+
+    // Auto-dismiss coverage banners after 15s
+    document.querySelectorAll('[data-coverage-banner]').forEach(el => {
         setTimeout(() => {
-            banner.style.display = 'none';
+            el.style.transition = 'opacity .4s';
+            el.style.opacity = '0';
+            setTimeout(() => el.remove(), 400);
         }, 15000);
     });
 
     initializeCheckboxes();
-    setInterval(updateModalSelectionCount, 500);
+
+    // Refresh stats on load
     setTimeout(loadOutstandingInvoices, 2000);
+
+    // Close modals on backdrop click
+    document.querySelectorAll('.modal-backdrop').forEach(modal => {
+        modal.addEventListener('click', e => {
+            if (e.target === modal) closeAllModals();
+        });
+    });
+
+    // Escape closes modals
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeAllModals();
+    });
 });
 
+// ── Checkbox handling (delegated) ──
 function initializeCheckboxes() {
-    const selectAllCheckbox = document.getElementById('selectAll');
-    const invoiceCheckboxes = document.querySelectorAll('.invoice-checkbox');
-    const selectedInvoicesSummary = document.getElementById('selectedInvoicesSummary');
-    const selectedCountElement = document.getElementById('selectedCount');
-    const selectedTotalElement = document.getElementById('selectedTotal');
-    const bulkPaymentInfo = document.getElementById('bulkPaymentInfo');
+    const tbody = document.getElementById('invoicesTableBody');
+    const selectAll = document.getElementById('selectAll');
+    if (!tbody) return;
 
-    if (selectAllCheckbox) {
-        selectAllCheckbox.addEventListener('change', function() {
-            invoiceCheckboxes.forEach(checkbox => {
-                checkbox.checked = this.checked;
-                const invoiceId = parseInt(checkbox.value);
-                if (this.checked) {
-                    selectedInvoices.add(invoiceId);
-                } else {
-                    selectedInvoices.delete(invoiceId);
-                }
-            });
-            updateSelectionSummary();
-        });
+    tbody.addEventListener('change', e => {
+        const cb = e.target;
+        if (!cb.classList.contains('invoice-checkbox')) return;
+        const id = parseInt(cb.value, 10);
+        cb.checked ? selectedInvoices.add(id) : selectedInvoices.delete(id);
+        updateSelectionSummary();
+    });
 
-        invoiceCheckboxes.forEach(checkbox => {
-            checkbox.addEventListener('change', function() {
-                const invoiceId = parseInt(this.value);
-                if (this.checked) {
-                    selectedInvoices.add(invoiceId);
-                } else {
-                    selectedInvoices.delete(invoiceId);
-                }
-                updateSelectionSummary();
-            });
+    selectAll?.addEventListener('change', () => {
+        const checked = selectAll.checked;
+        document.querySelectorAll('.invoice-checkbox').forEach(cb => {
+            cb.checked = checked;
+            const id = parseInt(cb.value, 10);
+            checked ? selectedInvoices.add(id) : selectedInvoices.delete(id);
         });
-    }
-
-    function updateSelectionSummary() {
-        const checkedCheckboxes = document.querySelectorAll('.invoice-checkbox:checked');
-        const checkedCount = checkedCheckboxes.length;
-        
-        if (selectedCountElement) selectedCountElement.textContent = checkedCount;
-        
-        let totalAmount = 0;
-        checkedCheckboxes.forEach(checkbox => {
-            const amount = parseFloat(checkbox.dataset.amount) || 0;
-            totalAmount += amount;
-        });
-        
-        if (selectedTotalElement) selectedTotalElement.textContent = formatAmount(totalAmount);
-        
-        if (selectedInvoicesSummary) {
-            if (checkedCount > 0) {
-                selectedInvoicesSummary.classList.remove('hidden');
-                if (checkedCount > 1) {
-                    bulkPaymentInfo?.classList.remove('hidden');
-                } else {
-                    bulkPaymentInfo?.classList.add('hidden');
-                }
-            } else {
-                selectedInvoicesSummary.classList.add('hidden');
-                bulkPaymentInfo?.classList.add('hidden');
-            }
-        }
-        
-        updateModalSelectionCount();
-    }
-    
-    updateSelectionSummary();
+        updateSelectionSummary();
+    });
 }
 
-function formatAmount(amount) {
-    const currencySymbol = '{{ $settings->currency_symbol ?? "₵" }}';
-    const decimalPlaces = {{ $settings->decimal_places ?? 2 }};
-    const formattedAmount = parseFloat(amount).toLocaleString('en-US', {
-        minimumFractionDigits: decimalPlaces,
-        maximumFractionDigits: decimalPlaces
-    });
-    return currencySymbol + formattedAmount;
+function updateSelectionSummary() {
+    const all = document.querySelectorAll('.invoice-checkbox');
+    const checked = document.querySelectorAll('.invoice-checkbox:checked');
+    const count = checked.length;
+
+    document.getElementById('selectedCount').textContent = count;
+
+    let total = 0;
+    checked.forEach(cb => { total += parseFloat(cb.dataset.amount) || 0; });
+    document.getElementById('selectedTotal').textContent = formatAmount(total);
+
+    const summary = document.getElementById('selectedInvoicesSummary');
+    summary?.classList.toggle('hidden', count === 0);
+
+    const bulkInfo = document.getElementById('bulkPaymentInfo');
+    bulkInfo?.classList.toggle('hidden', count < 2);
+
+    const selectAllEl = document.getElementById('selectAll');
+    if (selectAllEl) {
+        selectAllEl.checked = count > 0 && count === all.length;
+        selectAllEl.indeterminate = count > 0 && count < all.length;
+    }
+
+    const modalCount = document.getElementById('modalSelectedCount');
+    if (modalCount) modalCount.textContent = count;
 }
 
 function getSelectedIds() {
     return Array.from(document.querySelectorAll('.invoice-checkbox:checked')).map(cb => cb.value);
 }
 
-function openExportModal() {
-    updateModalSelectionCount();
-    document.getElementById('exportModal').classList.remove('hidden');
-}
+// ── Payment selection ──
+function processSelectedInvoices(paymentType = 'invoices') {
+    const ids = getSelectedIds();
+    if (ids.length === 0) return alert('Please select at least one invoice to pay.');
 
-function closeExportModal() {
-    document.getElementById('exportModal').classList.add('hidden');
-}
+    const firstCb = document.querySelector('.invoice-checkbox:checked');
+    const firstRow = firstCb?.closest('.invoice-row');
+    const propertyId = firstRow?.dataset.propertyId;
+    if (!propertyId) return alert('Unable to determine property.');
 
-function updateModalSelectionCount() {
-    const count = selectedInvoices.size;
-    const modalSelectedCount = document.getElementById('modalSelectedCount');
-    if (modalSelectedCount) modalSelectedCount.textContent = count;
-}
+    const sameProperty = Array.from(document.querySelectorAll('.invoice-checkbox:checked'))
+        .every(cb => cb.closest('.invoice-row')?.dataset.propertyId === propertyId);
+    if (!sameProperty) return alert('Please select invoices from the same property only.');
 
-function openBulkExportFromModal() {
-    closeExportModal();
-    if (selectedInvoices.size === 0) {
-        alert('Please select at least one invoice to export.');
-        return;
+    if (Array.from(document.querySelectorAll('.invoice-checkbox:checked'))
+        .some(cb => cb.closest('.invoice-row')?.dataset.hasParent === 'true')) {
+        return alert('Cannot select invoices already part of a bulk payment.');
     }
-    bulkExport();
+
+    if (Array.from(document.querySelectorAll('.invoice-checkbox:checked'))
+        .some(cb => cb.closest('.invoice-row')?.dataset.coveredByBulk === 'true')) {
+        return alert('Cannot select invoices covered by an existing bulk payment.');
+    }
+
+    const base = @json(route('landlord.invoices.payment.form', ':propertyId')).replace(':propertyId', propertyId);
+    const url  = new URL(base, window.location.origin);
+    ids.forEach(id => url.searchParams.append('invoice_ids[]', id));
+    url.searchParams.append('payment_type', paymentType);
+    url.searchParams.append('pre_selected', 'true');
+    window.location.href = url.toString();
 }
 
-function showLoadingModal() {
-    const modal = document.getElementById('pdfLoadingModal');
-    if (modal) modal.classList.remove('hidden');
+// ── Modals ──
+function openModal(id)  { document.getElementById(id)?.classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id)?.classList.add('hidden'); }
+function closeAllModals() {
+    document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.add('hidden'));
 }
 
-function hideLoadingModal() {
-    const modal = document.getElementById('pdfLoadingModal');
-    if (modal) modal.classList.add('hidden');
-}
+function openExportModal()  { openModal('exportModal'); }
+function closeExportModal() { closeModal('exportModal'); }
+
+function showCoverageSummary()       { openModal('coverageSummaryModal'); }
+function closeCoverageSummaryModal() { closeModal('coverageSummaryModal'); }
+
+function closeNoPaymentMethodsModal() { closeModal('noPaymentMethodsModal'); }
+
+// ── Exports ──
+function showLoadingModal() { openModal('pdfLoadingModal'); }
+function hideLoadingModal() { closeModal('pdfLoadingModal'); }
 
 function exportCurrentPagePDF() {
     closeExportModal();
     showLoadingModal();
-    const form = document.getElementById('currentPageExportForm');
-    if (form) form.submit();
+    document.getElementById('currentPageExportForm')?.submit();
     setTimeout(hideLoadingModal, 2000);
 }
 
 function exportAllInvoices() {
     closeExportModal();
     showLoadingModal();
-    const form = document.getElementById('allInvoicesExportForm');
-    if (form) form.submit();
+    document.getElementById('allInvoicesExportForm')?.submit();
     setTimeout(hideLoadingModal, 3000);
 }
 
 function exportSinglePDF(invoiceId) {
     showLoadingModal();
-    window.open(`/landlord/invoices/${invoiceId}/export-pdf`, '_blank');
+    window.open(APP_CONFIG.routes.exportSinglePdf(invoiceId), '_blank');
     setTimeout(hideLoadingModal, 2000);
 }
 
 function bulkExport() {
-    const selectedIds = getSelectedIds();
-    if (selectedIds.length === 0) {
-        alert('Please select at least one invoice to export.');
-        return;
-    }
+    const ids = getSelectedIds();
+    if (ids.length === 0) return alert('Please select at least one invoice to export.');
     showLoadingModal();
-    const form = document.getElementById('bulkExportForm');
-    const bulkInvoiceIds = document.getElementById('bulkInvoiceIds');
-    if (form && bulkInvoiceIds) {
-        bulkInvoiceIds.value = selectedIds.join(',');
-        form.submit();
-    }
+    const input = document.getElementById('bulkInvoiceIds');
+    if (input) input.value = ids.join(',');
+    document.getElementById('bulkExportForm')?.submit();
     setTimeout(hideLoadingModal, 3000);
 }
 
-function processSelectedInvoices(paymentType = 'invoices') {
-    const selectedInvoiceIds = getSelectedIds();
-    if (selectedInvoiceIds.length === 0) {
-        alert('Please select at least one invoice to pay.');
-        return;
-    }
-    
-    const firstSelectedRow = document.querySelector('.invoice-checkbox:checked').closest('.invoice-row');
-    const propertyId = firstSelectedRow ? firstSelectedRow.dataset.propertyId : null;
-    if (!propertyId) {
-        alert('Unable to determine property. Please select invoices from the same property.');
-        return;
-    }
-    
-    const allSameProperty = Array.from(document.querySelectorAll('.invoice-checkbox:checked'))
-        .every(checkbox => {
-            const row = checkbox.closest('.invoice-row');
-            return row.dataset.propertyId === propertyId;
-        });
-    if (!allSameProperty) {
-        alert('Please select invoices from the same property only.');
-        return;
-    }
-    
-    const hasBulkChildren = Array.from(document.querySelectorAll('.invoice-checkbox:checked'))
-        .some(checkbox => {
-            const row = checkbox.closest('.invoice-row');
-            return row.dataset.hasParent === 'true';
-        });
-    if (hasBulkChildren) {
-        alert('Cannot select invoices that are already part of a bulk payment.');
-        return;
-    }
-
-    const hasCoveredInvoices = Array.from(document.querySelectorAll('.invoice-checkbox:checked'))
-        .some(checkbox => {
-            const row = checkbox.closest('.invoice-row');
-            return row.dataset.coveredByBulk === 'true';
-        });
-    if (hasCoveredInvoices) {
-        alert('Cannot select invoices that are covered by an existing bulk payment.');
-        return;
-    }
-    
-    const baseUrl = '{{ route("landlord.payments.create", ["propertyId" => ":propertyId"]) }}'.replace(':propertyId', propertyId);
-    const url = new URL(baseUrl, window.location.origin);
-    selectedInvoiceIds.forEach(invoiceId => {
-        url.searchParams.append('invoice_ids[]', invoiceId);
-    });
-    url.searchParams.append('payment_type', paymentType);
-    url.searchParams.append('pre_selected', 'true');
-    window.location.href = url.toString();
+function openBulkExportFromModal() {
+    closeExportModal();
+    bulkExport();
 }
 
-function showCoverageSummary() {
-    document.getElementById('coverageSummaryModal').classList.remove('hidden');
-}
-
-function closeCoverageSummaryModal() {
-    document.getElementById('coverageSummaryModal').classList.add('hidden');
-}
-
-function closeNoPaymentMethodsModal() {
-    document.getElementById('noPaymentMethodsModal').classList.add('hidden');
-}
-
+// ── Stats refresh ──
 function loadOutstandingInvoices() {
-    const loadingIndicator = document.getElementById('loadingIndicator');
-    if (loadingIndicator) loadingIndicator.classList.remove('hidden');
-    fetch('/landlord/outstanding-invoices')
-        .then(response => {
-            if (!response.ok) throw new Error('Network response was not ok');
-            return response.json();
-        })
-        .then(data => {
-            if (data.success) {
-                updateStatistics(data.data);
-            }
-        })
-        .catch(error => console.error('Error:', error))
-        .finally(() => {
-            if (loadingIndicator) loadingIndicator.classList.add('hidden');
-        });
+    const loading = document.getElementById('loadingIndicator');
+    loading?.classList.remove('hidden');
+
+    fetch(APP_CONFIG.routes.outstandingInvoices, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
+    })
+    .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+    .then(data => {
+        if (data.success) updateStatistics(data.data);
+    })
+    .catch(err => console.warn('Outstanding invoices refresh failed', err))
+    .finally(() => loading?.classList.add('hidden'));
 }
 
 function updateStatistics(data) {
     if (!data) return;
-    const totalDueElement = document.querySelector('.card.p-4:first-child .text-2xl');
-    if (totalDueElement && data.total_due !== undefined) {
-        totalDueElement.textContent = formatAmount(data.total_due);
+
+    const statCards = document.querySelectorAll('.stat-card');
+    if (statCards[0] && data.total_due !== undefined) {
+        statCards[0].querySelector('.text-2xl').textContent = formatAmount(data.total_due);
     }
-    const outstandingElement = document.querySelector('.card.p-4:nth-child(2) .text-2xl');
-    if (outstandingElement && data.outstanding_count !== undefined) {
-        outstandingElement.textContent = data.outstanding_count;
+    if (statCards[1] && data.outstanding_count !== undefined) {
+        statCards[1].querySelector('.text-2xl').textContent = data.outstanding_count;
     }
 }
-
-document.getElementById('exportModal')?.addEventListener('click', function(e) {
-    if (e.target === this) closeExportModal();
-});
-
-document.getElementById('pdfLoadingModal')?.addEventListener('click', function(e) {
-    if (e.target === this) hideLoadingModal();
-});
-
-document.getElementById('coverageSummaryModal')?.addEventListener('click', function(e) {
-    if (e.target === this) closeCoverageSummaryModal();
-});
-
-document.addEventListener('keydown', function(event) {
-    if (event.key === 'Escape') {
-        closeExportModal();
-        closeCoverageSummaryModal();
-        hideLoadingModal();
-    }
-});
 </script>
-
-<style>
-.animate-spin {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-.fixed.inset-0 {
-    backdrop-filter: blur(2px);
-}
-
-.relative.top-20.mx-auto {
-    animation: modalFadeIn 0.3s ease-out;
-}
-
-@keyframes modalFadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(-20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.hidden {
-    display: none !important;
-}
-
-input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-    cursor: pointer;
-}
-
-/* ✅ FIXED: Table row hover - uses theme colors */
-tbody tr:hover {
-    background-color: var(--bg-secondary) !important;
-}
-
-/* Dark mode hover adjustment */
-.dark tbody tr:hover {
-    background-color: rgba(255, 255, 255, 0.05) !important;
-}
-
-/* Card hover - uses theme colors */
-.card:hover {
-    background-color: var(--bg-secondary);
-}
-
-/* Dark mode adjustments */
-.dark .bg-green-50 {
-    background-color: rgba(16, 185, 129, 0.15) !important;
-}
-
-.dark .bg-yellow-50 {
-    background-color: rgba(234, 179, 8, 0.15) !important;
-}
-
-.dark .bg-blue-100 {
-    background-color: rgba(59, 130, 246, 0.2) !important;
-}
-
-.dark .bg-yellow-100 {
-    background-color: rgba(234, 179, 8, 0.2) !important;
-}
-</style>
 @endsection

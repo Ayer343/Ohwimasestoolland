@@ -5,20 +5,22 @@ namespace App\Http\Controllers;
 use App\Models\Invoice;
 use App\Models\Property;
 use App\Models\User;
-use App\Services\InvoiceService;
-use App\Services\PaymentService;
 use App\Models\InvoiceArchive;
 use App\Models\SystemSetting;
+use App\Services\InvoiceService;
+use App\Services\PaymentService;
 use App\Services\NotificationService;
 use App\Services\YearEndArchiveService;
 use App\Services\SmsService;
 use App\Services\SmsTemplateService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection;
 use Carbon\Carbon;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Traits\NotifiesUsers;
@@ -29,26 +31,38 @@ class InvoiceController extends Controller
 {
     use NotifiesUsers, ChecksBillingAccess;
 
-    protected $invoiceService;
-    protected $paymentService;
-    protected $settings;
-    protected $notificationService;
-    protected $smsService;
-    protected $smsTemplateService;
+    protected InvoiceService       $invoiceService;
+    protected PaymentService       $paymentService;
+    protected NotificationService  $notificationService;
+    protected SmsService           $smsService;
+    protected SmsTemplateService   $smsTemplateService;
+    protected YearEndArchiveService $yearEndArchiveService;
+    protected ?SystemSetting       $settings = null;
 
     public function __construct(
         InvoiceService $invoiceService,
         PaymentService $paymentService,
         NotificationService $notificationService,
         SmsService $smsService,
-        SmsTemplateService $smsTemplateService
+        SmsTemplateService $smsTemplateService,
+        YearEndArchiveService $yearEndArchiveService
     ) {
-        $this->invoiceService      = $invoiceService;
-        $this->paymentService      = $paymentService;
-        $this->notificationService = $notificationService;
-        $this->smsService          = $smsService;
-        $this->smsTemplateService  = $smsTemplateService;
-        $this->settings            = SystemSetting::getSettings();
+        $this->invoiceService        = $invoiceService;
+        $this->paymentService        = $paymentService;
+        $this->notificationService   = $notificationService;
+        $this->smsService            = $smsService;
+        $this->smsTemplateService    = $smsTemplateService;
+        $this->yearEndArchiveService = $yearEndArchiveService;
+        $this->settings              = SystemSetting::getSettings();
+    }
+
+    /**
+     * Always return a fresh settings instance rather than relying on
+     * the snapshot taken at construction time.
+     */
+    protected function settings(): SystemSetting
+    {
+        return SystemSetting::getSettings();
     }
 
     /* ============================================================
@@ -56,77 +70,88 @@ class InvoiceController extends Controller
      * ============================================================ */
 
     public function index(Request $request)
-    {
-        if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
-            return redirect()->route('landlord.invoices')->with('error', 'Unauthorized access.');
-        }
+{
+    if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
+        return redirect()->route('landlord.invoices')->with('error', 'Unauthorized access.');
+    }
 
-        $filters = $request->only([
-            'property_id', 'status', 'period', 'search', 'is_bulk_payment',
-            'type', 'has_parent', 'is_bulk', 'has_penalty', 'has_coverage',
-        ]);
-        $user = auth()->user();
+    $filters = $request->only([
+        'property_id', 'status', 'period', 'search', 'is_bulk_payment',
+        'type', 'has_parent', 'is_bulk', 'has_penalty', 'has_coverage',
+        'has_discount',
+    ]);
+    $user = auth()->user();
 
-        $invoices   = $this->invoiceService->getInvoicesWithFilters($filters, $user);
-        $statistics = $this->invoiceService->getInvoiceStatistics($user);
+    // ✅ FIX: getInvoicesWithFilters() returns a query builder.
+    //         Chain ->paginate() here and preserve query params on pagination links.
+    $invoices = $this->invoiceService
+    ->getInvoicesWithFilters($filters, $user)
+    ->paginate(15)
+    ->appends($request->query());
 
-        $totalInvoices   = $statistics['total_invoices']   ?? 0;
-        $paidInvoices    = $statistics['paid_invoices']    ?? 0;
-        $pendingInvoices = $statistics['pending_invoices'] ?? 0;
-        $overdueInvoices = $statistics['overdue_invoices'] ?? 0;
-        $totalDue        = $statistics['total_due']        ?? 0;
-        $totalRevenue    = $statistics['total_revenue']    ?? 0;
-        $totalPenalties  = $statistics['total_penalties']  ?? 0;
-        $collectionRate  = $statistics['collection_rate']  ?? 0;
+    $statistics = $this->invoiceService->getInvoiceStatistics($user);
 
-        $consolidatedInvoices = Invoice::where('status', 'consolidated')->count();
+    $totalInvoices   = $statistics['total_invoices']   ?? 0;
+    $paidInvoices    = $statistics['paid_invoices']    ?? 0;
+    $pendingInvoices = $statistics['pending_invoices'] ?? 0;
+    $overdueInvoices = $statistics['overdue_invoices'] ?? 0;
+    $totalDue        = $statistics['total_due']        ?? 0;
+    $totalRevenue    = $statistics['total_revenue']    ?? 0;
+    $totalPenalties  = $statistics['total_penalties']  ?? 0;
+    $collectionRate  = $statistics['collection_rate']  ?? 0;
 
-        $activeCoverages = Invoice::where('is_bulk_payment', true)
+    // Cached aggregate counts — staleness of 60s is acceptable for a dashboard.
+    $consolidatedInvoices = Cache::remember('invoices.consolidated_count', 60, fn () =>
+        Invoice::where('status', 'consolidated')->count()
+    );
+
+    $activeCoverages = Cache::remember('invoices.active_coverage_count', 60, fn () =>
+        Invoice::where('is_bulk_payment', true)
             ->where('status', 'paid')
             ->whereNotNull('covers_periods')
-            ->count();
+            ->count()
+    );
 
-        $settings = SystemSetting::getSettings();
+    $settings = $this->settings();
 
-        $autoGenerationEnabled = $settings->isAutoInvoiceGenerationEnabled();
-        $remindersEnabled      = $settings->shouldSendPaymentReminders();
-        $reminderDays          = $settings->getReminderDaysBefore();
-        $gracePeriodDays       = $settings->grace_period_days ?? 7;
+    $autoGenerationEnabled = $settings->isAutoInvoiceGenerationEnabled();
+    $remindersEnabled      = $settings->shouldSendPaymentReminders();
+    $reminderDays          = $settings->getReminderDaysBefore();
+    $gracePeriodDays       = $settings->grace_period_days ?? 7;
 
-        $nextGenerationDate = null;
-        if ($autoGenerationEnabled) {
-            $nextGenerationDate = $settings->getNextInvoiceGenerationDate()->format('F j, Y');
-        }
+    $nextGenerationDate = null;
+    if ($autoGenerationEnabled) {
+        $nextGenerationDate = $settings->getNextInvoiceGenerationDate()->format('F j, Y');
+    }
 
-        $properties = Property::with('landlord')
-            ->orderBy('street_name')
-            ->orderBy('house_number')
-            ->get();
+    $properties = Property::with('landlord')
+        ->orderBy('street_name')
+        ->orderBy('house_number')
+        ->get();
 
-        $periods = Invoice::select('period')
+    $periods = Cache::remember('invoices.distinct_periods', 300, fn () =>
+        Invoice::select('period')
             ->where('status', '!=', 'consolidated')
             ->distinct()
             ->orderBy('period', 'desc')
-            ->pluck('period');
+            ->pluck('period')
+            ->toArray()
+    );
 
-        return view('admin.invoices.index', compact(
-            'invoices', 'properties', 'periods',
-            'totalInvoices', 'paidInvoices', 'pendingInvoices', 'overdueInvoices',
-            'consolidatedInvoices', 'activeCoverages',
-            'totalDue', 'totalRevenue', 'totalPenalties', 'collectionRate',
-            'autoGenerationEnabled', 'remindersEnabled', 'reminderDays',
-            'gracePeriodDays', 'nextGenerationDate', 'settings'
-        ));
-    }
+    return view('admin.invoices.index', compact(
+        'invoices', 'properties', 'periods',
+        'totalInvoices', 'paidInvoices', 'pendingInvoices', 'overdueInvoices',
+        'consolidatedInvoices', 'activeCoverages',
+        'totalDue', 'totalRevenue', 'totalPenalties', 'collectionRate',
+        'autoGenerationEnabled', 'remindersEnabled', 'reminderDays',
+        'gracePeriodDays', 'nextGenerationDate', 'settings'
+    ));
+}
 
     /* ============================================================
      | NOTIFICATION HELPERS
      * ============================================================ */
 
-    /**
-     * Send a landlord invoice notification across every configured channel.
-     * Delegates the per-channel work to NotificationService.
-     */
     protected function sendNotificationThroughChannels(Invoice $invoice, string $type, array $additionalData = []): array
     {
         $results = [
@@ -137,7 +162,7 @@ class InvoiceController extends Controller
             'errors'        => [],
         ];
 
-        $landlord = $invoice->property->landlord ?? null;
+        $landlord = $invoice->property?->landlord;
 
         if (!$landlord) {
             $results['errors'][] = 'No landlord found for invoice';
@@ -175,10 +200,9 @@ class InvoiceController extends Controller
             $results['errors'][] = $e->getMessage();
         }
 
-        // Email fallback if nothing was sent and the setting is on
         if (empty($results['channels_used'])
-            && method_exists($this->settings, 'shouldForceEmailFallback')
-            && $this->settings->shouldForceEmailFallback()) {
+            && method_exists($this->settings(), 'shouldForceEmailFallback')
+            && $this->settings()->shouldForceEmailFallback()) {
             try {
                 $fallback = match ($type) {
                     'invoice_generated'    => $this->notificationService->sendLandlordInvoiceCreated($invoice),
@@ -206,9 +230,6 @@ class InvoiceController extends Controller
         return $results;
     }
 
-    /**
-     * Log a notification attempt as an invoice note.
-     */
     protected function logNotificationAttempt(Invoice $invoice, string $type, array $results): void
     {
         try {
@@ -228,13 +249,6 @@ class InvoiceController extends Controller
         }
     }
 
-    /**
-     * Send invoice update notification through channels.
-     *
-     * NotificationService::sendLandlordInvoiceUpdate() automatically routes
-     * through overdue_notification_channels when the invoice is overdue, and
-     * payment_reminder_channels otherwise.
-     */
     protected function sendInvoiceUpdateNotification(Invoice $invoice, array $updateData, bool $wasOverdue = false): void
     {
         try {
@@ -251,60 +265,6 @@ class InvoiceController extends Controller
             Log::error("Failed to send invoice update notification: " . $e->getMessage(), [
                 'invoice_id' => $invoice->id,
             ]);
-        }
-    }
-
-    /* ============================================================
-     | STATISTICS
-     * ============================================================ */
-
-    public function getInvoiceStatistics(?User $user = null): array
-    {
-        try {
-            $query = Invoice::query();
-
-            if ($user && $user->isLandlord()) {
-                $propertyIds = Property::where('landlord_id', $user->id)->pluck('id');
-                $query->whereIn('property_id', $propertyIds);
-            }
-
-            $totalInvoices   = (clone $query)->where('status', '!=', 'consolidated')->count();
-            $paidInvoices    = (clone $query)->where('status', 'paid')->count();
-            $pendingInvoices = (clone $query)->where('status', 'pending')->count();
-            $overdueInvoices = (clone $query)->where('status', 'overdue')->count();
-            $totalPenalties  = (clone $query)->where('penalty_amount', '>', 0)->sum('penalty_amount');
-
-            if ($user && $user->isLandlord()) {
-                $totalDue = (clone $query)->whereIn('status', ['pending', 'overdue'])->sum('amount')
-                          + (clone $query)->whereIn('status', ['pending', 'overdue'])->sum('penalty_amount');
-                $totalRevenue = (clone $query)->where('status', 'paid')->sum('amount')
-                              + (clone $query)->where('status', 'paid')->sum('penalty_amount');
-            } else {
-                $totalDue     = 0;
-                $totalRevenue = (clone $query)->where('status', 'paid')->sum('amount')
-                              + (clone $query)->where('status', 'paid')->sum('penalty_amount');
-            }
-
-            $collectionRate = $totalInvoices > 0 ? round(($paidInvoices / $totalInvoices) * 100, 2) : 0;
-
-            return [
-                'total_invoices'   => $totalInvoices,
-                'paid_invoices'    => $paidInvoices,
-                'pending_invoices' => $pendingInvoices,
-                'overdue_invoices' => $overdueInvoices,
-                'total_due'        => $totalDue,
-                'total_revenue'    => $totalRevenue,
-                'total_penalties'  => $totalPenalties,
-                'collection_rate'  => $collectionRate,
-            ];
-
-        } catch (\Exception $e) {
-            Log::error("Failed to get invoice statistics: " . $e->getMessage());
-            return [
-                'total_invoices' => 0, 'paid_invoices' => 0, 'pending_invoices' => 0,
-                'overdue_invoices' => 0, 'total_due' => 0, 'total_revenue' => 0,
-                'total_penalties' => 0, 'collection_rate' => 0,
-            ];
         }
     }
 
@@ -368,7 +328,7 @@ class InvoiceController extends Controller
             ->whereIn('status', ['pending', 'overdue'])
             ->sum(DB::raw('amount + COALESCE(penalty_amount, 0)'));
 
-        $settings          = SystemSetting::getSettings();
+        $settings          = $this->settings();
         $remindersEnabled  = $settings->shouldSendPaymentReminders();
         $reminderDays      = $settings->getReminderDaysBefore();
         $gracePeriodDays   = $settings->grace_period_days ?? 7;
@@ -421,6 +381,22 @@ class InvoiceController extends Controller
         }
     }
 
+    public function getLandlordStatistics(): JsonResponse
+    {
+        try {
+            if (!auth()->user()->isLandlord()) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized access.'], 403);
+            }
+
+            $statistics = $this->invoiceService->getInvoiceStatistics(auth()->user());
+
+            return response()->json(['success' => true, 'data' => $statistics]);
+        } catch (\Exception $e) {
+            Log::error('Failed to get landlord statistics: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Failed to load statistics'], 500);
+        }
+    }
+
     /* ============================================================
      | PAYMENT — landlord-initiated, NEVER restricted by billing
      * ============================================================ */
@@ -459,7 +435,7 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Invalid invoice selection. Some invoices are not available for payment.');
         }
 
-        $settings             = SystemSetting::getSettings();
+        $settings             = $this->settings();
         $paymentConfiguration = $this->paymentService->checkPaymentMethodConfiguration();
         $availableMethods     = $settings->getAvailablePaymentMethods();
 
@@ -516,10 +492,6 @@ class InvoiceController extends Controller
         if (!auth()->user()->isLandlord()) {
             return redirect()->route('admin.invoices.index')->with('error', 'Unauthorized access.');
         }
-
-        // ── Landlord-initiated payment — deliberately NOT gated by
-        //    billing access. Their money funds the resolution of the
-        //    super admin's overdue bill.
 
         $validator = Validator::make($request->all(), [
             'invoice_ids'    => 'required|array',
@@ -603,8 +575,6 @@ class InvoiceController extends Controller
             return redirect()->route('admin.invoices.index')->with('error', 'Unauthorized access.');
         }
 
-        // ── Landlord-initiated bulk payment — NOT gated by billing access.
-
         $validator = Validator::make($request->all(), [
             'property_id'   => 'required|exists:properties,id',
             'months'        => 'required|integer|min:2|max:12',
@@ -624,7 +594,7 @@ class InvoiceController extends Controller
                 return redirect()->back()->with('error', 'Unauthorized access to property.')->withInput();
             }
 
-            $settings = SystemSetting::getSettings();
+            $settings = $this->settings();
             if (!$settings->isBulkPaymentEnabled()) {
                 return redirect()->back()
                     ->with('error', 'Bulk payments are currently disabled. Please contact administrator.')
@@ -707,8 +677,6 @@ class InvoiceController extends Controller
             return redirect()->route('admin.invoices.index')->with('error', 'Unauthorized access.');
         }
 
-        // ── Landlord-initiated bulk payment — NOT gated by billing access.
-
         $validator = Validator::make($request->all(), [
             'transaction_id' => 'required|string|max:255',
         ]);
@@ -765,7 +733,7 @@ class InvoiceController extends Controller
         }
 
         $properties = Property::where('status', 'active')->get();
-        $settings   = SystemSetting::getSettings();
+        $settings   = $this->settings();
 
         $remindersEnabled = $settings->shouldSendPaymentReminders();
         $reminderDays     = $settings->getReminderDaysBefore();
@@ -790,7 +758,6 @@ class InvoiceController extends Controller
             return redirect()->route('landlord.invoices')->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('generate_landlord_invoice');
 
         $validated = $request->validate([
@@ -816,7 +783,7 @@ class InvoiceController extends Controller
         ]);
 
         try {
-            $settings               = SystemSetting::getSettings();
+            $settings               = $this->settings();
             $shouldSendNotification = $validated['send_notification'] ?? $settings->shouldSendPaymentReminders();
 
             $property  = Property::find($validated['property_id']);
@@ -884,10 +851,9 @@ class InvoiceController extends Controller
             return redirect()->route('landlord.invoices')->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('generate_monthly_invoices');
 
-        $settings = SystemSetting::getSettings();
+        $settings = $this->settings();
 
         if (!$settings->isAutoInvoiceGenerationEnabled()) {
             return redirect()->back()
@@ -895,10 +861,25 @@ class InvoiceController extends Controller
                 ->with('auto_generation_disabled', true);
         }
 
-        $result = $this->invoiceService->generateMonthlyInvoices();
+        $lock = Cache::lock('generate_monthly_invoices', 600);
 
-        if (!$result['success']) {
-            return redirect()->back()->with('error', $result['message']);
+        if (!$lock->get()) {
+            return redirect()->back()
+                ->with('info', 'A monthly generation run is already in progress. Please wait for it to finish.');
+        }
+
+        try {
+            $result = $this->invoiceService->generateMonthlyInvoices();
+        } catch (\Throwable $e) {
+            $lock->release();
+            Log::error('Monthly generation failed: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Monthly generation failed: ' . $e->getMessage());
+        }
+
+        $lock->release();
+
+        if (!($result['success'] ?? false)) {
+            return redirect()->back()->with('error', $result['message'] ?? 'Generation failed.');
         }
 
         $message = $result['message'];
@@ -926,7 +907,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('manual_generate_invoices');
 
         $validator = Validator::make($request->all(), [
@@ -940,7 +920,7 @@ class InvoiceController extends Controller
             return redirect()->back()->withErrors($validator)->withInput();
         }
 
-        $settings           = SystemSetting::getSettings();
+        $settings           = $this->settings();
         $force              = $request->boolean('force', false);
         $sendNotifications  = $request->boolean('send_notifications', $settings->shouldSendPaymentReminders());
         $ignoreBulkCoverage = $request->boolean('ignore_bulk_coverage', false);
@@ -951,10 +931,27 @@ class InvoiceController extends Controller
                 ->with('auto_generation_disabled', true);
         }
 
-        $result = $this->invoiceService->generateMonthlyInvoices($request->period, $sendNotifications);
+        $lock = Cache::lock('generate_monthly_invoices', 600);
+        if (!$lock->get()) {
+            return redirect()->back()
+                ->with('info', 'A generation run is already in progress. Please wait.');
+        }
 
-        if (!$result['success']) {
-            return redirect()->back()->with('error', $result['message']);
+        try {
+            $result = $this->invoiceService->generateMonthlyInvoices(
+                $request->period,
+                $sendNotifications,
+                $ignoreBulkCoverage
+            );
+        } catch (\Throwable $e) {
+            $lock->release();
+            return redirect()->back()->with('error', 'Generation failed: ' . $e->getMessage());
+        }
+
+        $lock->release();
+
+        if (!($result['success'] ?? false)) {
+            return redirect()->back()->with('error', $result['message'] ?? 'Generation failed.');
         }
 
         $message = "Manual invoice generation completed. " . $result['message'];
@@ -1042,7 +1039,9 @@ class InvoiceController extends Controller
                 'coverage_details' => $coverageDetails,
                 'period'           => $request->period,
                 'property_id'      => $property->id,
-                'message'          => $isCovered ? 'This period is covered by an active bulk payment.' : 'No bulk coverage for this period.',
+                'message'          => $isCovered
+                    ? 'This period is covered by an active bulk payment.'
+                    : 'No bulk coverage for this period.',
             ]);
 
         } catch (\Exception $e) {
@@ -1058,9 +1057,20 @@ class InvoiceController extends Controller
                 return response()->json(['success' => false, 'message' => 'Unauthorized access.'], 403);
             }
 
+            $summary = $this->invoiceService->getPropertyCoverageSummary($property);
+
+            if (isset($summary['coverages']) && is_array($summary['coverages'])) {
+                $summary['coverages'] = collect($summary['coverages'])->map(function ($coverage) {
+                    $coverage['formatted_periods'] = collect($coverage['periods'] ?? [])
+                        ->map(fn ($p) => Carbon::parse($p . '-01')->format('F Y'))
+                        ->toArray();
+                    return $coverage;
+                })->toArray();
+            }
+
             return response()->json([
                 'success' => true,
-                'data'    => $this->invoiceService->getPropertyCoverageSummary($property),
+                'data'    => $summary,
             ]);
         } catch (\Exception $e) {
             Log::error('Failed to get bulk coverage summary: ' . $e->getMessage());
@@ -1081,46 +1091,12 @@ class InvoiceController extends Controller
                 return response()->json(['success' => false, 'message' => 'Unauthorized access.'], 403);
             }
 
-            $coverage = null;
-            if ($invoice->is_bulk_payment && $invoice->isPaid() && !empty($invoice->covers_periods)) {
-                $periods = $invoice->covers_periods;
-
-                if (is_string($periods)) {
-                    $decoded = json_decode($periods, true);
-                    $periods = is_array($decoded) ? $decoded : [];
-                }
-
-                if (empty($periods) && $invoice->bulk_coverage_start && $invoice->bulk_coverage_end) {
-                    $start   = Carbon::parse($invoice->bulk_coverage_start . '-01');
-                    $end     = Carbon::parse($invoice->bulk_coverage_end . '-01');
-                    $current = clone $start;
-                    while ($current <= $end) {
-                        $periods[] = $current->format('Y-m');
-                        $current->addMonth();
-                    }
-                }
-
-                $coverage = [
-                    'periods'           => $periods,
-                    'formatted_periods' => collect($periods)->map(function ($p) {
-                        try {
-                            return Carbon::parse($p . '-01')->format('F Y');
-                        } catch (\Exception $e) {
-                            return $p;
-                        }
-                    })->toArray(),
-                    'start'             => $invoice->bulk_coverage_start ? Carbon::parse($invoice->bulk_coverage_start . '-01')->format('Y-m') : null,
-                    'end'               => $invoice->bulk_coverage_end ? Carbon::parse($invoice->bulk_coverage_end . '-01')->format('Y-m') : null,
-                    'formatted_start'   => $invoice->bulk_coverage_start ? Carbon::parse($invoice->bulk_coverage_start . '-01')->format('M Y') : null,
-                    'formatted_end'     => $invoice->bulk_coverage_end ? Carbon::parse($invoice->bulk_coverage_end . '-01')->format('M Y') : null,
-                    'months_covered'    => count($periods),
-                ];
-            }
+            $coverageInfo = $this->buildCoverageInfo($invoice);
 
             return response()->json([
                 'success'  => true,
-                'coverage' => $coverage,
-                'is_bulk'  => $invoice->is_bulk_payment,
+                'coverage' => $coverageInfo,
+                'is_bulk'  => (bool) $invoice->is_bulk_payment,
                 'is_paid'  => $invoice->isPaid(),
             ]);
 
@@ -1130,31 +1106,65 @@ class InvoiceController extends Controller
         }
     }
 
-    private function formatPeriodSafely($period)
+    /**
+     * Build a normalized coverage array for a bulk invoice.
+     * Returns null when the invoice is not a paid bulk invoice.
+     */
+    protected function buildCoverageInfo(Invoice $invoice): ?array
     {
-        if (empty($period)) {
-            return '';
+        if (!$invoice->is_bulk_payment || !$invoice->isPaid()) {
+            return null;
         }
 
-        try {
-            if (is_string($period) && preg_match('/^\d{4}-\d{2}$/', $period)) {
-                return Carbon::parse($period . '-01')->format('M Y');
-            }
+        $periods = $invoice->covers_periods;
 
-            if ($period instanceof Carbon) {
-                return $period->format('M Y');
-            }
-
-            if (is_array($period) && !empty($period)) {
-                return $this->formatPeriodSafely($period[0]);
-            }
-
-            return (string) $period;
-
-        } catch (\Exception $e) {
-            Log::warning("Failed to format period: " . $e->getMessage(), ['period' => $period]);
-            return (string) $period;
+        if (is_string($periods)) {
+            $decoded = json_decode($periods, true);
+            $periods = is_array($decoded) ? $decoded : [];
         }
+
+        if (!is_array($periods)) {
+            $periods = [];
+        }
+
+        if (empty($periods) && $invoice->bulk_coverage_start && $invoice->bulk_coverage_end) {
+            $start   = Carbon::parse($invoice->bulk_coverage_start . '-01');
+            $end     = Carbon::parse($invoice->bulk_coverage_end . '-01');
+            $current = clone $start;
+            while ($current <= $end) {
+                $periods[] = $current->format('Y-m');
+                $current->addMonth();
+            }
+        }
+
+        $formattedPeriods = [];
+        foreach ($periods as $period) {
+            try {
+                if (is_string($period) && preg_match('/^\d{4}-\d{2}$/', $period)) {
+                    $formattedPeriods[] = Carbon::parse($period . '-01')->format('M Y');
+                } elseif (is_string($period)) {
+                    $formattedPeriods[] = $period;
+                }
+            } catch (\Throwable $e) {
+                $formattedPeriods[] = (string) $period;
+            }
+        }
+
+        return [
+            'periods'           => $periods,
+            'formatted_periods' => $formattedPeriods,
+            'start'             => $invoice->bulk_coverage_start,
+            'end'               => $invoice->bulk_coverage_end,
+            'formatted_start'   => $invoice->bulk_coverage_start
+                ? Carbon::parse($invoice->bulk_coverage_start . '-01')->format('M Y')
+                : null,
+            'formatted_end'     => $invoice->bulk_coverage_end
+                ? Carbon::parse($invoice->bulk_coverage_end . '-01')->format('M Y')
+                : null,
+            'months_covered'    => count($periods),
+            'is_active'         => true,
+            'message'           => 'This bulk payment covers ' . count($formattedPeriods) . ' months. No further invoices will be generated for these periods.',
+        ];
     }
 
     /* ============================================================
@@ -1167,7 +1177,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('toggle_auto_generation');
 
         $validator = Validator::make($request->all(), ['enabled' => 'required|boolean']);
@@ -1176,9 +1185,9 @@ class InvoiceController extends Controller
         }
 
         try {
-            $settings   = SystemSetting::getSettings();
+            $settings   = $this->settings();
             $oldStatus  = $settings->isAutoInvoiceGenerationEnabled();
-            $newStatus  = $request->enabled;
+            $newStatus  = (bool) $request->enabled;
 
             $settings->auto_generate_invoices = $newStatus;
             $settings->updated_by             = auth()->id();
@@ -1210,7 +1219,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('update_reminder_settings');
 
         $validator = Validator::make($request->all(), [
@@ -1223,7 +1231,7 @@ class InvoiceController extends Controller
         }
 
         try {
-            $settings          = SystemSetting::getSettings();
+            $settings          = $this->settings();
             $oldReminderStatus = $settings->send_payment_reminders;
             $oldReminderDays   = $settings->reminder_days_before;
 
@@ -1265,10 +1273,15 @@ class InvoiceController extends Controller
             return redirect()->route('landlord.invoices')->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('mark_overdue_invoices');
 
-        $result  = $this->invoiceService->markOverdueInvoices();
+        $result = $this->invoiceService->markOverdueInvoices();
+
+        if (!($result['success'] ?? false)) {
+            return redirect()->back()
+                ->with('error', $result['message'] ?? 'Failed to mark overdue invoices.');
+        }
+
         $message = $result['message'];
 
         if (($result['penalty_applied_count'] ?? 0) > 0) {
@@ -1301,7 +1314,7 @@ class InvoiceController extends Controller
 
         $invoice->load(['property', 'property.landlord', 'payment', 'creator', 'updater', 'bulkPayment', 'childInvoices']);
 
-        $settings = SystemSetting::getSettings();
+        $settings = $this->settings();
 
         $notificationStatus = $this->invoiceService->getInvoiceNotificationStatus($invoice->id);
         $notificationStatus = array_merge([
@@ -1315,53 +1328,7 @@ class InvoiceController extends Controller
             'next_reminder_date'          => null,
         ], $notificationStatus ?? []);
 
-        $coverageInfo = null;
-        if ($invoice->is_bulk_payment && $invoice->isPaid()) {
-            $coversPeriods = $invoice->covers_periods;
-
-            if (is_string($coversPeriods)) {
-                $decoded = json_decode($coversPeriods, true);
-                $coversPeriods = is_array($decoded) ? $decoded : [];
-            }
-
-            if (empty($coversPeriods) && $invoice->bulk_coverage_start && $invoice->bulk_coverage_end) {
-                $start   = Carbon::parse($invoice->bulk_coverage_start . '-01');
-                $end     = Carbon::parse($invoice->bulk_coverage_end . '-01');
-                $current = clone $start;
-                $coversPeriods = [];
-                while ($current <= $end) {
-                    $coversPeriods[] = $current->format('Y-m');
-                    $current->addMonth();
-                }
-            }
-
-            $formattedPeriods = [];
-            if (is_array($coversPeriods)) {
-                foreach ($coversPeriods as $period) {
-                    try {
-                        if (is_string($period) && preg_match('/^\d{4}-\d{2}$/', $period)) {
-                            $formattedPeriods[] = Carbon::parse($period . '-01')->format('M Y');
-                        } elseif (is_string($period)) {
-                            $formattedPeriods[] = $period;
-                        }
-                    } catch (\Exception $e) {
-                        Log::warning("Failed to format period: {$period}", ['error' => $e->getMessage()]);
-                        $formattedPeriods[] = (string) $period;
-                    }
-                }
-            }
-
-            $coverageInfo = [
-                'periods'           => $coversPeriods,
-                'formatted_periods' => $formattedPeriods,
-                'start'             => $invoice->bulk_coverage_start,
-                'end'               => $invoice->bulk_coverage_end,
-                'formatted_start'   => $invoice->bulk_coverage_start ? Carbon::parse($invoice->bulk_coverage_start . '-01')->format('M Y') : null,
-                'formatted_end'     => $invoice->bulk_coverage_end ? Carbon::parse($invoice->bulk_coverage_end . '-01')->format('M Y') : null,
-                'is_active'         => true,
-                'message'           => "This bulk payment covers " . count($formattedPeriods) . " months. No further invoices will be generated for these periods.",
-            ];
-        }
+        $coverageInfo = $this->buildCoverageInfo($invoice);
 
         return view('admin.invoices.show', compact('invoice', 'notificationStatus', 'coverageInfo', 'settings'));
     }
@@ -1377,7 +1344,7 @@ class InvoiceController extends Controller
         }
 
         $invoice->load(['property', 'payment', 'bulkPayment', 'childInvoices']);
-        $settings = SystemSetting::getSettings();
+        $settings = $this->settings();
 
         $bulkOptions = null;
         if (!$invoice->is_bulk_payment
@@ -1386,41 +1353,7 @@ class InvoiceController extends Controller
             $bulkOptions = $this->invoiceService->getBulkPaymentOptions($invoice->property);
         }
 
-        $coverageInfo = null;
-        if ($invoice->is_bulk_payment && $invoice->isPaid()) {
-            $coversPeriods = $invoice->covers_periods;
-
-            if (is_string($coversPeriods)) {
-                $decoded = json_decode($coversPeriods, true);
-                $coversPeriods = is_array($decoded) ? $decoded : [];
-            }
-
-            $formattedPeriods = [];
-            if (is_array($coversPeriods)) {
-                foreach ($coversPeriods as $period) {
-                    try {
-                        if (is_string($period) && preg_match('/^\d{4}-\d{2}$/', $period)) {
-                            $formattedPeriods[] = Carbon::parse($period . '-01')->format('M Y');
-                        } elseif (is_string($period)) {
-                            $formattedPeriods[] = $period;
-                        }
-                    } catch (\Exception $e) {
-                        $formattedPeriods[] = (string) $period;
-                    }
-                }
-            }
-
-            $coverageInfo = [
-                'periods'           => $coversPeriods,
-                'formatted_periods' => $formattedPeriods,
-                'start'             => $invoice->bulk_coverage_start,
-                'end'               => $invoice->bulk_coverage_end,
-                'formatted_start'   => $invoice->bulk_coverage_start ? Carbon::parse($invoice->bulk_coverage_start . '-01')->format('M Y') : null,
-                'formatted_end'     => $invoice->bulk_coverage_end ? Carbon::parse($invoice->bulk_coverage_end . '-01')->format('M Y') : null,
-                'is_active'         => true,
-                'message'           => "This bulk payment covers " . count($formattedPeriods) . " months. No further invoices will be generated for these periods.",
-            ];
-        }
+        $coverageInfo = $this->buildCoverageInfo($invoice);
 
         return view('landlord.invoices.show', compact('invoice', 'settings', 'bulkOptions', 'coverageInfo'));
     }
@@ -1432,7 +1365,7 @@ class InvoiceController extends Controller
         }
 
         $invoice->load(['property', 'property.landlord', 'creator', 'bulkPayment', 'childInvoices']);
-        $settings = SystemSetting::getSettings();
+        $settings = $this->settings();
 
         return view('admin.invoices.print', compact('invoice', 'settings'));
     }
@@ -1448,7 +1381,7 @@ class InvoiceController extends Controller
         }
 
         $invoice->load(['property', 'property.landlord', 'bulkPayment', 'childInvoices']);
-        $settings = SystemSetting::getSettings();
+        $settings = $this->settings();
 
         return view('landlord.invoices.print', compact('invoice', 'settings'));
     }
@@ -1530,7 +1463,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized. Only administrators can update invoices.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('update_landlord_invoice');
 
         if ($invoice->status === 'consolidated') {
@@ -1560,7 +1492,7 @@ class InvoiceController extends Controller
                 'updated_by'  => auth()->id(),
             ]);
 
-            if ($validated['notes']) {
+            if (!empty($validated['notes'])) {
                 $invoice->addNote("Updated by " . auth()->user()->name . ": " . $validated['notes']);
             }
 
@@ -1577,8 +1509,8 @@ class InvoiceController extends Controller
                     'new_amount'           => $invoice->amount,
                     'old_due_date'         => $oldDueDate?->format('M d, Y'),
                     'new_due_date'         => $invoice->due_date->format('M d, Y'),
-                    'formatted_old_amount' => $this->settings->formatAmount($oldAmount),
-                    'formatted_new_amount' => $this->settings->formatAmount($invoice->amount),
+                    'formatted_old_amount' => $this->settings()->formatAmount($oldAmount),
+                    'formatted_new_amount' => $this->settings()->formatAmount($invoice->amount),
                     'was_overdue'          => $wasOverdue,
                 ];
 
@@ -1597,12 +1529,20 @@ class InvoiceController extends Controller
     }
 
     public function markAsPaid(Request $request, Invoice $invoice)
-    {
-        if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
-            return redirect()->back()->with('error', 'Unauthorized. Only administrators can mark invoices as paid.');
-        }
+{
+    if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
+        return redirect()->back()->with('error', 'Unauthorized. Only administrators can mark invoices as paid.');
+    }
 
-        // ✅ BILLING: block write when system billing is overdue
+    // ✅ NEW: enforce the offline-payment toggle
+    $settings = $this->settings();
+    if (!$settings->isOfflinePaymentAllowed()) {
+        return redirect()->back()->with(
+            'error',
+            '❌ Office payments are currently disabled. Landlords must pay through the online gateway.'
+        );
+    }
+
         $this->assertBillingAllowsWrite('mark_landlord_invoice_paid');
 
         $validated = $request->validate([
@@ -1625,13 +1565,15 @@ class InvoiceController extends Controller
 
             $invoice->update([
                 'status'            => Invoice::STATUS_PAID,
+                'paid_amount'       => $invoice->total_amount,
+                'balance'           => 0,
                 'payment_method'    => $validated['payment_method'],
                 'payment_reference' => $validated['payment_reference'],
                 'payment_date'      => Carbon::parse($validated['payment_date']),
                 'updated_by'        => auth()->id(),
             ]);
 
-            if ($validated['notes']) {
+            if (!empty($validated['notes'])) {
                 $invoice->addNote("Manually marked as paid by " . auth()->user()->name . ": " . $validated['notes']);
             }
 
@@ -1672,10 +1614,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        // ── Sending a notification is a non-financial admin action.
-        //    Allowing it while billing is overdue gives no advantage
-        //    and keeps communication flowing. Deliberately NOT gated.
-
         if ($invoice->status === 'consolidated') {
             return redirect()->back()->with('error', 'Cannot send notification for a consolidated invoice.');
         }
@@ -1706,11 +1644,14 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized. Only administrators can apply penalties.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('apply_landlord_penalty');
 
         if ($invoice->status === 'consolidated') {
             return redirect()->back()->with('error', 'Cannot apply penalty to a consolidated invoice.');
+        }
+
+        if ($invoice->isPaid()) {
+            return redirect()->back()->with('error', 'Cannot apply penalty to a paid invoice.');
         }
 
         $validated = $request->validate([
@@ -1736,8 +1677,15 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized. Only administrators can remove penalties.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('remove_landlord_penalty');
+
+        if ($invoice->status === 'consolidated') {
+            return redirect()->back()->with('error', 'Cannot remove penalty from a consolidated invoice.');
+        }
+
+        if ($invoice->isPaid()) {
+            return redirect()->back()->with('error', 'Cannot remove penalty from a paid invoice.');
+        }
 
         $validated = $request->validate(['reason' => 'required|string|max:255']);
 
@@ -1763,7 +1711,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized. Only administrators can delete invoices.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('delete_landlord_invoice');
 
         if (!$this->canDeleteInvoice($invoice)) {
@@ -1775,9 +1722,10 @@ class InvoiceController extends Controller
 
             $archive = $this->createArchivalRecord($invoice, $request);
 
-            $invoice->addNote("Invoice moved to trash by " . auth()->user()->name);
-
             $metadata = $invoice->metadata ?? [];
+            $metadata['notes'] = array_merge($metadata['notes'] ?? [], [
+                "Invoice moved to trash by " . auth()->user()->name . " on " . now()->toDateTimeString(),
+            ]);
             $metadata['deleted_by']           = auth()->id();
             $metadata['deleted_by_name']      = auth()->user()->name;
             $metadata['deleted_reason']       = $request->input('reason', 'Manual deletion');
@@ -1876,7 +1824,7 @@ class InvoiceController extends Controller
 
     private function createArchivalRecord(Invoice $invoice, Request $request): InvoiceArchive
     {
-        $settings = SystemSetting::getSettings();
+        $settings = $this->settings();
 
         $balance = $invoice->balance ?? ($invoice->total_amount - ($invoice->paid_amount ?? 0));
         if ($balance === null) {
@@ -1889,15 +1837,11 @@ class InvoiceController extends Controller
         $metadata         = $invoice->metadata ?? [];
         $coversPeriods    = $invoice->covers_periods ?? null;
 
-        $propertyName = 'N/A';
-        if ($invoice->property) {
-            $propertyName = $invoice->property->property_name ?? $invoice->property->street_name ?? 'N/A';
-        }
+        $propertyName = $invoice->property?->property_name
+                     ?? $invoice->property?->street_name
+                     ?? 'N/A';
 
-        $landlordName = 'Unknown';
-        if ($invoice->property && $invoice->property->landlord) {
-            $landlordName = $invoice->property->landlord->name ?? 'Unknown';
-        }
+        $landlordName = $invoice->property?->landlord?->name ?? 'Unknown';
 
         $monthName   = $invoice->period ? Carbon::parse($invoice->period . '-01')->format('F Y') : null;
         $totalAmount = ($invoice->amount ?? 0) + ($invoice->penalty_amount ?? 0);
@@ -1907,7 +1851,7 @@ class InvoiceController extends Controller
             'invoice_number'        => $invoice->invoice_number ?? 'INV-' . str_pad($invoice->id, 6, '0', STR_PAD_LEFT),
             'property_id'           => $invoice->property_id,
             'property_name'         => $propertyName,
-            'landlord_id'           => $invoice->property->landlord_id ?? null,
+            'landlord_id'           => $invoice->property?->landlord_id,
             'landlord_name'         => $landlordName,
             'period'                => $invoice->period,
             'month_name'            => $monthName,
@@ -1967,25 +1911,28 @@ class InvoiceController extends Controller
                 return;
             }
 
-            $settings = SystemSetting::getSettings();
+            $settings = $this->settings();
+            $propertyName = $invoice->property?->property_name
+                         ?? $invoice->property?->street_name
+                         ?? 'N/A';
 
             $notificationData = [
                 'title'      => '🗑️ Invoice Deleted',
                 'message'    => "Invoice #{$invoice->invoice_number} for period "
-                              . Carbon::parse($invoice->period . '-01')->format('M Y')
+                              . ($invoice->period ? Carbon::parse($invoice->period . '-01')->format('M Y') : 'N/A')
                               . " was deleted by " . auth()->user()->name
                               . ". Amount: " . $settings->formatAmount($invoice->total_amount)
                               . ($request->input('reason') ? " Reason: {$request->input('reason')}" : ""),
                 'icon'       => 'fas fa-trash-alt text-warning',
                 'category'   => 'invoices',
-                'action_url' => route('admin.invoices.trash'),
+                'action_url' => route('invoices.trash'),
                 'priority'   => 2,
                 'data'       => [
                     'type'            => 'invoice_deleted',
                     'invoice_id'      => $invoice->id,
                     'invoice_number'  => $invoice->invoice_number,
                     'property_id'     => $invoice->property_id,
-                    'property_name'   => $invoice->property->property_name ?? $invoice->property->street_name,
+                    'property_name'   => $propertyName,
                     'amount'          => $invoice->total_amount,
                     'period'          => $invoice->period,
                     'deleted_by'      => auth()->id(),
@@ -2009,6 +1956,10 @@ class InvoiceController extends Controller
             Log::error('Failed to notify admins about invoice deletion: ' . $e->getMessage());
         }
     }
+
+    /* ============================================================
+     | ARCHIVE MANAGEMENT
+     * ============================================================ */
 
     public function archives(Request $request)
     {
@@ -2045,21 +1996,26 @@ class InvoiceController extends Controller
 
         $archives = $query->paginate(20);
 
-        $statistics = [
-            'total_archives'        => InvoiceArchive::count(),
-            'manual_archives'       => InvoiceArchive::where('archive_type', 'manual')->count(),
-            'year_end_archives'     => InvoiceArchive::where('archive_type', 'year_end')->count(),
-            'post_payment_archives' => InvoiceArchive::where('archive_type', 'post_payment')->count(),
-            'total_amount'          => InvoiceArchive::sum('total_amount'),
-            'total_penalties'       => InvoiceArchive::sum('penalty_amount'),
-            'oldest_archive'        => InvoiceArchive::orderBy('deleted_at', 'asc')->first(),
-            'newest_archive'        => InvoiceArchive::orderBy('deleted_at', 'desc')->first(),
-            'oldest_date'           => InvoiceArchive::orderBy('deleted_at', 'asc')->first()?->deleted_at?->format('M d, Y') ?? 'N/A',
-            'newest_date'           => InvoiceArchive::orderBy('deleted_at', 'desc')->first()?->deleted_at?->format('M d, Y') ?? 'N/A',
-        ];
+        $statistics = Cache::remember('invoices.archive_statistics', 60, function () {
+            $oldest = InvoiceArchive::orderBy('deleted_at', 'asc')->first();
+            $newest = InvoiceArchive::orderBy('deleted_at', 'desc')->first();
+
+            return [
+                'total_archives'        => InvoiceArchive::count(),
+                'manual_archives'       => InvoiceArchive::where('archive_type', 'manual')->count(),
+                'year_end_archives'     => InvoiceArchive::where('archive_type', 'year_end')->count(),
+                'post_payment_archives' => InvoiceArchive::where('archive_type', 'post_payment')->count(),
+                'total_amount'          => InvoiceArchive::sum('total_amount'),
+                'total_penalties'       => InvoiceArchive::sum('penalty_amount'),
+                'oldest_archive'        => $oldest,
+                'newest_archive'        => $newest,
+                'oldest_date'           => $oldest?->deleted_at?->format('M d, Y') ?? 'N/A',
+                'newest_date'           => $newest?->deleted_at?->format('M d, Y') ?? 'N/A',
+            ];
+        });
 
         $periods = InvoiceArchive::select('period')->distinct()->orderBy('period', 'desc')->pluck('period');
-        $system_settings = SystemSetting::getSettings();
+        $system_settings = $this->settings();
 
         return view('admin.invoices.archives', compact('archives', 'statistics', 'periods', 'system_settings'));
     }
@@ -2143,6 +2099,42 @@ class InvoiceController extends Controller
         ]);
     }
 
+    public function exportArchivePDF($id)
+    {
+        if (!auth()->user()->isSuperAdmin()) {
+            return redirect()->back()->with('error', 'Unauthorized access.');
+        }
+
+        $archive  = InvoiceArchive::findOrFail($id);
+        $settings = $this->settings();
+
+        $pdf = Pdf::loadView('admin.invoices.archive-pdf', compact('archive', 'settings'));
+        $pdf->setPaper('A4', 'portrait');
+
+        return $pdf->download("archive-{$archive->invoice_number}.pdf");
+    }
+
+    public function getArchiveDetails($id): JsonResponse
+    {
+        if (!auth()->user()->isSuperAdmin()) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $archive  = InvoiceArchive::with(['property', 'landlord'])->findOrFail($id);
+        $settings = $this->settings();
+
+        return response()->json([
+            'success' => true,
+            'archive' => $archive,
+            'formatted' => [
+                'total_amount'   => $settings->formatAmount($archive->total_amount),
+                'penalty_amount' => $settings->formatAmount($archive->penalty_amount),
+                'balance'        => $settings->formatAmount($archive->balance),
+                'deleted_at'     => $archive->deleted_at?->format('M d, Y H:i'),
+            ],
+        ]);
+    }
+
     public function exportAllArchives(Request $request)
     {
         if (!auth()->user()->isSuperAdmin()) {
@@ -2172,7 +2164,7 @@ class InvoiceController extends Controller
         }
 
         $archives = $query->orderBy('deleted_at', 'desc')->get();
-        $settings = SystemSetting::getSettings();
+        $settings = $this->settings();
 
         if ($archives->isEmpty()) {
             return redirect()->back()->with('error', 'No records found to export.');
@@ -2206,7 +2198,7 @@ class InvoiceController extends Controller
                 $archive->landlord_name,
                 $archive->period,
                 $archive->month_name,
-                $archive->due_date ? $archive->due_date->format('Y-m-d') : '',
+                $archive->due_date ? Carbon::parse($archive->due_date)->format('Y-m-d') : '',
                 $archive->total_amount,
                 $archive->status,
                 $archive->payment_method,
@@ -2238,12 +2230,12 @@ class InvoiceController extends Controller
                 'landlord_name'     => $archive->landlord_name,
                 'period'            => $archive->period,
                 'month_name'        => $archive->month_name,
-                'due_date'          => $archive->due_date ? $archive->due_date->format('Y-m-d') : null,
+                'due_date'          => $archive->due_date ? Carbon::parse($archive->due_date)->format('Y-m-d') : null,
                 'total_amount'      => $archive->total_amount,
                 'status'            => $archive->status,
                 'payment_method'    => $archive->payment_method,
                 'payment_reference' => $archive->payment_reference,
-                'payment_date'      => $archive->payment_date ? $archive->payment_date->format('Y-m-d') : null,
+                'payment_date'      => $archive->payment_date ? Carbon::parse($archive->payment_date)->format('Y-m-d') : null,
                 'is_bulk_payment'   => $archive->is_bulk_payment,
                 'covers_periods'    => $archive->covers_periods,
                 'deleted_at'        => $archive->deleted_at ? $archive->deleted_at->format('Y-m-d H:i:s') : null,
@@ -2260,6 +2252,10 @@ class InvoiceController extends Controller
         ]);
     }
 
+    /**
+     * Alias for CSV export — a proper PhpSpreadsheet implementation is
+     * planned but not yet wired in.
+     */
     private function exportArchivesAsExcel($archives, $settings)
     {
         return $this->exportArchivesAsCSV($archives, $settings);
@@ -2282,24 +2278,84 @@ class InvoiceController extends Controller
         return $pdf->download('archive_export_' . date('Y-m-d_His') . '.pdf');
     }
 
+    public function bulkDeleteArchives(Request $request): JsonResponse
+    {
+        if (!auth()->user()->isSuperAdmin()) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
+        }
+
+        $this->assertBillingAllowsWrite('bulk_delete_archives');
+
+        $validator = Validator::make($request->all(), [
+            'archive_ids'   => 'required|array',
+            'archive_ids.*' => 'integer|exists:invoice_archives,id',
+            'confirm'       => 'required|accepted',
+            'exported'      => 'required|accepted',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed. Confirm deletion and export first.',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        try {
+            DB::beginTransaction();
+
+            $archives = InvoiceArchive::whereIn('id', $request->archive_ids)->get();
+            $count    = $archives->count();
+            $total    = $archives->sum('total_amount');
+
+            foreach ($archives as $archive) {
+                $archive->delete();
+            }
+
+            DB::commit();
+
+            Log::warning('Bulk archive deletion performed', [
+                'archive_ids'  => $request->archive_ids,
+                'count'        => $count,
+                'total_amount' => $total,
+                'deleted_by'   => auth()->id(),
+            ]);
+
+            return response()->json([
+                'success'         => true,
+                'message'         => "Deleted {$count} archive record(s).",
+                'records_deleted' => $count,
+                'total_amount'    => $total,
+                'formatted'       => $this->settings()->formatAmount($total),
+            ]);
+
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('Bulk archive deletion failed: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Failed: ' . $e->getMessage()], 500);
+        }
+    }
+
     public function archiveCleanup()
     {
         if (!auth()->user()->isSuperAdmin()) {
             return redirect()->back()->with('error', 'Only Super Admins can perform archive cleanup.');
         }
 
-        $stats = [
-            'total_archives'     => InvoiceArchive::count(),
-            'older_than_1_year'  => InvoiceArchive::where('deleted_at', '<', now()->subYear())->count(),
-            'older_than_2_years' => InvoiceArchive::where('deleted_at', '<', now()->subYears(2))->count(),
-            'older_than_5_years' => InvoiceArchive::where('deleted_at', '<', now()->subYears(5))->count(),
-            'older_than_7_years' => InvoiceArchive::where('deleted_at', '<', now()->subYears(7))->count(),
-            'total_amount'       => InvoiceArchive::sum('total_amount'),
-            'oldest_archive'     => InvoiceArchive::orderBy('deleted_at', 'asc')->first(),
-            'newest_archive'     => InvoiceArchive::orderBy('deleted_at', 'desc')->first(),
-        ];
+        $stats = Cache::remember('invoices.archive_cleanup_stats', 60, function () {
+            return [
+                'total_archives'     => InvoiceArchive::count(),
+                'older_than_1_year'  => InvoiceArchive::where('deleted_at', '<', now()->subYear())->count(),
+                'older_than_2_years' => InvoiceArchive::where('deleted_at', '<', now()->subYears(2))->count(),
+                'older_than_5_years' => InvoiceArchive::where('deleted_at', '<', now()->subYears(5))->count(),
+                'older_than_7_years' => InvoiceArchive::where('deleted_at', '<', now()->subYears(7))->count(),
+                'total_amount'       => InvoiceArchive::sum('total_amount'),
+                'oldest_archive'     => InvoiceArchive::orderBy('deleted_at', 'asc')->first(),
+                'newest_archive'     => InvoiceArchive::orderBy('deleted_at', 'desc')->first(),
+            ];
+        });
 
-        $system_settings = SystemSetting::getSettings();
+        $system_settings = $this->settings();
 
         return view('admin.invoices.archive-cleanup', compact('stats', 'system_settings'));
     }
@@ -2314,7 +2370,6 @@ class InvoiceController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('perform_archive_cleanup');
 
         try {
@@ -2363,20 +2418,19 @@ class InvoiceController extends Controller
                 'deleted_by_name' => auth()->user()->name,
             ]);
 
-            foreach ($archives as $archive) {
-                $archive->delete();
-            }
+            InvoiceArchive::whereIn('id', $archives->pluck('id'))->delete();
 
             DB::commit();
 
-            $settings = SystemSetting::getSettings();
+            Cache::forget('invoices.archive_statistics');
+            Cache::forget('invoices.archive_cleanup_stats');
 
             return response()->json([
                 'success'          => true,
                 'message'          => "Successfully deleted {$count} archive records.",
                 'records_deleted'  => $count,
                 'total_amount'     => $totalAmount,
-                'formatted_amount' => $settings->formatAmount($totalAmount),
+                'formatted_amount' => $this->settings()->formatAmount($totalAmount),
             ]);
 
         } catch (\Exception $e) {
@@ -2402,13 +2456,12 @@ class InvoiceController extends Controller
 
             $count       = InvoiceArchive::where('deleted_at', '<', $cutoffDate)->count();
             $totalAmount = InvoiceArchive::where('deleted_at', '<', $cutoffDate)->sum('total_amount');
-            $settings    = SystemSetting::getSettings();
 
             return response()->json([
                 'success'          => true,
                 'count'            => $count,
                 'total_amount'     => $totalAmount,
-                'formatted_amount' => $settings->formatAmount($totalAmount),
+                'formatted_amount' => $this->settings()->formatAmount($totalAmount),
                 'cutoff_date'      => $cutoffDate->format('Y-m-d'),
             ]);
 
@@ -2428,80 +2481,51 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('process_year_end_archive');
 
         $year = $request->input('year', now()->subYear()->year);
 
-        $invoicesToArchive = Invoice::whereYear('payment_date', $year)
-            ->where('status', 'paid')
-            ->whereNull('deleted_at')
-            ->with(['property', 'property.landlord'])
-            ->get();
-
-        $archivedCount = 0;
-        $errors        = 0;
-
-        foreach ($invoicesToArchive as $invoice) {
-            try {
-                DB::beginTransaction();
-
-                InvoiceArchive::create([
-                    'original_invoice_id' => $invoice->id,
-                    'invoice_number'      => $invoice->invoice_number,
-                    'property_id'         => $invoice->property_id,
-                    'property_name'       => $invoice->property->property_name ?? $invoice->property->street_name,
-                    'landlord_id'         => $invoice->property->landlord_id,
-                    'landlord_name'       => $invoice->property->landlord->name ?? 'Unknown',
-                    'period'              => $invoice->period,
-                    'due_date'            => $invoice->due_date,
-                    'amount'              => $invoice->amount,
-                    'penalty_amount'      => $invoice->penalty_amount ?? 0,
-                    'total_amount'        => $invoice->total_amount,
-                    'paid_amount'         => $invoice->paid_amount ?? 0,
-                    'balance'             => $invoice->balance,
-                    'status'              => $invoice->status,
-                    'payment_method'      => $invoice->payment_method,
-                    'payment_reference'   => $invoice->payment_reference,
-                    'payment_date'        => $invoice->payment_date,
-                    'is_bulk_payment'     => $invoice->is_bulk_payment,
-                    'bulk_payment_id'     => $invoice->bulk_payment_id,
-                    'covers_periods'      => $invoice->covers_periods,
-                    'description'         => $invoice->description,
-                    'notes'               => $invoice->notes,
-                    'metadata'            => $invoice->metadata,
-                    'original_created_at' => $invoice->created_at,
-                    'original_created_by' => $invoice->created_by,
-                    'deleted_at'          => now(),
-                    'deleted_by'          => auth()->id(),
-                    'deleted_by_name'     => auth()->user()->name,
-                    'deletion_reason'     => "Year-end archiving for {$year}",
-                    'archive_type'        => 'year_end',
-                ]);
-
-                $metadata = $invoice->metadata ?? [];
-                $metadata['year_end_archived']     = true;
-                $metadata['year_end_archived_at']  = now()->toDateTimeString();
-                $metadata['year_end_archive_year'] = $year;
-                $invoice->update(['metadata' => $metadata]);
-
-                $invoice->delete();
-
-                $archivedCount++;
-                DB::commit();
-
-            } catch (\Exception $e) {
-                DB::rollBack();
-                $errors++;
-                Log::error('Year-end archiving failed for invoice: ' . $e->getMessage(), [
-                    'invoice_id' => $invoice->id,
-                ]);
-            }
+        $lock = Cache::lock('process_year_end_archive_' . $year, 1800);
+        if (!$lock->get()) {
+            return redirect()->back()
+                ->with('info', "A year-end archive for {$year} is already in progress.");
         }
 
-        $message = "Year-end archiving for {$year} completed. Archived: {$archivedCount} invoices. Errors: {$errors}";
+        try {
+            $archivedCount = 0;
+            $errors        = 0;
 
-        return redirect()->back()->with('success', $message);
+            Invoice::whereYear('payment_date', $year)
+                ->where('status', 'paid')
+                ->whereNull('deleted_at')
+                ->with(['property', 'property.landlord'])
+                ->chunkById(200, function ($invoices) use (&$archivedCount, &$errors, $year) {
+                    foreach ($invoices as $invoice) {
+                        try {
+                            DB::transaction(function () use ($invoice, $year) {
+                                $this->yearEndArchiveService->archiveLandlordInvoice($invoice, $year);
+                            });
+                            $archivedCount++;
+                        } catch (\Throwable $e) {
+                            $errors++;
+                            Log::error('Year-end archiving failed for invoice: ' . $e->getMessage(), [
+                                'invoice_id' => $invoice->id,
+                            ]);
+                        }
+                    }
+                });
+
+            $lock->release();
+
+            $message = "Year-end archiving for {$year} completed. Archived: {$archivedCount} invoices. Errors: {$errors}";
+
+            return redirect()->back()->with('success', $message);
+
+        } catch (\Throwable $e) {
+            $lock->release();
+            Log::error('Year-end archive failed: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Year-end archiving failed: ' . $e->getMessage());
+        }
     }
 
     public function reverseConsolidation(Invoice $bulkInvoice)
@@ -2510,7 +2534,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized. Only administrators can reverse consolidations.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('reverse_consolidation');
 
         try {
@@ -2527,7 +2550,8 @@ class InvoiceController extends Controller
                     'status'                 => 'pending',
                     'bulk_payment_id'        => null,
                     'bulk_payment_reference' => null,
-                    'notes'                  => $child->notes . "\nSeparated from bulk invoice #{$bulkInvoice->id} on " . now()->format('Y-m-d'),
+                    'notes'                  => ($child->notes ?? '')
+                        . "\nSeparated from bulk invoice #{$bulkInvoice->id} on " . now()->format('Y-m-d'),
                 ]);
             }
 
@@ -2536,12 +2560,13 @@ class InvoiceController extends Controller
                 'covers_periods'      => null,
                 'bulk_coverage_start' => null,
                 'bulk_coverage_end'   => null,
-                'notes'               => $bulkInvoice->notes . "\nConsolidation reversed on " . now()->format('Y-m-d'),
+                'notes'               => ($bulkInvoice->notes ?? '')
+                    . "\nConsolidation reversed on " . now()->format('Y-m-d'),
             ]);
 
             DB::commit();
 
-            return redirect()->route('admin.invoices.show', $bulkInvoice->id)
+            return redirect()->route('invoices.show', $bulkInvoice->id)
                 ->with('success', "Successfully reversed consolidation. {$childInvoices->count()} invoices restored. Bulk coverage deactivated.");
 
         } catch (\Exception $e) {
@@ -2569,7 +2594,7 @@ class InvoiceController extends Controller
         try {
             $result = $this->invoiceService->testCalculation($validated['property_id']);
 
-            if (!$result['success']) {
+            if (!($result['success'] ?? false)) {
                 return response()->json($result, 400);
             }
 
@@ -2604,7 +2629,6 @@ class InvoiceController extends Controller
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
             }
 
-            // ✅ BILLING: block write when system billing is overdue
             $this->assertBillingAllowsWrite('bulk_update_invoice_status');
 
             $validator = Validator::make($request->all(), [
@@ -2617,47 +2641,51 @@ class InvoiceController extends Controller
                 'activate_coverage'  => 'nullable|boolean',
             ]);
 
-            if ($validator->fails()) {
+             if ($validator->fails()) { /* ... */ }
+
+        // ✅ NEW: enforce the offline-payment toggle when status = paid
+        if ($request->status === 'paid') {
+            $settings = $this->settings();
+            if (!$settings->isOfflinePaymentAllowed()) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Validation failed',
-                    'errors'  => $validator->errors(),
-                ], 422);
+                    'message' => 'Office payments are currently disabled. Landlords must pay through the online gateway.',
+                ], 403);
             }
+        }
 
-            $consolidatedInvoices = Invoice::whereIn('id', $request->invoice_ids)
-                ->where('status', 'consolidated')
-                ->count();
+            $ids = $request->invoice_ids;
 
-            if ($consolidatedInvoices > 0) {
+            if (Invoice::whereIn('id', $ids)->where('status', 'consolidated')->exists()) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Cannot update consolidated invoices via bulk operation.',
                 ], 422);
             }
 
+            DB::beginTransaction();
+
             if ($request->status === 'paid') {
                 $result = $this->invoiceService->processPaymentForInvoices(
-                    $request->invoice_ids,
+                    $ids,
                     $request->payment_reference ?? 'BULK-' . time(),
                     $request->payment_method ?? 'manual'
                 );
             } else {
-                $updateData = ['status' => $request->status];
-
                 if ($request->status === 'cancelled') {
-                    $bulkInvoices = Invoice::whereIn('id', $request->invoice_ids)
+                    Invoice::whereIn('id', $ids)
                         ->where('is_bulk_payment', true)
-                        ->get();
-
-                    foreach ($bulkInvoices as $bulkInvoice) {
-                        $updateData['covers_periods']      = null;
-                        $updateData['bulk_coverage_start'] = null;
-                        $updateData['bulk_coverage_end']   = null;
-                    }
+                        ->update([
+                            'covers_periods'      => null,
+                            'bulk_coverage_start' => null,
+                            'bulk_coverage_end'   => null,
+                        ]);
                 }
 
-                $updatedCount = Invoice::whereIn('id', $request->invoice_ids)->update($updateData);
+                $updatedCount = Invoice::whereIn('id', $ids)->update([
+                    'status'     => $request->status,
+                    'updated_by' => auth()->id(),
+                ]);
 
                 $result = [
                     'success'       => true,
@@ -2666,17 +2694,19 @@ class InvoiceController extends Controller
                 ];
             }
 
-            if ($request->boolean('send_notifications', false) && $result['success']) {
-                $settings = SystemSetting::getSettings();
+            DB::commit();
+
+            if ($request->boolean('send_notifications', false) && ($result['success'] ?? false)) {
+                $settings = $this->settings();
                 if ($settings->shouldSendPaymentReminders()) {
-                    foreach ($request->invoice_ids as $invoiceId) {
+                    foreach ($ids as $invoiceId) {
                         $this->invoiceService->sendInvoiceStatusUpdateNotification($invoiceId, $request->status);
                     }
                 }
             }
 
             Log::info('Bulk invoice status update', [
-                'invoice_ids' => $request->invoice_ids,
+                'invoice_ids' => $ids,
                 'status'      => $request->status,
                 'user_id'     => auth()->id(),
             ]);
@@ -2684,6 +2714,7 @@ class InvoiceController extends Controller
             return response()->json($result);
 
         } catch (\Exception $e) {
+            DB::rollBack();
             Log::error('Error in bulk invoice status update: ' . $e->getMessage(), [
                 'invoice_ids' => $request->invoice_ids ?? [],
                 'user_id'     => auth()->id(),
@@ -2708,7 +2739,7 @@ class InvoiceController extends Controller
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 403);
             }
 
-            $settings = SystemSetting::getSettings();
+            $settings = $this->settings();
 
             return response()->json([
                 'success' => true,
@@ -2752,15 +2783,19 @@ class InvoiceController extends Controller
                 return;
             }
 
-            $settingName = $setting === 'auto_generate_invoices' ? 'Auto Invoice Generation' : 'Unknown Setting';
-            $status      = $newValue ? 'enabled' : 'disabled';
+            $settingName = match ($setting) {
+                'auto_generate_invoices' => 'Auto Invoice Generation',
+                'send_payment_reminders' => 'Payment Reminders',
+                default                  => ucfirst(str_replace('_', ' ', $setting)),
+            };
+            $status = $newValue ? 'enabled' : 'disabled';
 
             $notificationData = [
-                'title'      => $newValue ? '⚙️ Auto Generation Enabled' : '⚙️ Auto Generation Disabled',
+                'title'      => $newValue ? "⚙️ {$settingName} Enabled" : "⚙️ {$settingName} Disabled",
                 'message'    => "{$settingName} has been {$status} by " . auth()->user()->name,
                 'icon'       => $newValue ? 'fas fa-play-circle text-success' : 'fas fa-stop-circle text-warning',
                 'category'   => 'system_settings',
-                'action_url' => route('admin.invoices.index'),
+                'action_url' => route('invoices.index'),
                 'priority'   => 2,
                 'data'       => [
                     'type'            => 'setting_change',
@@ -2802,7 +2837,7 @@ class InvoiceController extends Controller
                 'message'    => $message . " by " . auth()->user()->name,
                 'icon'       => $newEnabled ? 'fas fa-bell text-success' : 'fas fa-bell-slash text-warning',
                 'category'   => 'system_settings',
-                'action_url' => route('admin.invoices.index'),
+                'action_url' => route('invoices.index'),
                 'priority'   => 2,
                 'data'       => [
                     'type'            => 'reminder_settings_change',
@@ -2832,7 +2867,11 @@ class InvoiceController extends Controller
     public function getInvoiceStatus(Invoice $invoice): JsonResponse
     {
         try {
-            if (!auth()->user()->isLandlord() || $invoice->property->landlord_id !== auth()->id()) {
+            $user = auth()->user();
+            $isLandlord   = $user->isLandlord() && $invoice->property->landlord_id === $user->id;
+            $isAdmin      = $user->isAdmin() || $user->isSuperAdmin();
+
+            if (!$isLandlord && !$isAdmin) {
                 return response()->json(['success' => false, 'message' => 'Unauthorized access.'], 403);
             }
 
@@ -2925,7 +2964,7 @@ class InvoiceController extends Controller
             ->orderBy('period', 'desc')
             ->pluck('period');
 
-        $settings              = SystemSetting::getSettings();
+        $settings              = $this->settings();
         $remindersEnabled      = $settings->shouldSendPaymentReminders();
         $reminderDays          = $settings->getReminderDaysBefore();
         $gracePeriodDays       = $settings->grace_period_days ?? 7;
@@ -2948,7 +2987,6 @@ class InvoiceController extends Controller
             return redirect()->route('landlord.invoices')->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('restore_landlord_invoice');
 
         try {
@@ -3014,7 +3052,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('bulk_restore_landlord_invoices');
 
         $validator = Validator::make($request->all(), [
@@ -3112,7 +3149,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Only super administrators can permanently delete invoices.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('force_delete_landlord_invoice');
 
         try {
@@ -3141,7 +3177,7 @@ class InvoiceController extends Controller
 
             DB::commit();
 
-            return redirect()->route('admin.invoices.trash')
+            return redirect()->route('invoices.trash')
                 ->with('success', "Invoice #{$invoice->invoice_number} has been permanently deleted.");
 
         } catch (\Exception $e) {
@@ -3163,7 +3199,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Only super administrators can permanently delete invoices.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('bulk_force_delete_landlord_invoices');
 
         $validator = Validator::make($request->all(), [
@@ -3297,7 +3332,7 @@ class InvoiceController extends Controller
     private function canForceDeleteInvoice(Invoice $invoice): array
     {
         $daysInTrash      = $invoice->deleted_at->diffInDays(now());
-        $settings         = SystemSetting::getSettings();
+        $settings         = $this->settings();
         $minRetentionDays = $settings->trash_retention_days ?? 30;
 
         if ($daysInTrash < $minRetentionDays) {
@@ -3330,7 +3365,6 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Only super administrators can empty the trash.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('empty_landlord_invoice_trash');
 
         $validator = Validator::make($request->all(), [
@@ -3354,14 +3388,11 @@ class InvoiceController extends Controller
 
             $count = $query->count();
 
-            foreach ($query->get() as $invoice) {
-                Log::warning('Invoice permanently deleted (empty trash)', [
-                    'invoice_id'          => $invoice->id,
-                    'invoice_number'      => $invoice->invoice_number,
-                    'deleted_by'          => auth()->id(),
-                    'original_deleted_at' => $invoice->deleted_at,
-                ]);
-            }
+            Log::warning('Trash emptying', [
+                'count'           => $count,
+                'user_id'         => auth()->id(),
+                'older_than_days' => $request->older_than_days,
+            ]);
 
             $query->forceDelete();
 
@@ -3371,12 +3402,6 @@ class InvoiceController extends Controller
             if ($request->has('older_than_days')) {
                 $message .= " (Deleted invoices older than {$request->older_than_days} days)";
             }
-
-            Log::info('Trash emptied', [
-                'count'           => $count,
-                'user_id'         => auth()->id(),
-                'older_than_days' => $request->older_than_days,
-            ]);
 
             return redirect()->back()->with('success', $message);
 
@@ -3430,19 +3455,27 @@ class InvoiceController extends Controller
      * ============================================================ */
 
     public function bulkMarkPaid(Request $request)
-    {
-        try {
-            if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
-                return redirect()->back()->with('error', 'Unauthorized access.');
-            }
+{
+    try {
+        if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
+            return redirect()->back()->with('error', 'Unauthorized access.');
+        }
 
-            // ✅ BILLING: block write when system billing is overdue
+        // ✅ NEW: enforce the offline-payment toggle
+        $settings = $this->settings();
+        if (!$settings->isOfflinePaymentAllowed()) {
+            return redirect()->back()->with(
+                'error',
+                '❌ Office payments are currently disabled. Landlords must pay through the online gateway.'
+            );
+        }
+
             $this->assertBillingAllowsWrite('bulk_mark_landlord_invoices_paid');
 
             $validator = Validator::make($request->all(), [
                 'invoice_ids'       => 'required|string',
-                'payment_method'    => 'nullable|string',
-                'payment_reference' => 'nullable|string',
+                'payment_method'    => 'nullable|string|max:255',
+                'payment_reference' => 'nullable|string|max:255',
             ]);
 
             if ($validator->fails()) {
@@ -3457,38 +3490,36 @@ class InvoiceController extends Controller
             DB::beginTransaction();
 
             $updatedCount = 0;
-            $failedIds    = [];
+            $skippedIds   = [];
 
             foreach ($invoiceIds as $invoiceId) {
                 $invoice = Invoice::find($invoiceId);
 
-                if (!$invoice || $invoice->status === 'consolidated') {
-                    $failedIds[] = $invoiceId;
+                if (!$invoice
+                    || $invoice->status === 'consolidated'
+                    || $invoice->isPaid()) {
+                    $skippedIds[] = $invoiceId;
                     continue;
                 }
 
-                $updateData = [
-                    'status'       => Invoice::STATUS_PAID,
-                    'updated_by'   => auth()->id(),
-                    'payment_date' => now(),
-                ];
+                $invoice->update([
+                    'status'            => Invoice::STATUS_PAID,
+                    'paid_amount'       => $invoice->total_amount,
+                    'balance'           => 0,
+                    'payment_method'    => $request->payment_method,
+                    'payment_reference' => $request->payment_reference,
+                    'payment_date'      => now(),
+                    'updated_by'        => auth()->id(),
+                ]);
 
-                if ($request->payment_method) {
-                    $updateData['payment_method'] = $request->payment_method;
-                }
-                if ($request->payment_reference) {
-                    $updateData['payment_reference'] = $request->payment_reference;
-                }
-
-                $invoice->update($updateData);
                 $updatedCount++;
             }
 
             DB::commit();
 
             $message = "Successfully marked {$updatedCount} invoice(s) as paid.";
-            if (!empty($failedIds)) {
-                $message .= " Failed to update " . count($failedIds) . " invoice(s).";
+            if (!empty($skippedIds)) {
+                $message .= " Skipped " . count($skippedIds) . " invoice(s) (already paid, consolidated, or missing).";
             }
 
             return redirect()->back()->with('success', $message);
@@ -3500,6 +3531,19 @@ class InvoiceController extends Controller
         }
     }
 
+    /* ============================================================
+     | EXPORTS — PDF / CSV
+     * ============================================================ */
+
+    /**
+     * Single source of truth for invoice queries used by exports.
+     * Delegates to the service so the UI and exports never drift.
+     */
+    private function buildInvoicesQuery(array $filters, User $user)
+    {
+        return $this->invoiceService->getInvoicesWithFilters($filters, $user);
+    }
+
     public function exportCurrentPage(Request $request)
     {
         try {
@@ -3507,16 +3551,19 @@ class InvoiceController extends Controller
                 return redirect()->back()->with('error', 'Unauthorized access.');
             }
 
-            $filters = $request->only(['property_id', 'status', 'period', 'search', 'type', 'has_parent', 'is_bulk', 'has_coverage']);
-            $user    = auth()->user();
+            $filters = $request->only([
+                'property_id', 'status', 'period', 'search', 'type',
+                'has_parent', 'is_bulk', 'has_coverage', 'has_discount', 'has_penalty',
+            ]);
+            $user = auth()->user();
 
-            $query   = $this->getInvoicesQuery($filters, $user);
+            $query   = $this->buildInvoicesQuery($filters, $user);
             $page    = $request->get('page', 1);
             $perPage = 15;
 
             $invoices   = $query->paginate($perPage, ['*'], 'page', $page);
             $statistics = $this->invoiceService->getInvoiceStatistics($user);
-            $settings   = SystemSetting::getSettings();
+            $settings   = $this->settings();
 
             $pdf = Pdf::loadView('admin.invoices.pdf-export', compact('invoices', 'statistics', 'settings', 'filters'));
 
@@ -3528,80 +3575,9 @@ class InvoiceController extends Controller
         }
     }
 
-    private function getInvoicesQuery(array $filters, User $user)
+    public function exportCurrentPagePdf(Request $request)
     {
-        $query = Invoice::with(['property', 'property.landlord', 'bulkPayment', 'childInvoices']);
-
-        if (!empty($filters['property_id'])) {
-            $query->where('property_id', $filters['property_id']);
-        }
-
-        if (!empty($filters['status'])) {
-            $query->where('status', $filters['status']);
-        } else {
-            $query->where('status', '!=', 'consolidated');
-        }
-
-        if (!empty($filters['period'])) {
-            $query->where('period', $filters['period']);
-        }
-
-        if (!empty($filters['type'])) {
-            if ($filters['type'] === 'bulk') {
-                $query->where('is_bulk_payment', true);
-            } elseif ($filters['type'] === 'regular') {
-                $query->where('is_bulk_payment', false)->whereNull('bulk_parent_id');
-            } elseif ($filters['type'] === 'child') {
-                $query->whereNotNull('bulk_parent_id');
-            }
-        }
-
-        if (!empty($filters['has_parent'])) {
-            if ($filters['has_parent'] === 'yes') {
-                $query->whereNotNull('bulk_parent_id');
-            } elseif ($filters['has_parent'] === 'no') {
-                $query->whereNull('bulk_parent_id');
-            }
-        }
-
-        if (!empty($filters['is_bulk'])) {
-            $query->where('is_bulk_payment', $filters['is_bulk'] === 'yes');
-        }
-
-        if (!empty($filters['has_coverage'])) {
-            if ($filters['has_coverage'] === 'yes') {
-                $query->where('is_bulk_payment', true)
-                      ->where('status', 'paid')
-                      ->whereNotNull('covers_periods')
-                      ->whereJsonLength('covers_periods', '>', 0);
-            } elseif ($filters['has_coverage'] === 'no') {
-                $query->where(function ($q) {
-                    $q->where('is_bulk_payment', false)
-                      ->orWhere('status', '!=', 'paid')
-                      ->orWhereNull('covers_periods')
-                      ->orWhereJsonLength('covers_periods', 0);
-                });
-            }
-        }
-
-        if (!empty($filters['search'])) {
-            $searchTerm = '%' . $filters['search'] . '%';
-            $query->where(function ($q) use ($searchTerm) {
-                $q->where('invoice_number', 'LIKE', $searchTerm)
-                  ->orWhere('payment_reference', 'LIKE', $searchTerm)
-                  ->orWhereHas('property', function ($propertyQuery) use ($searchTerm) {
-                      $propertyQuery->where('street_name', 'LIKE', $searchTerm)
-                                    ->orWhere('house_number', 'LIKE', $searchTerm);
-                  });
-            });
-        }
-
-        if (!$user->isSuperAdmin() && !$user->isAdmin() && $user->isLandlord()) {
-            $propertyIds = Property::where('landlord_id', $user->id)->pluck('id');
-            $query->whereIn('property_id', $propertyIds);
-        }
-
-        return $query->orderBy('due_date', 'desc');
+        return $this->exportCurrentPage($request);
     }
 
     public function exportAllFiltered(Request $request)
@@ -3611,12 +3587,15 @@ class InvoiceController extends Controller
                 return redirect()->back()->with('error', 'Unauthorized access.');
             }
 
-            $filters = $request->only(['property_id', 'status', 'period', 'search', 'type', 'has_parent', 'is_bulk', 'has_coverage']);
-            $user    = auth()->user();
+            $filters = $request->only([
+                'property_id', 'status', 'period', 'search', 'type',
+                'has_parent', 'is_bulk', 'has_coverage', 'has_discount', 'has_penalty',
+            ]);
+            $user = auth()->user();
 
-            $invoices   = $this->getInvoicesQuery($filters, $user)->get();
+            $invoices   = $this->buildInvoicesQuery($filters, $user)->get();
             $statistics = $this->invoiceService->getInvoiceStatistics($user);
-            $settings   = SystemSetting::getSettings();
+            $settings   = $this->settings();
 
             $pdf = Pdf::loadView('admin.invoices.pdf-export', compact('invoices', 'statistics', 'settings', 'filters'));
 
@@ -3626,6 +3605,11 @@ class InvoiceController extends Controller
             Log::error('Failed to export all filtered: ' . $e->getMessage());
             return redirect()->back()->with('error', 'Failed to generate PDF: ' . $e->getMessage());
         }
+    }
+
+    public function exportAllFilteredPdf(Request $request)
+    {
+        return $this->exportAllFiltered($request);
     }
 
     public function bulkExport(Request $request)
@@ -3671,7 +3655,7 @@ class InvoiceController extends Controller
                 return redirect()->back()->with('error', 'No invoices found.');
             }
 
-            $settings = SystemSetting::getSettings();
+            $settings = $this->settings();
 
             $pdf = Pdf::loadView('admin.invoices.pdf-export-selected', compact('invoices', 'settings'));
 
@@ -3701,6 +3685,16 @@ class InvoiceController extends Controller
         }
     }
 
+    public function bulkExportAdminPdf(Request $request)
+    {
+        return $this->bulkExport($request);
+    }
+
+    public function exportAdminInvoicePdf(Invoice $invoice)
+    {
+        return $this->exportSinglePdf($invoice);
+    }
+
     public function exportSinglePdf(Invoice $invoice)
     {
         try {
@@ -3718,7 +3712,7 @@ class InvoiceController extends Controller
             }
 
             $invoice->load(['property', 'property.landlord', 'payment', 'bulkPayment', 'childInvoices']);
-            $settings = SystemSetting::getSettings();
+            $settings = $this->settings();
 
             $pdf = Pdf::loadView($view, compact('invoice', 'settings'));
 
@@ -3730,6 +3724,38 @@ class InvoiceController extends Controller
                 'user_id'    => auth()->id(),
             ]);
             return redirect()->back()->with('error', 'Failed to generate PDF: ' . $e->getMessage());
+        }
+    }
+
+    public function bulkPrintAdmin(Request $request)
+    {
+        try {
+            if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
+                return redirect()->back()->with('error', 'Unauthorized access.');
+            }
+
+            $ids = array_filter(explode(',', $request->get('ids', '')), 'is_numeric');
+
+            if (empty($ids)) {
+                return redirect()->back()->with('error', 'No invoices selected.');
+            }
+
+            $invoices = Invoice::with(['property', 'property.landlord', 'payment'])
+                ->whereIn('id', $ids)
+                ->orderBy('period', 'desc')
+                ->get();
+
+            if ($invoices->isEmpty()) {
+                return redirect()->back()->with('error', 'No valid invoices found.');
+            }
+
+            $settings = $this->settings();
+
+            return view('admin.invoices.bulk-print', compact('invoices', 'settings'));
+
+        } catch (\Exception $e) {
+            Log::error('Bulk print failed: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Failed to prepare invoices for printing: ' . $e->getMessage());
         }
     }
 
@@ -3749,7 +3775,7 @@ class InvoiceController extends Controller
 
             $invoices   = $query->paginate($perPage, ['*'], 'page', $page);
             $statistics = $this->invoiceService->getInvoiceStatistics(auth()->user());
-            $settings   = SystemSetting::getSettings();
+            $settings   = $this->settings();
 
             $properties    = Property::where('landlord_id', $landlordId)->get();
             $bulkCoverages = $this->buildLandlordBulkCoverages($properties);
@@ -3781,7 +3807,7 @@ class InvoiceController extends Controller
 
             $invoices   = $this->getLandlordInvoicesQuery($landlordId, $filters)->get();
             $statistics = $this->invoiceService->getInvoiceStatistics(auth()->user());
-            $settings   = SystemSetting::getSettings();
+            $settings   = $this->settings();
 
             $properties    = Property::where('landlord_id', $landlordId)->get();
             $bulkCoverages = $this->buildLandlordBulkCoverages($properties);
@@ -3850,7 +3876,7 @@ class InvoiceController extends Controller
             }
 
             $statistics    = $this->invoiceService->getInvoiceStatistics(auth()->user());
-            $settings      = SystemSetting::getSettings();
+            $settings      = $this->settings();
             $properties    = Property::where('landlord_id', $landlordId)->get();
             $bulkCoverages = $this->buildLandlordBulkCoverages($properties);
 
@@ -3896,7 +3922,7 @@ class InvoiceController extends Controller
             }
 
             $invoice->load(['property', 'payment', 'bulkPayment', 'childInvoices']);
-            $settings = SystemSetting::getSettings();
+            $settings = $this->settings();
 
             $pdf = Pdf::loadView('landlord.invoices.pdf-single', compact('invoice', 'settings'));
 
@@ -3987,6 +4013,10 @@ class InvoiceController extends Controller
         return $bulkCoverages;
     }
 
+    /* ============================================================
+     | LANDLORD STATUS API
+     * ============================================================ */
+
     public function getLandlordInvoiceStatus(Invoice $invoice): JsonResponse
     {
         try {
@@ -4050,7 +4080,7 @@ class InvoiceController extends Controller
                     'outstanding_count' => $outstandingCount,
                     'overdue_count'     => $overdueCount,
                     'total_paid'        => $totalPaid,
-                    'currency_symbol'   => SystemSetting::getSettings()->currency_symbol ?? '₵',
+                    'currency_symbol'   => $this->settings()->currency_symbol ?? '₵',
                     'last_updated'      => now()->toDateTimeString(),
                 ],
             ]);
@@ -4095,7 +4125,7 @@ class InvoiceController extends Controller
             $coverageSummary    = [];
             $totalCoveredMonths = 0;
             $activeCoverages    = 0;
-            $settings           = SystemSetting::getSettings();
+            $settings           = $this->settings();
 
             foreach ($properties as $property) {
                 $coverages = $this->invoiceService->getActiveBulkCoverages($property);
@@ -4109,7 +4139,9 @@ class InvoiceController extends Controller
 
                     foreach ($coverages as $coverage) {
                         $periods          = $coverage['periods'] ?? [];
-                        $formattedPeriods = collect($periods)->map(fn ($p) => Carbon::parse($p . '-01')->format('F Y'))->toArray();
+                        $formattedPeriods = collect($periods)
+                            ->map(fn ($p) => Carbon::parse($p . '-01')->format('F Y'))
+                            ->toArray();
 
                         $coverageSummary[$property->id]['coverages'][] = [
                             'invoice_id'             => $coverage['invoice_id'],
@@ -4155,9 +4187,10 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        $archiveService = new YearEndArchiveService($this->settings, $this->notificationService);
-
-        $stats = $archiveService->getYearEndStatistics(null, YearEndArchiveService::TYPE_LANDLORD);
+        $stats = $this->yearEndArchiveService->getYearEndStatistics(
+            null,
+            YearEndArchiveService::TYPE_LANDLORD
+        );
 
         $unpaidInvoices = Invoice::where('status', '!=', Invoice::STATUS_PAID)
             ->where('status', '!=', 'cancelled')
@@ -4171,21 +4204,20 @@ class InvoiceController extends Controller
             ->paginate(20);
 
         $archiveLogs = collect();
-        if (class_exists(\App\Models\ArchiveCleanupLog::class)) {
-            try {
-                $archiveLogs = \App\Models\ArchiveCleanupLog::where('archive_type', 'landlord')
-                    ->orderBy('created_at', 'desc')
-                    ->limit(50)
-                    ->get();
-            } catch (\Exception $e) {
-                Log::warning('Could not fetch archive logs: ' . $e->getMessage());
-            }
-        }
+if (class_exists(\App\Models\ArchiveCleanupLog::class)) {
+    try {
+        $archiveLogs = \App\Models\ArchiveCleanupLog::orderBy('created_at', 'desc')
+            ->limit(50)
+            ->get();
+    } catch (\Throwable $e) {
+        Log::warning('Could not fetch archive logs: ' . $e->getMessage());
+    }
+}
 
         return view('admin.invoices.year-end-management', compact('stats', 'unpaidInvoices', 'archiveLogs'))
             ->with([
-                'system_settings' => $this->settings,
-                'settings'        => $this->settings,
+                'system_settings' => $this->settings(),
+                'settings'        => $this->settings(),
             ]);
     }
 
@@ -4201,8 +4233,10 @@ class InvoiceController extends Controller
 
         $year = $year ?? $request->input('year', now()->subYear()->year);
 
-        $archiveService = new YearEndArchiveService($this->settings, $this->notificationService);
-        $stats          = $archiveService->getYearEndStatistics($year, YearEndArchiveService::TYPE_LANDLORD);
+        $stats = $this->yearEndArchiveService->getYearEndStatistics(
+            $year,
+            YearEndArchiveService::TYPE_LANDLORD
+        );
 
         return response()->json(['success' => true, 'data' => $stats]);
     }
@@ -4213,16 +4247,11 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        // ── Sending reminders is a communication action — allows
-        //    contact with landlords regardless of the developer bill.
-        //    Deliberately NOT gated.
-
-        $type           = $request->input('type', 'landlord');
-        $archiveService = new YearEndArchiveService($this->settings, $this->notificationService);
+        $type = $request->input('type', 'landlord');
 
         $results = $type === 'landlord'
-            ? $archiveService->sendYearEndRemindersLandlord()
-            : $archiveService->sendYearEndRemindersTenant();
+            ? $this->yearEndArchiveService->sendYearEndRemindersLandlord()
+            : $this->yearEndArchiveService->sendYearEndRemindersTenant();
 
         $message = "Sent {$results['reminders_sent']} reminders ({$results['paid_reminders']} for paid, {$results['unpaid_reminders']} for unpaid)";
 
@@ -4292,14 +4321,14 @@ class InvoiceController extends Controller
 
         $properties = Property::where('status', 'active')->orderBy('street_name')->get();
 
-        $retentionMonths = $this->settings->paid_invoice_retention_months_landlord ?? 3;
+        $retentionMonths = $this->settings()->paid_invoice_retention_months_landlord ?? 3;
 
         return view('admin.invoices.unpaid-previous-years', compact(
             'invoices', 'totalOutstanding', 'uniqueProperties', 'oldestYear',
             'availableYears', 'properties', 'retentionMonths'
         ))->with([
-            'system_settings' => $this->settings,
-            'settings'        => $this->settings,
+            'system_settings' => $this->settings(),
+            'settings'        => $this->settings(),
         ]);
     }
 
@@ -4559,11 +4588,9 @@ class InvoiceController extends Controller
             return redirect()->back()->with('error', 'Unauthorized access.');
         }
 
-        // ✅ BILLING: block write when system billing is overdue
         $this->assertBillingAllowsWrite('process_post_payment_archive');
 
-        $archiveService = new YearEndArchiveService($this->settings, $this->notificationService);
-        $results        = $archiveService->processPostPaymentArchiveLandlord();
+        $results = $this->yearEndArchiveService->processPostPaymentArchiveLandlord();
 
         $message = "Post-payment archiving completed. Processed: {$results['total']}, Archived: {$results['archived']}";
         if ($results['errors'] > 0) {
@@ -4589,7 +4616,7 @@ class InvoiceController extends Controller
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
-        $retentionMonths = $this->settings->paid_invoice_retention_months_landlord ?? 3;
+        $retentionMonths = $this->settings()->paid_invoice_retention_months_landlord ?? 3;
         $cutoffDate      = now()->subMonths($retentionMonths);
 
         $invoices = Invoice::where('status', Invoice::STATUS_PAID)
@@ -4603,8 +4630,8 @@ class InvoiceController extends Controller
         $totalAmount = $invoices->sum('total_amount');
 
         return response()->json([
-            'success'          => true,
-            'invoices'         => $invoices->map(function ($invoice) {
+            'success'  => true,
+            'invoices' => $invoices->map(function ($invoice) {
                 return [
                     'id'               => $invoice->id,
                     'invoice_number'   => $invoice->invoice_number,
@@ -4613,12 +4640,12 @@ class InvoiceController extends Controller
                     'original_year'    => $invoice->year_end_archive_year,
                     'payment_date'     => $invoice->payment_date->format('Y-m-d'),
                     'amount'           => $invoice->total_amount,
-                    'formatted_amount' => $this->settings->formatAmount($invoice->total_amount),
+                    'formatted_amount' => $this->settings()->formatAmount($invoice->total_amount),
                 ];
             }),
             'total'            => $invoices->count(),
             'total_amount'     => $totalAmount,
-            'formatted_total'  => $this->settings->formatAmount($totalAmount),
+            'formatted_total'  => $this->settings()->formatAmount($totalAmount),
             'retention_months' => $retentionMonths,
         ]);
     }
@@ -4647,7 +4674,7 @@ class InvoiceController extends Controller
                     'landlord_name'    => $invoice->property->landlord->name ?? 'Unknown',
                     'period'           => $invoice->period,
                     'amount'           => $invoice->total_amount,
-                    'formatted_amount' => $this->settings->formatAmount($invoice->total_amount),
+                    'formatted_amount' => $this->settings()->formatAmount($invoice->total_amount),
                 ];
             }),
         ]);
@@ -4667,11 +4694,11 @@ class InvoiceController extends Controller
                 'id'                     => $invoice->id,
                 'invoice_number'         => $invoice->invoice_number,
                 'is_archived'            => !is_null($invoice->deleted_at),
-                'is_year_end_archived'   => !is_null($invoice->year_end_archived_at),
-                'year_end_archive_year'  => $invoice->year_end_archive_year,
-                'original_year'          => $invoice->original_year,
-                'archive_type'           => $invoice->archive_type,
-                'archived_at'            => $invoice->archived_at?->format('Y-m-d H:i:s'),
+                'is_year_end_archived'   => !is_null($invoice->year_end_archived_at ?? null),
+                'year_end_archive_year'  => $invoice->year_end_archive_year ?? null,
+                'original_year'          => $invoice->original_year ?? null,
+                'archive_type'           => $invoice->archive_type ?? null,
+                'archived_at'            => optional($invoice->archived_at ?? null)?->format('Y-m-d H:i:s'),
                 'deleted_at'             => $invoice->deleted_at?->format('Y-m-d H:i:s'),
                 'archive_record_exists'  => !is_null($archive),
                 'archive_record'         => $archive ? [
@@ -4683,4 +4710,24 @@ class InvoiceController extends Controller
             ],
         ]);
     }
+
+    /**
+ * Throw a 403-style redirect if offline payments are disabled and
+ * the caller is trying to mark an invoice as paid manually.
+ *
+ * Call this at the top of any method that records a manual payment:
+ *   - markAsPaid()
+ *   - bulkMarkAsPaid()
+ *   - bulkUpdateStatus()  (only when status === 'paid')
+ */
+protected function assertOfflinePaymentAllowed(string $context = 'record a payment'): void
+{
+    $settings = SystemSetting::getSettings();
+
+    if (!$settings->isOfflinePaymentAllowed()) {
+        abort(403, "Office payments are currently disabled. You cannot {$context}. "
+                 . "Landlords must use the online payment gateway.");
+    }
+}
+
 }

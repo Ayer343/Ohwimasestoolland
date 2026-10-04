@@ -47,6 +47,7 @@ class SystemSettingController extends Controller
         'enable_paystack',
         'enable_flutterwave',
         'enable_bulk_payments',
+        'allow_offline_payment',
     ];
 
     /**
@@ -1991,6 +1992,7 @@ class SystemSettingController extends Controller
         ]);
     }
 
+
     /* ============================================================
      | TOGGLE registration — admin write operation
      * ============================================================ */
@@ -2068,6 +2070,59 @@ class SystemSettingController extends Controller
                 ->with('error', '❌ Failed to update registration status.');
         }
     }
+
+        /**
+ * Toggle whether admins can mark invoices as paid manually (cash at the
+ * office, cheque, bank deposit). When disabled, landlords must pay through
+ * the online gateway.
+ *
+ * This is a non-financial admin action — it doesn't move money, it just
+ * controls whether a manual payment path is available. Deliberately NOT
+ * gated by the billing-access check, because blocking it would prevent
+ * the landlord from paying in person even when they owe money, which is
+ * worse than allowing it.
+ */
+public function toggleOfflinePayment(Request $request)
+{
+    if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
+        return redirect()->back()->with('error', 'Unauthorized access.');
+    }
+
+    $validator = Validator::make($request->all(), [
+        'allow_offline_payment' => 'required|boolean',
+    ]);
+
+    if ($validator->fails()) {
+        return redirect()->back()->withErrors($validator);
+    }
+
+    try {
+        $settings = SystemSetting::getSettings();
+        $oldValue = $settings->isOfflinePaymentAllowed();
+        $newValue = (bool) $request->allow_offline_payment;
+
+        $settings->allow_offline_payment = $newValue;
+        $settings->updated_by            = auth()->id();
+        $settings->save();
+
+        Log::info('Offline payment setting toggled', [
+            'old_value' => $oldValue,
+            'new_value' => $newValue,
+            'user_id'   => auth()->id(),
+            'user_name' => auth()->user()->name,
+        ]);
+
+        $message = $newValue
+            ? '✅ Office payments enabled. Admins can now mark invoices as paid manually.'
+            : '⚠️ Office payments blocked. Landlords must use the online payment gateway.';
+
+        return redirect()->back()->with('success', $message);
+
+    } catch (\Exception $e) {
+        Log::error('Failed to toggle offline payment: ' . $e->getMessage());
+        return redirect()->back()->with('error', 'Failed to update offline payment setting.');
+    }
+}
 
     /* ============================================================
      | GET registration status — read-only
@@ -2373,6 +2428,7 @@ class SystemSettingController extends Controller
             'enable_hubtel',
             'enable_paystack',
             'enable_flutterwave',
+            'allow_offline_payment',
         ];
 
         foreach ($changedFields as $field => $change) {
@@ -2462,6 +2518,8 @@ class SystemSettingController extends Controller
             'enable_bulk_payments',
             'max_bulk_months',
             'bulk_payment_discount',
+
+            'allow_offline_payment',
 
             'sms_notifications_enabled',
             'sms_reminder_enabled',
@@ -2567,6 +2625,7 @@ class SystemSettingController extends Controller
 
             'allow_registration' => 'Registration Status',
             'registration_disabled_message' => 'Registration Disabled Message',
+            'allow_offline_payment' => 'Office Payment Collection',
 
             'whatsapp_provider' => 'WhatsApp Provider',
             'twilio_sid' => 'Twilio SID',
@@ -2635,23 +2694,26 @@ class SystemSettingController extends Controller
                     $changes[] = "Reminder days: {$change['old']} → {$change['new']}";
                 }
             } else if (in_array($field, [
-                'enable_expresspay',
-                'enable_hubtel',
-                'enable_paystack',
-                'enable_flutterwave',
-                'sms_notifications_enabled',
-                'sms_reminder_enabled',
-                'sms_payment_confirmation_enabled',
-                'enable_whatsapp_notifications',
-                'whatsapp_reminder_enabled',
-            ])) {
-                $status = $change['new'] ? 'enabled' : 'disabled';
-                $changes[] = "{$fieldName} {$status}";
-            } else {
-                $oldValue = is_bool($change['old']) ? ($change['old'] ? 'Yes' : 'No') : $change['old'];
-                $newValue = is_bool($change['new']) ? ($change['new'] ? 'Yes' : 'No') : $change['new'];
-                $changes[] = "{$fieldName}: {$oldValue} → {$newValue}";
-            }
+    'enable_expresspay',
+    'enable_hubtel',
+    'enable_paystack',
+    'enable_flutterwave',
+    'sms_notifications_enabled',
+    'sms_reminder_enabled',
+    'sms_payment_confirmation_enabled',
+    'enable_whatsapp_notifications',
+    'whatsapp_reminder_enabled',
+])) {
+    $status = $change['new'] ? 'enabled' : 'disabled';
+    $changes[] = "{$fieldName} {$status}";
+} else if ($field === 'allow_offline_payment') {        // ← ADD THIS BRANCH
+    $status = $change['new'] ? 'enabled' : 'blocked';
+    $changes[] = "Office payments {$status}";
+} else {
+    $oldValue = is_bool($change['old']) ? ($change['old'] ? 'Yes' : 'No') : $change['old'];
+    $newValue = is_bool($change['new']) ? ($change['new'] ? 'Yes' : 'No') : $change['new'];
+    $changes[] = "{$fieldName}: {$oldValue} → {$newValue}";
+}
         }
 
         return implode(', ', array_slice($changes, 0, 3)) . (count($changes) > 3 ? ' and more...' : '');
@@ -3402,6 +3464,7 @@ class SystemSettingController extends Controller
             'bulk_payment_discount' => 'nullable|numeric|min:0|max:100',
 
             'allow_registration'            => 'sometimes|boolean',
+            'allow_offline_payment'         => 'sometimes|boolean',
             'registration_disabled_message' => 'nullable|string|max:500',
         ];
 

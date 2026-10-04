@@ -4,13 +4,11 @@
     $user = Auth::user();
     
     // ==================== DASHBOARD AWARE LOGIC ====================
-    // Detect which dashboard the user came from based on session or referrer
     $sourceDashboard = session('last_dashboard', 'tenant');
     $returnRoute = null;
     $returnLabel = 'Dashboard';
     $returnIcon = 'tachometer-alt';
     
-    // Check if user has multiple roles via the dual-mode system
     $roleBasedRoles = $user->roles ?? collect();
     $legacyType = $user->type;
     $legacyTypeRoleMap = [
@@ -24,17 +22,14 @@
     ];
     $legacyRoleSlug = $legacyTypeRoleMap[$legacyType] ?? null;
     
-    // Combine roles for multi-role detection
     $allRoleSlugs = $roleBasedRoles->pluck('slug')->toArray();
     if ($legacyRoleSlug && !in_array($legacyRoleSlug, $allRoleSlugs)) {
         $allRoleSlugs[] = $legacyRoleSlug;
     }
     $hasMultipleRoles = count($allRoleSlugs) > 1;
     
-    // Get current role from session (set by dashboard switcher)
     $currentRole = session('selected_role', $legacyRoleSlug ?? 'tenant');
     
-    // Role icon mapping
     $roleIcons = [
         'super-admin' => 'crown',
         'admin' => 'shield-alt',
@@ -55,7 +50,6 @@
         'developer' => 'System development',
     ];
     
-    // Build combined roles list for switcher
     $switcherRoles = [];
     $addedSlugs = [];
     
@@ -81,7 +75,6 @@
         }
     }
     
-    // Sort roles
     usort($switcherRoles, function($a, $b) {
         $order = ['super-admin' => 0, 'admin' => 1, 'landlord' => 2, 'tenant' => 3];
         $orderA = $order[$a->slug] ?? 99;
@@ -90,7 +83,6 @@
         return $orderA - $orderB;
     });
     
-    // Determine return route based on current role
     switch($currentRole) {
         case 'super-admin':
             $returnRoute = route('super-admin.dashboard');
@@ -133,7 +125,6 @@
             $returnIcon = 'user';
     }
     
-    // Title prefix based on current role
     $titlePrefix = ucfirst(str_replace('-', ' ', $currentRole));
     
     // Rental stats
@@ -150,7 +141,6 @@
         ->where('status', Rental::STATUS_ACTIVE)
         ->sum('monthly_rent');
     
-    // Get next payment date (assuming rent is due on the 1st of each month)
     $nextPayment = null;
     $activeRental = $user->rentals()
         ->where('status', Rental::STATUS_ACTIVE)
@@ -174,14 +164,13 @@
                     <p class="text-sm mt-1" style="color: var(--text-secondary);">Manage your account and rental information</p>
                 </div>
                 
-                <!-- Profile Completion & Status -->
                 <div class="flex items-center space-x-4 flex-wrap gap-3">
+                    <!-- ✅ THEME: Profile completion percentage -->
                     <div class="text-center">
                         <div class="text-2xl font-bold" style="color: var(--warning);" data-profile-completion>{{ $profileCompletion ?? 0 }}%</div>
                         <div class="text-xs" style="color: var(--text-secondary);">Profile Complete</div>
                     </div>
                     
-                    <!-- Dashboard Switcher (if user has multiple roles) -->
                     @if($hasMultipleRoles)
                     <div class="dashboard-switcher relative">
                         <button id="profileSwitcherBtn" 
@@ -211,7 +200,7 @@
                                         $icon = $roleIcons[$role->slug] ?? 'user';
                                     @endphp
                                     <button type="button"
-                                            class="dashboard-switch-option w-full text-left flex items-center gap-3 px-4 py-3 transition-all hover:bg-opacity-10 {{ $isActive ? 'active-option' : '' }}"
+                                            class="dashboard-switch-option w-full text-left flex items-center gap-3 px-4 py-3 transition-all {{ $isActive ? 'active-option' : '' }}"
                                             data-role="{{ $role->slug }}"
                                             data-current-role="{{ $currentRole }}"
                                             style="display: flex; color: var(--text-primary); {{ $isActive ? 'background-color: rgba(var(--warning-rgb), 0.1); border-left: 3px solid var(--warning);' : '' }}">
@@ -256,8 +245,10 @@
                         @foreach($profileStats['completion_details'] as $field => $detail)
                             @if($field !== 'total_weight' && $field !== 'completed_weight')
                                 <div class="flex items-center space-x-2" title="{{ $detail['completed'] ? 'Completed' : 'Incomplete' }}">
-                                    <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs
-                                        {{ $detail['completed'] ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400' }}">
+                                    <!-- ✅ THEME: Completed = success var, Incomplete = muted -->
+                                    <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs"
+                                         style="background-color: {{ $detail['completed'] ? 'rgba(var(--success-rgb), 0.15)' : 'rgba(var(--text-secondary-rgb, 150 150 150), 0.1)' }};
+                                                color: {{ $detail['completed'] ? 'var(--success)' : 'var(--text-secondary)' }};">
                                         <i class="fas {{ $detail['completed'] ? 'fa-check' : 'fa-times' }}"></i>
                                     </div>
                                     <span class="text-sm truncate" style="color: var(--text-secondary);">
@@ -275,13 +266,30 @@
             </div>
         </div>
 
+        @if(session('success'))
+            <div class="mb-6">
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle mr-2"></i>
+                    {{ session('success') }}
+                </div>
+            </div>
+        @endif
+
+        @if(session('error'))
+            <div class="mb-6">
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle mr-2"></i>
+                    {{ session('error') }}
+                </div>
+            </div>
+        @endif
+
         <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
             <!-- Left Column - Profile & Stats -->
             <div class="lg:col-span-1 space-y-6">
                 <!-- Profile Photo Card -->
                 <div class="card p-6">
                     <div class="text-center">
-                        <!-- Profile Photo with Lazy Loading -->
                         <div class="relative inline-block mb-4">
                             @php
                                 $photoUrl = $user->photo_url ?? null;
@@ -307,16 +315,15 @@
                                 </div>
                             @endif
                             
-                            <!-- Photo Upload Progress -->
                             <div id="uploadProgress" class="hidden mt-2">
                                 <div class="flex items-center justify-center space-x-2">
-                                    <div class="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                                    <!-- ✅ THEME: Spinner uses warning color -->
+                                    <div class="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style="border-color: var(--warning); border-top-color: transparent;"></div>
                                     <span class="text-sm" style="color: var(--text-secondary);">Uploading...</span>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- User Info -->
                         <h3 class="font-semibold mb-1" style="color: var(--text-primary);">{{ $user->name ?? 'No Name' }}</h3>
                         <div class="mb-4">
                             <span class="inline-block px-3 py-1 rounded-full text-xs font-medium mb-2" 
@@ -331,7 +338,6 @@
                             @endif
                         </div>
 
-                        <!-- Photo Actions -->
                         <div class="space-y-2">
                             <form id="updatePhotoForm" enctype="multipart/form-data" class="hidden">
                                 @csrf
@@ -353,20 +359,19 @@
                         </div>
                     </div>
                     
-                    <!-- Photo Tips -->
                     <div class="mt-4 text-xs" style="color: var(--text-secondary);">
                         <p class="flex items-center mb-1">
-                            <i class="fas fa-info-circle mr-2"></i>
+                            <i class="fas fa-info-circle mr-2" style="color: var(--warning);"></i>
                             Max size: 5MB
                         </p>
                         <p class="flex items-center">
-                            <i class="fas fa-check-circle mr-2"></i>
+                            <i class="fas fa-check-circle mr-2" style="color: var(--success);"></i>
                             Formats: JPEG, PNG, GIF, WebP
                         </p>
                     </div>
                 </div>
 
-                <!-- Role Information Card (for multi-role users) -->
+                <!-- Role Information Card -->
                 @if($hasMultipleRoles)
                 <div class="card p-6">
                     <h3 class="font-semibold mb-4" style="color: var(--text-primary);">
@@ -374,15 +379,11 @@
                     </h3>
                     <div class="flex flex-wrap gap-2 mb-4">
                         @foreach($switcherRoles as $role)
-                            <span class="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium
-                                @if($role->slug === 'landlord') bg-green-100 text-green-800
-                                @elseif($role->slug === 'admin') bg-blue-100 text-blue-800
-                                @elseif($role->slug === 'super-admin') bg-purple-100 text-purple-800
-                                @elseif($role->slug === 'field-agent') bg-cyan-100 text-cyan-800
-                                @elseif($role->slug === 'security-personnel') bg-orange-100 text-orange-800
-                                @elseif($role->slug === 'tenant') bg-yellow-100 text-yellow-800
-                                @else bg-gray-100 text-gray-800
-                                @endif">
+                            <!-- ✅ THEME: Role badges use theme variables -->
+                            <span class="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium"
+                                  style="background-color: rgba(var(--warning-rgb), 0.1);
+                                         color: var(--warning);
+                                         border: 1px solid rgba(var(--warning-rgb), 0.25);">
                                 <i class="fas fa-{{ $roleIcons[$role->slug] ?? 'user' }} mr-1"></i>
                                 {{ ucfirst(str_replace('-', ' ', $role->slug)) }}
                                 @if($role->slug === $currentRole)
@@ -392,7 +393,7 @@
                         @endforeach
                     </div>
                     <p class="text-xs" style="color: var(--text-secondary);">
-                        <i class="fas fa-info-circle mr-1"></i>
+                        <i class="fas fa-info-circle mr-1" style="color: var(--warning);"></i>
                         Use the dashboard switcher above to access different dashboards.
                     </p>
                 </div>
@@ -412,40 +413,42 @@
                             <i class="fas fa-home text-2xl" style="color: var(--warning);"></i>
                         </div>
                         
+                        <!-- ✅ THEME: Past rentals uses success var -->
                         <div class="flex justify-between items-center pb-3 border-b" style="border-color: var(--border-color);">
                             <div>
-                                <div class="text-xl font-bold text-green-500">
+                                <div class="text-xl font-bold" style="color: var(--success);">
                                     {{ $pastRentals }}
                                 </div>
                                 <div class="text-xs" style="color: var(--text-secondary);">Past Rentals</div>
                             </div>
-                            <i class="fas fa-history text-xl text-green-500"></i>
+                            <i class="fas fa-history text-xl" style="color: var(--success);"></i>
                         </div>
                         
+                        <!-- ✅ THEME: Monthly rent uses info var -->
                         <div class="flex justify-between items-center pb-3 border-b" style="border-color: var(--border-color);">
                             <div>
-                                <div class="text-xl font-bold text-blue-500">
+                                <div class="text-xl font-bold" style="color: var(--info);">
                                     GHS {{ number_format($totalRent, 2) }}
                                 </div>
                                 <div class="text-xs" style="color: var(--text-secondary);">Monthly Rent</div>
                             </div>
-                            <i class="fas fa-money-bill-wave text-xl text-blue-500"></i>
+                            <i class="fas fa-money-bill-wave text-xl" style="color: var(--info);"></i>
                         </div>
                         
                         @if($nextPayment)
+                        <!-- ✅ THEME: Next payment uses primary var -->
                         <div class="flex justify-between items-center">
                             <div>
-                                <div class="text-xl font-bold text-purple-500">
+                                <div class="text-xl font-bold" style="color: var(--primary);">
                                     {{ $nextPayment->format('M d') }}
                                 </div>
                                 <div class="text-xs" style="color: var(--text-secondary);">Next Payment Due</div>
                             </div>
-                            <i class="fas fa-calendar-alt text-xl text-purple-500"></i>
+                            <i class="fas fa-calendar-alt text-xl" style="color: var(--primary);"></i>
                         </div>
                         @endif
                     </div>
                     
-                    <!-- View Rentals Link -->
                     @if(Route::has('tenant.rentals.index'))
                         <a href="{{ route('tenant.rentals.index') }}" 
                            class="mt-4 btn-outline btn-sm w-full text-center">
@@ -465,12 +468,16 @@
                                 <span class="text-sm" style="color: var(--text-secondary);">Email</span>
                             </div>
                             @if($user->email_verified_at)
-                                <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-600">
+                                <!-- ✅ THEME: Verified pill -->
+                                <span class="px-2 py-1 text-xs rounded-full"
+                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
                                     <i class="fas fa-check mr-1"></i>Verified
                                 </span>
                             @else
+                                <!-- ✅ THEME: Pending pill -->
                                 <button onclick="sendEmailVerification()" 
-                                        class="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-600 hover:bg-yellow-200">
+                                        class="px-2 py-1 text-xs rounded-full transition"
+                                        style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
                                     <i class="fas fa-envelope mr-1"></i>Verify
                                 </button>
                             @endif
@@ -483,22 +490,25 @@
                                 <span class="text-sm" style="color: var(--text-secondary);">Phone</span>
                             </div>
                             @if($user->phone_verified_at)
-                                <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-600">
+                                <span class="px-2 py-1 text-xs rounded-full"
+                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
                                     <i class="fas fa-check mr-1"></i>Verified
                                 </span>
                             @else
                                 <div class="flex space-x-2">
                                     @if($user->phone)
                                         <button onclick="sendPhoneVerification()" 
-                                                class="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-600 hover:bg-yellow-200">
+                                                class="px-2 py-1 text-xs rounded-full transition"
+                                                style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
                                             <i class="fas fa-sms mr-1"></i>Send Code
                                         </button>
-                                        <button onclick="showVerifyModal()" 
-                                                class="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200">
+                                        <button onclick="showTab('contact'); showVerifyModal();" 
+                                                class="px-2 py-1 text-xs rounded-full transition"
+                                                style="background-color: rgba(var(--info-rgb), 0.15); color: var(--info);">
                                             <i class="fas fa-key mr-1"></i>Verify
                                         </button>
                                     @else
-                                        <span class="text-xs text-gray-500">Add phone first</span>
+                                        <span class="text-xs" style="color: var(--text-secondary);">Add phone first</span>
                                     @endif
                                 </div>
                             @endif
@@ -511,11 +521,12 @@
                                 <span class="text-sm" style="color: var(--text-secondary);">Tenant ID</span>
                             </div>
                             @if($user->metadata['tenant_id_verified'] ?? false)
-                                <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-600">
+                                <span class="px-2 py-1 text-xs rounded-full"
+                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
                                     <i class="fas fa-check mr-1"></i>Verified
                                 </span>
                             @else
-                                <span class="text-xs" style="color: var(--text-secondary);">
+                                <span class="text-xs font-mono" style="color: var(--text-secondary);">
                                     TN-{{ str_pad($user->id, 6, '0', STR_PAD_LEFT) }}
                                 </span>
                             @endif
@@ -564,10 +575,11 @@
                     <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Quick Actions</h3>
                     <div class="space-y-2">
                         @if(Route::has('tenant.payments.index'))
-                        <a href="{{ route('tenant.payments.index') }}" class="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition"
+                        <a href="{{ route('tenant.payments.index') }}" 
+                           class="flex items-center justify-between p-3 rounded-lg transition quick-action-item"
                            style="color: var(--text-secondary);">
                             <div class="flex items-center space-x-2">
-                                <i class="fas fa-credit-card text-green-500"></i>
+                                <i class="fas fa-credit-card" style="color: var(--success);"></i>
                                 <span>Make Payment</span>
                             </div>
                             <i class="fas fa-chevron-right text-xs"></i>
@@ -575,10 +587,11 @@
                         @endif
 
                         @if(Route::has('tenant.maintenance.create'))
-                        <a href="{{ route('tenant.maintenance.create') }}" class="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition"
+                        <a href="{{ route('tenant.maintenance.create') }}" 
+                           class="flex items-center justify-between p-3 rounded-lg transition quick-action-item"
                            style="color: var(--text-secondary);">
                             <div class="flex items-center space-x-2">
-                                <i class="fas fa-tools text-blue-500"></i>
+                                <i class="fas fa-tools" style="color: var(--info);"></i>
                                 <span>Request Maintenance</span>
                             </div>
                             <i class="fas fa-chevron-right text-xs"></i>
@@ -586,10 +599,11 @@
                         @endif
 
                         @if(Route::has('tenant.documents.index'))
-                        <a href="{{ route('tenant.documents.index') }}" class="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg transition"
+                        <a href="{{ route('tenant.documents.index') }}" 
+                           class="flex items-center justify-between p-3 rounded-lg transition quick-action-item"
                            style="color: var(--text-secondary);">
                             <div class="flex items-center space-x-2">
-                                <i class="fas fa-file-contract text-purple-500"></i>
+                                <i class="fas fa-file-contract" style="color: var(--primary);"></i>
                                 <span>View Documents</span>
                             </div>
                             <i class="fas fa-chevron-right text-xs"></i>
@@ -597,10 +611,11 @@
                         @endif
 
                         @if(Route::has('tenant.profile.data.download'))
-                        <button onclick="downloadTenantData()" class="flex items-center justify-between w-full p-3 hover:bg-gray-50 rounded-lg transition text-left"
-                           style="color: var(--text-secondary);">
+                        <button onclick="downloadTenantData()" 
+                                class="flex items-center justify-between w-full p-3 rounded-lg transition text-left quick-action-item"
+                                style="color: var(--text-secondary);">
                             <div class="flex items-center space-x-2">
-                                <i class="fas fa-download text-orange-500"></i>
+                                <i class="fas fa-download" style="color: var(--warning);"></i>
                                 <span>Download My Data</span>
                             </div>
                             <i class="fas fa-chevron-right text-xs"></i>
@@ -615,688 +630,694 @@
                 <!-- Tabs Navigation -->
                 <div class="mb-6 border-b" style="border-color: var(--border-color);">
                     <nav class="flex space-x-4 overflow-x-auto" id="tabNav">
-                        <button type="button" data-tab="personal" 
-                                class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap active-tab"
-                                style="border-color: var(--warning); color: var(--warning);">
+                        <button type="button" data-tab="personal" class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap active-tab">
                             <i class="fas fa-user mr-2"></i>Personal Info
                         </button>
-                        <button type="button" data-tab="contact" 
-                                class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap"
-                                style="border-color: transparent; color: var(--text-secondary);">
+                        <button type="button" data-tab="contact" class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-address-book mr-2"></i>Contact Info
                         </button>
-                        <button type="button" data-tab="tenant" 
-                                class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap"
-                                style="border-color: transparent; color: var(--text-secondary);">
+                        <button type="button" data-tab="tenant" class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-home mr-2"></i>Tenant Details
                         </button>
-                        <button type="button" data-tab="emergency" 
-                                class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap"
-                                style="border-color: transparent; color: var(--text-secondary);">
+                        <button type="button" data-tab="emergency" class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-phone-alt mr-2"></i>Emergency Contacts
                         </button>
-                        <button type="button" data-tab="password" 
-                                class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap"
-                                style="border-color: transparent; color: var(--text-secondary);">
+                        <button type="button" data-tab="password" class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-key mr-2"></i>Password
                         </button>
                     </nav>
                 </div>
 
-                <!-- Personal Information Form -->
-                <div class="card p-6 mb-6" id="personalPane">
-                    <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Personal Information</h3>
-                    
-                    <form action="{{ route('tenant.profile.personal.update') }}" method="POST" id="personalInfoForm">
-                        @csrf
-                        @method('PUT')
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div class="space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        Full Name *
-                                        <span class="text-xs text-gray-500">(As on official ID)</span>
-                                    </label>
-                                    <input type="text" name="name" value="{{ old('name', $user->name) }}" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           required>
-                                    @error('name')
-                                        <p class="text-red-500 text-xs mt-1">{{ $message }}</p>
-                                    @enderror
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        Date of Birth
-                                        <span class="text-xs text-gray-500">(Required for age verification)</span>
-                                    </label>
-                                    <input type="date" name="dob" 
-                                           value="{{ old('dob', $user->dob ? $user->dob->format('Y-m-d') : '') }}" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           max="{{ date('Y-m-d') }}">
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Gender</label>
-                                    <select name="gender" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                            style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
-                                        <option value="">Select Gender</option>
-                                        <option value="male" {{ old('gender', $user->gender) == 'male' ? 'selected' : '' }}>Male</option>
-                                        <option value="female" {{ old('gender', $user->gender) == 'female' ? 'selected' : '' }}>Female</option>
-                                        <option value="other" {{ old('gender', $user->gender) == 'other' ? 'selected' : '' }}>Other</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div class="space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        National ID Number
-                                        <span class="text-xs text-gray-500">(Optional)</span>
-                                    </label>
-                                    <input type="text" name="national_id" 
-                                           value="{{ old('national_id', $user->metadata['national_id'] ?? '') }}" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           placeholder="GHA-XXXXXXXX-X">
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        Passport Number
-                                        <span class="text-xs text-gray-500">(Optional, for foreign nationals)</span>
-                                    </label>
-                                    <input type="text" name="passport_number" 
-                                           value="{{ old('passport_number', $user->metadata['passport_number'] ?? '') }}" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           placeholder="Passport number">
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        Marital Status
-                                        <span class="text-xs text-gray-500">(Optional)</span>
-                                    </label>
-                                    <select name="marital_status" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                            style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
-                                        <option value="">Select Status</option>
-                                        <option value="single" {{ old('marital_status', $user->metadata['marital_status'] ?? '') == 'single' ? 'selected' : '' }}>Single</option>
-                                        <option value="married" {{ old('marital_status', $user->metadata['marital_status'] ?? '') == 'married' ? 'selected' : '' }}>Married</option>
-                                        <option value="divorced" {{ old('marital_status', $user->metadata['marital_status'] ?? '') == 'divorced' ? 'selected' : '' }}>Divorced</option>
-                                        <option value="widowed" {{ old('marital_status', $user->metadata['marital_status'] ?? '') == 'widowed' ? 'selected' : '' }}>Widowed</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="flex justify-end space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                            <button type="button" onclick="showTab('contact')" class="btn-outline">
-                                Next: Contact Info
-                            </button>
-                            <button type="submit" class="btn-warning" id="personalSubmitBtn">
-                                <i class="fas fa-save mr-2"></i>Save Changes
-                            </button>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Contact Information Form (Hidden by default) -->
-                <div class="card p-6 mb-6 hidden" id="contactPane">
-                    <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Contact Information</h3>
-                    
-                    <form action="{{ route('tenant.profile.contact.update') }}" method="POST" id="contactInfoForm">
-                        @csrf
-                        @method('PUT')
-                        
-                        <div class="space-y-6">
-                            <!-- Email -->
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    Email Address *
-                                    @if($user->email_verified_at)
-                                        <span class="ml-2 px-2 py-1 text-xs rounded-full bg-green-100 text-green-600">
-                                            <i class="fas fa-check mr-1"></i>Verified
-                                        </span>
-                                    @endif
-                                </label>
-                                <div class="flex space-x-2">
-                                    <input type="email" name="email" 
-                                           value="{{ old('email', $user->email) }}" 
-                                           class="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           required>
-                                    @if(!$user->email_verified_at)
-                                        <button type="button" onclick="sendEmailVerification()" 
-                                                class="px-4 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition">
-                                            Verify
-                                        </button>
-                                    @endif
-                                </div>
-                                <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                    For rental notifications and communications
-                                </div>
-                                @error('email')
-                                    <p class="text-red-500 text-xs mt-1">{{ $message }}</p>
-                                @enderror
-                            </div>
-
-                            <!-- Phone -->
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    Phone Number *
-                                    @if($user->phone_verified_at)
-                                        <span class="ml-2 px-2 py-1 text-xs rounded-full bg-green-100 text-green-600">
-                                            <i class="fas fa-check mr-1"></i>Verified
-                                        </span>
-                                    @endif
-                                </label>
-                                <div class="space-y-3">
-                                    <div class="flex space-x-2">
-                                        <input type="text" name="phone" id="phoneNumber"
-                                               value="{{ old('phone', $user->phone) }}" 
-                                               class="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                               required>
-                                        @if(!$user->phone_verified_at && $user->phone)
-                                            <button type="button" onclick="sendPhoneVerification()" 
-                                                    class="px-4 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition">
-                                                Send Code
-                                            </button>
-                                        @endif
-                                    </div>
-                                    
-                                    <!-- Verification Code Section -->
-                                    <div id="verificationCodeSection" class="hidden space-y-2">
-                                        <div class="flex space-x-2">
-                                            <input type="text" id="verificationCode" 
-                                                   placeholder="Enter 6-digit code"
-                                                   class="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition text-center text-lg font-mono"
-                                                   style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                                   maxlength="6">
-                                            <button type="button" onclick="verifyPhone()" 
-                                                    class="px-4 bg-green-500 text-white rounded-lg hover:bg-green-600 transition">
-                                                Verify
-                                            </button>
-                                        </div>
-                                        <div class="text-xs" style="color: var(--text-secondary);" id="timerDisplay">
-                                            Code expires in <span id="countdownTimer">10:00</span>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                    For SMS alerts and emergency contacts
-                                </div>
-                                @error('phone')
-                                    <p class="text-red-500 text-xs mt-1">{{ $message }}</p>
-                                @enderror
-                            </div>
-
-                            <!-- Location Info -->
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        Region
-                                    </label>
-                                    <input type="text" name="region" 
-                                           value="{{ old('region', $user->region) }}" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           placeholder="Your current region">
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        Digital Address
-                                        <span class="text-xs text-gray-500">(Ghana GPS)</span>
-                                    </label>
-                                    <input type="text" name="digital_address" 
-                                           value="{{ old('digital_address', $user->digital_address) }}" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           placeholder="e.g., GA-123-4567">
-                                </div>
-
-                                <div class="md:col-span-2">
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Current Address</label>
-                                    <input type="text" name="location" 
-                                           value="{{ old('location', $user->location) }}" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           placeholder="Current residential address">
-                                </div>
-                            </div>
-
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    Alternative Phone
-                                    <span class="text-xs text-gray-500">(Optional)</span>
-                                </label>
-                                <input type="text" name="alt_phone" 
-                                       value="{{ old('alt_phone', $user->metadata['alt_phone'] ?? '') }}" 
-                                       class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                       style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                       placeholder="Alternative contact number">
-                            </div>
-                        </div>
-
-                        <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                            <button type="button" onclick="showTab('personal')" class="btn-secondary">
-                                <i class="fas fa-arrow-left mr-2"></i>Back
-                            </button>
-                            <div class="space-x-3">
-                                <button type="button" onclick="showTab('tenant')" class="btn-outline">
-                                    Next: Tenant Details
-                                </button>
-                                <button type="submit" class="btn-warning" id="contactSubmitBtn">
-                                    <i class="fas fa-save mr-2"></i>Save Changes
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Tenant Details Form (Hidden by default) -->
-                <div class="card p-6 mb-6 hidden" id="tenantPane">
-                    <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Tenant Details</h3>
-                    
-                    <form action="{{ route('tenant.profile.tenant.update') }}" method="POST" id="tenantInfoForm">
-                        @csrf
-                        @method('PUT')
-                        
-                        <div class="space-y-6">
-                            <!-- Tenant Information -->
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        Tenant ID
-                                        <span class="text-xs text-gray-500">(Auto-generated)</span>
-                                    </label>
-                                    <input type="text" value="TN-{{ str_pad($user->id, 6, '0', STR_PAD_LEFT) }}" 
-                                           class="w-full p-3 border rounded-lg bg-gray-100"
-                                           style="color: var(--text-secondary); border-color: var(--border-color);"
-                                           disabled readonly>
-                                </div>
-
-                                <div>
-                                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                        Date Registered
-                                    </label>
-                                    <input type="text" value="{{ $user->created_at->format('M d, Y') }}" 
-                                           class="w-full p-3 border rounded-lg bg-gray-100"
-                                           style="color: var(--text-secondary); border-color: var(--border-color);"
-                                           disabled readonly>
-                                </div>
-                            </div>
-
-                            <!-- Occupation Information -->
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    Occupation Details
-                                </label>
+                <!-- Tab Content Wrapper -->
+                <div id="tabContent">
+                    <!-- Personal Information Tab -->
+                    <div class="tab-pane active" id="personalPane" data-tab-pane="personal">
+                        <div class="card p-6 mb-6">
+                            <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Personal Information</h3>
+                            
+                            <form action="{{ route('tenant.profile.personal.update') }}" method="POST" id="personalInfoForm">
+                                @csrf
+                                @method('PUT')
+                                
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Current Occupation</label>
-                                        <input type="text" name="occupation" 
-                                               value="{{ old('occupation', $user->metadata['occupation'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="e.g., Software Developer, Teacher, Business Owner">
+                                    <div class="space-y-4">
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                Full Name *
+                                                <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(As on official ID)</span>
+                                            </label>
+                                            <input type="text" name="name" value="{{ old('name', $user->name) }}" 
+                                                   class="form-input"
+                                                   required>
+                                            @error('name')
+                                                <p class="text-xs mt-1" style="color: var(--danger);">{{ $message }}</p>
+                                            @enderror
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                Date of Birth
+                                                <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Required for age verification)</span>
+                                            </label>
+                                            <input type="date" name="dob" 
+                                                   value="{{ old('dob', $user->dob ? $user->dob->format('Y-m-d') : '') }}" 
+                                                   class="form-input"
+                                                   max="{{ date('Y-m-d') }}">
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Gender</label>
+                                            <select name="gender" class="form-input">
+                                                <option value="">Select Gender</option>
+                                                <option value="male" {{ old('gender', $user->gender) == 'male' ? 'selected' : '' }}>Male</option>
+                                                <option value="female" {{ old('gender', $user->gender) == 'female' ? 'selected' : '' }}>Female</option>
+                                                <option value="other" {{ old('gender', $user->gender) == 'other' ? 'selected' : '' }}>Other</option>
+                                            </select>
+                                        </div>
                                     </div>
 
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Employer/Company</label>
-                                        <input type="text" name="employer" 
-                                               value="{{ old('employer', $user->metadata['employer'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="Name of employer or company">
-                                    </div>
+                                    <div class="space-y-4">
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                National ID Number
+                                                <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Optional)</span>
+                                            </label>
+                                            <input type="text" name="national_id" 
+                                                   value="{{ old('national_id', $user->metadata['national_id'] ?? '') }}" 
+                                                   class="form-input"
+                                                   placeholder="GHA-XXXXXXXX-X">
+                                        </div>
 
-                                    <div class="md:col-span-2">
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Work Address</label>
-                                        <input type="text" name="work_address" 
-                                               value="{{ old('work_address', $user->metadata['work_address'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="Your work address (optional)">
-                                    </div>
-                                </div>
-                            </div>
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                Passport Number
+                                                <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Optional, for foreign nationals)</span>
+                                            </label>
+                                            <input type="text" name="passport_number" 
+                                                   value="{{ old('passport_number', $user->metadata['passport_number'] ?? '') }}" 
+                                                   class="form-input"
+                                                   placeholder="Passport number">
+                                        </div>
 
-                            <!-- Rental Preferences -->
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    Rental Preferences
-                                    <span class="text-xs text-gray-500">(For future rental searches)</span>
-                                </label>
-                                <div class="space-y-3">
-                                    <div>
-                                        <label class="flex items-center space-x-2 cursor-pointer">
-                                            <input type="checkbox" name="preferences[]" value="pets_allowed"
-                                                   {{ ($user->metadata['preferences']['pets_allowed'] ?? false) ? 'checked' : '' }}
-                                                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                            <span class="text-sm" style="color: var(--text-secondary);">Interested in pet-friendly properties</span>
-                                        </label>
-                                    </div>
-                                    <div>
-                                        <label class="flex items-center space-x-2 cursor-pointer">
-                                            <input type="checkbox" name="preferences[]" value="parking_available"
-                                                   {{ ($user->metadata['preferences']['parking_available'] ?? false) ? 'checked' : '' }}
-                                                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                            <span class="text-sm" style="color: var(--text-secondary);">Need parking space</span>
-                                        </label>
-                                    </div>
-                                    <div>
-                                        <label class="flex items-center space-x-2 cursor-pointer">
-                                            <input type="checkbox" name="preferences[]" value="furnished"
-                                                   {{ ($user->metadata['preferences']['furnished'] ?? false) ? 'checked' : '' }}
-                                                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                            <span class="text-sm" style="color: var(--text-secondary);">Prefer furnished apartments</span>
-                                        </label>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Tenant Notes -->
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    Additional Information
-                                    <span class="text-xs text-gray-500">(Any special requirements or notes)</span>
-                                </label>
-                                <textarea name="tenant_notes" rows="3"
-                                          class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                          style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                          placeholder="Any special requirements, medical conditions, or other information...">{{ old('tenant_notes', $user->metadata['tenant_notes'] ?? '') }}</textarea>
-                            </div>
-                        </div>
-
-                        <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                            <button type="button" onclick="showTab('contact')" class="btn-secondary">
-                                <i class="fas fa-arrow-left mr-2"></i>Back
-                            </button>
-                            <div class="space-x-3">
-                                <button type="button" onclick="showTab('emergency')" class="btn-outline">
-                                    Next: Emergency Contacts
-                                </button>
-                                <button type="submit" class="btn-warning" id="tenantSubmitBtn">
-                                    <i class="fas fa-save mr-2"></i>Save Changes
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Emergency Contacts Form (Hidden by default) -->
-                <div class="card p-6 mb-6 hidden" id="emergencyPane">
-                    <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Emergency Contacts</h3>
-                    
-                    <form action="{{ route('tenant.profile.emergency.update') }}" method="POST" id="emergencyInfoForm">
-                        @csrf
-                        @method('PUT')
-                        
-                        <div class="space-y-6">
-                            <!-- Primary Emergency Contact -->
-                            <div class="p-4 rounded-lg border" style="border-color: var(--border-color); background-color: var(--bg-secondary);">
-                                <h4 class="font-medium mb-3" style="color: var(--text-primary);">Primary Emergency Contact</h4>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Full Name *</label>
-                                        <input type="text" name="emergency_contact_name" 
-                                               value="{{ old('emergency_contact_name', $user->metadata['emergency_contact_name'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: white; color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="Full name of contact person"
-                                               required>
-                                    </div>
-
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Phone Number *</label>
-                                        <input type="text" name="emergency_contact_phone" 
-                                               value="{{ old('emergency_contact_phone', $user->metadata['emergency_contact_phone'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: white; color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="Phone number"
-                                               required>
-                                    </div>
-
-                                    <div class="md:col-span-2">
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Relationship *</label>
-                                        <select name="emergency_contact_relationship" 
-                                                class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                                style="background-color: white; color: var(--text-primary); border-color: var(--border-color);"
-                                                required>
-                                            <option value="">Select Relationship</option>
-                                            <option value="spouse" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'spouse' ? 'selected' : '' }}>Spouse</option>
-                                            <option value="parent" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'parent' ? 'selected' : '' }}>Parent</option>
-                                            <option value="sibling" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'sibling' ? 'selected' : '' }}>Sibling</option>
-                                            <option value="child" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'child' ? 'selected' : '' }}>Child</option>
-                                            <option value="friend" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'friend' ? 'selected' : '' }}>Friend</option>
-                                            <option value="colleague" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'colleague' ? 'selected' : '' }}>Colleague</option>
-                                            <option value="other" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'other' ? 'selected' : '' }}>Other</option>
-                                        </select>
-                                    </div>
-
-                                    <div class="md:col-span-2">
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Address</label>
-                                        <input type="text" name="emergency_contact_address" 
-                                               value="{{ old('emergency_contact_address', $user->metadata['emergency_contact_address'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: white; color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="Contact person's address (optional)">
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Secondary Emergency Contact -->
-                            <div class="p-4 rounded-lg border" style="border-color: var(--border-color); background-color: var(--bg-secondary);">
-                                <h4 class="font-medium mb-3" style="color: var(--text-primary);">Secondary Emergency Contact (Optional)</h4>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Full Name</label>
-                                        <input type="text" name="secondary_emergency_name" 
-                                               value="{{ old('secondary_emergency_name', $user->metadata['secondary_emergency_name'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: white; color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="Full name">
-                                    </div>
-
-                                    <div>
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Phone Number</label>
-                                        <input type="text" name="secondary_emergency_phone" 
-                                               value="{{ old('secondary_emergency_phone', $user->metadata['secondary_emergency_phone'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: white; color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="Phone number">
-                                    </div>
-
-                                    <div class="md:col-span-2">
-                                        <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Relationship</label>
-                                        <select name="secondary_emergency_relationship" 
-                                                class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                                style="background-color: white; color: var(--text-primary); border-color: var(--border-color);">
-                                            <option value="">Select Relationship</option>
-                                            <option value="spouse" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'spouse' ? 'selected' : '' }}>Spouse</option>
-                                            <option value="parent" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'parent' ? 'selected' : '' }}>Parent</option>
-                                            <option value="sibling" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'sibling' ? 'selected' : '' }}>Sibling</option>
-                                            <option value="child" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'child' ? 'selected' : '' }}>Child</option>
-                                            <option value="friend" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'friend' ? 'selected' : '' }}>Friend</option>
-                                            <option value="colleague" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'colleague' ? 'selected' : '' }}>Colleague</option>
-                                            <option value="other" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'other' ? 'selected' : '' }}>Other</option>
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Medical Information -->
-                            <div>
-                                <h4 class="font-medium mb-3" style="color: var(--text-primary);">Medical Information (Optional)</h4>
-                                <div class="space-y-3">
-                                    <div>
-                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                            Medical Conditions
-                                            <span class="text-xs text-gray-500">(Any conditions we should be aware of)</span>
-                                        </label>
-                                        <textarea name="medical_conditions" rows="2"
-                                                  class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                                  style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                                  placeholder="List any medical conditions, allergies, or special requirements">{{ old('medical_conditions', $user->metadata['medical_conditions'] ?? '') }}</textarea>
-                                    </div>
-
-                                    <div>
-                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                            Insurance Information
-                                            <span class="text-xs text-gray-500">(Health insurance details)</span>
-                                        </label>
-                                        <input type="text" name="insurance_info" 
-                                               value="{{ old('insurance_info', $user->metadata['insurance_info'] ?? '') }}" 
-                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="Insurance provider and policy number (optional)">
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                            <button type="button" onclick="showTab('tenant')" class="btn-secondary">
-                                <i class="fas fa-arrow-left mr-2"></i>Back
-                            </button>
-                            <div class="space-x-3">
-                                <button type="button" onclick="showTab('password')" class="btn-outline">
-                                    Next: Security
-                                </button>
-                                <button type="submit" class="btn-warning" id="emergencySubmitBtn">
-                                    <i class="fas fa-save mr-2"></i>Save Contacts
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Password Change Form (Hidden by default) -->
-                <div class="card p-6 mb-6 hidden" id="passwordPane">
-                    <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Change Password</h3>
-                    
-                    <!-- Password Strength Meter -->
-                    <div class="mb-6 p-4 rounded-lg" style="background-color: var(--bg-secondary);">
-                        <h4 class="font-medium mb-2" style="color: var(--text-primary);">Password Requirements</h4>
-                        <ul class="text-sm space-y-1" style="color: var(--text-secondary);">
-                            <li class="flex items-center">
-                                <i class="fas fa-check text-green-500 mr-2"></i>
-                                At least 8 characters
-                            </li>
-                            <li class="flex items-center">
-                                <i class="fas fa-check text-green-500 mr-2"></i>
-                                Uppercase and lowercase letters
-                            </li>
-                            <li class="flex items-center">
-                                <i class="fas fa-check text-green-500 mr-2"></i>
-                                At least one number
-                            </li>
-                            <li class="flex items-center">
-                                <i class="fas fa-check text-green-500 mr-2"></i>
-                                At least one special character
-                            </li>
-                        </ul>
-                    </div>
-                    
-                    <form action="{{ route('tenant.profile.password.update') }}" method="POST" id="passwordFormElement">
-                        @csrf
-                        @method('PUT')
-                        
-                        <div class="space-y-4">
-                            <!-- Current Password -->
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    Current Password *
-                                    <button type="button" onclick="togglePassword('currentPassword')" 
-                                            class="ml-2 text-xs" style="color: var(--warning);">
-                                        <i class="fas fa-eye"></i> Show
-                                    </button>
-                                </label>
-                                <div class="relative">
-                                    <input type="password" name="current_password" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition pr-10"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           required id="currentPassword">
-                                </div>
-                                @error('current_password')
-                                    <p class="text-red-500 text-xs mt-1">{{ $message }}</p>
-                                @enderror
-                            </div>
-
-                            <!-- New Password -->
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    New Password *
-                                    <button type="button" onclick="togglePassword('newPassword')" 
-                                            class="ml-2 text-xs" style="color: var(--warning);">
-                                        <i class="fas fa-eye"></i> Show
-                                    </button>
-                                </label>
-                                <div class="relative">
-                                    <input type="password" name="password" 
-                                           class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition pr-10"
-                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                           required id="newPassword"
-                                           onkeyup="checkPasswordStrength(this.value)">
-                                    <!-- Password Strength Meter -->
-                                    <div class="mt-2 hidden" id="passwordStrength">
-                                        <div class="flex items-center space-x-2">
-                                            <div class="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                                                <div class="h-full rounded-full" id="strengthBar"></div>
-                                            </div>
-                                            <span class="text-xs font-medium" id="strengthText"></span>
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                Marital Status
+                                                <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Optional)</span>
+                                            </label>
+                                            <select name="marital_status" class="form-input">
+                                                <option value="">Select Status</option>
+                                                <option value="single" {{ old('marital_status', $user->metadata['marital_status'] ?? '') == 'single' ? 'selected' : '' }}>Single</option>
+                                                <option value="married" {{ old('marital_status', $user->metadata['marital_status'] ?? '') == 'married' ? 'selected' : '' }}>Married</option>
+                                                <option value="divorced" {{ old('marital_status', $user->metadata['marital_status'] ?? '') == 'divorced' ? 'selected' : '' }}>Divorced</option>
+                                                <option value="widowed" {{ old('marital_status', $user->metadata['marital_status'] ?? '') == 'widowed' ? 'selected' : '' }}>Widowed</option>
+                                            </select>
                                         </div>
                                     </div>
                                 </div>
-                                @error('password')
-                                    <p class="text-red-500 text-xs mt-1">{{ $message }}</p>
-                                @enderror
-                            </div>
 
-                            <!-- Confirm Password -->
-                            <div>
-                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                    Confirm New Password *
-                                    <button type="button" onclick="togglePassword('confirmPassword')" 
-                                            class="ml-2 text-xs" style="color: var(--warning);">
-                                        <i class="fas fa-eye"></i> Show
+                                <div class="flex justify-end space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
+                                    <button type="button" 
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('contact');" 
+                                            class="btn-outline">
+                                        Next: Contact Info <i class="fas fa-arrow-right ml-1"></i>
                                     </button>
-                                </label>
-                                <input type="password" name="password_confirmation" 
-                                       class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-                                       style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                       required id="confirmPassword">
-                            </div>
-
-                            <!-- Form Actions -->
-                            <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                <button type="button" onclick="showTab('emergency')" class="btn-secondary">
-                                    <i class="fas fa-arrow-left mr-2"></i>Back
-                                </button>
-                                <button type="submit" class="btn-warning" id="passwordSubmitBtn">
-                                    <i class="fas fa-key mr-2"></i>Change Password
-                                </button>
-                            </div>
+                                    <button type="submit" class="btn-warning" id="personalSubmitBtn">
+                                        <i class="fas fa-save mr-2"></i>Save Changes
+                                    </button>
+                                </div>
+                            </form>
                         </div>
-                    </form>
-                </div>
+                    </div>
+
+                    <!-- Contact Information Tab -->
+                    <div class="tab-pane hidden" id="contactPane" data-tab-pane="contact">
+                        <div class="card p-6 mb-6">
+                            <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Contact Information</h3>
+                            
+                            <form action="{{ route('tenant.profile.contact.update') }}" method="POST" id="contactInfoForm">
+                                @csrf
+                                @method('PUT')
+                                
+                                <div class="space-y-6">
+                                    <!-- Email -->
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Email Address *
+                                            @if($user->email_verified_at)
+                                                <span class="ml-2 px-2 py-1 text-xs rounded-full"
+                                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                                    <i class="fas fa-check mr-1"></i>Verified
+                                                </span>
+                                            @endif
+                                        </label>
+                                        <div class="flex space-x-2">
+                                            <input type="email" name="email" 
+                                                   value="{{ old('email', $user->email) }}" 
+                                                   class="form-input flex-1"
+                                                   required>
+                                            @if(!$user->email_verified_at)
+                                                <button type="button" onclick="sendEmailVerification()" 
+                                                        class="btn-warning">
+                                                    Verify
+                                                </button>
+                                            @endif
+                                        </div>
+                                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                            For rental notifications and communications
+                                        </div>
+                                        @error('email')
+                                            <p class="text-xs mt-1" style="color: var(--danger);">{{ $message }}</p>
+                                        @enderror
+                                    </div>
+
+                                    <!-- Phone -->
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Phone Number *
+                                            @if($user->phone_verified_at)
+                                                <span class="ml-2 px-2 py-1 text-xs rounded-full"
+                                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                                    <i class="fas fa-check mr-1"></i>Verified
+                                                </span>
+                                            @endif
+                                        </label>
+                                        <div class="space-y-3">
+                                            <div class="flex space-x-2">
+                                                <input type="text" name="phone" id="phoneNumber"
+                                                       value="{{ old('phone', $user->phone) }}" 
+                                                       class="form-input flex-1"
+                                                       required>
+                                                @if(!$user->phone_verified_at && $user->phone)
+                                                    <button type="button" onclick="sendPhoneVerification()" 
+                                                            class="btn-warning">
+                                                        Send Code
+                                                    </button>
+                                                @endif
+                                            </div>
+                                            
+                                            <!-- Inline Verification Section -->
+                                            <div id="verificationCodeSection" class="hidden space-y-2">
+                                                <div class="flex space-x-2">
+                                                    <input type="text" id="verificationCode" 
+                                                           placeholder="Enter 6-digit code"
+                                                           class="form-input flex-1 text-center text-lg font-mono"
+                                                           maxlength="6">
+                                                    <button type="button" onclick="verifyPhone()" 
+                                                            class="btn-success">
+                                                        <i class="fas fa-check-circle mr-1"></i>Verify
+                                                    </button>
+                                                </div>
+                                                <div class="flex justify-between items-center">
+                                                    <button type="button" onclick="resendVerificationCode()" 
+                                                            class="text-xs hover:underline" style="color: var(--warning);">
+                                                        <i class="fas fa-redo mr-1"></i>Resend Code
+                                                    </button>
+                                                    <div class="text-xs" style="color: var(--text-secondary);" id="timerDisplay">
+                                                        Code expires in <span id="countdownTimer">10:00</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                            For SMS alerts and emergency contacts
+                                        </div>
+                                        @error('phone')
+                                            <p class="text-xs mt-1" style="color: var(--danger);">{{ $message }}</p>
+                                        @enderror
+                                    </div>
+
+                                    <!-- Location Info -->
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                Region
+                                            </label>
+                                            <input type="text" name="region" 
+                                                   value="{{ old('region', $user->region) }}" 
+                                                   class="form-input"
+                                                   placeholder="Your current region">
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                Digital Address
+                                                <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Ghana GPS)</span>
+                                            </label>
+                                            <input type="text" name="digital_address" 
+                                                   value="{{ old('digital_address', $user->digital_address) }}" 
+                                                   class="form-input"
+                                                   placeholder="e.g., GA-123-4567">
+                                        </div>
+
+                                        <div class="md:col-span-2">
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Current Address</label>
+                                            <input type="text" name="location" 
+                                                   value="{{ old('location', $user->location) }}" 
+                                                   class="form-input"
+                                                   placeholder="Current residential address">
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Alternative Phone
+                                            <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Optional)</span>
+                                        </label>
+                                        <input type="text" name="alt_phone" 
+                                               value="{{ old('alt_phone', $user->metadata['alt_phone'] ?? '') }}" 
+                                               class="form-input"
+                                               placeholder="Alternative contact number">
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
+                                    <button type="button" 
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('personal');" 
+                                            class="btn-secondary">
+                                        <i class="fas fa-arrow-left mr-2"></i>Back
+                                    </button>
+                                    <div class="space-x-3">
+                                        <button type="button" 
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('tenant');" 
+                                                class="btn-outline">
+                                            Next: Tenant Details <i class="fas fa-arrow-right ml-1"></i>
+                                        </button>
+                                        <button type="submit" class="btn-warning" id="contactSubmitBtn">
+                                            <i class="fas fa-save mr-2"></i>Save Changes
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Tenant Details Tab -->
+                    <div class="tab-pane hidden" id="tenantPane" data-tab-pane="tenant">
+                        <div class="card p-6 mb-6">
+                            <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Tenant Details</h3>
+                            
+                            <form action="{{ route('tenant.profile.tenant.update') }}" method="POST" id="tenantInfoForm">
+                                @csrf
+                                @method('PUT')
+                                
+                                <div class="space-y-6">
+                                    <!-- Tenant Information -->
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                Tenant ID
+                                                <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Auto-generated)</span>
+                                            </label>
+                                            <!-- ✅ THEME: Read-only input -->
+                                            <input type="text" value="TN-{{ str_pad($user->id, 6, '0', STR_PAD_LEFT) }}" 
+                                                   class="form-input"
+                                                   style="background-color: var(--bg-tertiary); color: var(--text-secondary); cursor: not-allowed;"
+                                                   disabled readonly>
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                Date Registered
+                                            </label>
+                                            <input type="text" value="{{ $user->created_at->format('M d, Y') }}" 
+                                                   class="form-input"
+                                                   style="background-color: var(--bg-tertiary); color: var(--text-secondary); cursor: not-allowed;"
+                                                   disabled readonly>
+                                        </div>
+                                    </div>
+
+                                    <!-- Occupation Information -->
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Occupation Details
+                                        </label>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div>
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Current Occupation</label>
+                                                <input type="text" name="occupation" 
+                                                       value="{{ old('occupation', $user->metadata['occupation'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="e.g., Software Developer, Teacher, Business Owner">
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Employer/Company</label>
+                                                <input type="text" name="employer" 
+                                                       value="{{ old('employer', $user->metadata['employer'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="Name of employer or company">
+                                            </div>
+
+                                            <div class="md:col-span-2">
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Work Address</label>
+                                                <input type="text" name="work_address" 
+                                                       value="{{ old('work_address', $user->metadata['work_address'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="Your work address (optional)">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Rental Preferences -->
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Rental Preferences
+                                            <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(For future rental searches)</span>
+                                        </label>
+                                        <div class="space-y-3">
+                                            <div>
+                                                <label class="flex items-center space-x-2 cursor-pointer">
+                                                    <input type="checkbox" name="preferences[]" value="pets_allowed"
+                                                           {{ ($user->metadata['preferences']['pets_allowed'] ?? false) ? 'checked' : '' }}
+                                                           class="form-checkbox">
+                                                    <span class="text-sm" style="color: var(--text-secondary);">Interested in pet-friendly properties</span>
+                                                </label>
+                                            </div>
+                                            <div>
+                                                <label class="flex items-center space-x-2 cursor-pointer">
+                                                    <input type="checkbox" name="preferences[]" value="parking_available"
+                                                           {{ ($user->metadata['preferences']['parking_available'] ?? false) ? 'checked' : '' }}
+                                                           class="form-checkbox">
+                                                    <span class="text-sm" style="color: var(--text-secondary);">Need parking space</span>
+                                                </label>
+                                            </div>
+                                            <div>
+                                                <label class="flex items-center space-x-2 cursor-pointer">
+                                                    <input type="checkbox" name="preferences[]" value="furnished"
+                                                           {{ ($user->metadata['preferences']['furnished'] ?? false) ? 'checked' : '' }}
+                                                           class="form-checkbox">
+                                                    <span class="text-sm" style="color: var(--text-secondary);">Prefer furnished apartments</span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Tenant Notes -->
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Additional Information
+                                            <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Any special requirements or notes)</span>
+                                        </label>
+                                        <textarea name="tenant_notes" rows="3"
+                                                  class="form-input"
+                                                  placeholder="Any special requirements, medical conditions, or other information...">{{ old('tenant_notes', $user->metadata['tenant_notes'] ?? '') }}</textarea>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
+                                    <button type="button" 
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('contact');" 
+                                            class="btn-secondary">
+                                        <i class="fas fa-arrow-left mr-2"></i>Back
+                                    </button>
+                                    <div class="space-x-3">
+                                        <button type="button" 
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('emergency');" 
+                                                class="btn-outline">
+                                            Next: Emergency Contacts <i class="fas fa-arrow-right ml-1"></i>
+                                        </button>
+                                        <button type="submit" class="btn-warning" id="tenantSubmitBtn">
+                                            <i class="fas fa-save mr-2"></i>Save Changes
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Emergency Contacts Tab -->
+                    <div class="tab-pane hidden" id="emergencyPane" data-tab-pane="emergency">
+                        <div class="card p-6 mb-6">
+                            <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Emergency Contacts</h3>
+                            
+                            <form action="{{ route('tenant.profile.emergency.update') }}" method="POST" id="emergencyInfoForm">
+                                @csrf
+                                @method('PUT')
+                                
+                                <div class="space-y-6">
+                                    <!-- Primary Emergency Contact -->
+                                    <div class="p-4 rounded-lg border" 
+                                         style="border-color: var(--border-color); background-color: var(--bg-tertiary);">
+                                        <h4 class="font-medium mb-3" style="color: var(--text-primary);">
+                                            <i class="fas fa-user-shield mr-2" style="color: var(--warning);"></i>
+                                            Primary Emergency Contact
+                                        </h4>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Full Name *</label>
+                                                <input type="text" name="emergency_contact_name" 
+                                                       value="{{ old('emergency_contact_name', $user->metadata['emergency_contact_name'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="Full name of contact person"
+                                                       required>
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Phone Number *</label>
+                                                <input type="text" name="emergency_contact_phone" 
+                                                       value="{{ old('emergency_contact_phone', $user->metadata['emergency_contact_phone'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="Phone number"
+                                                       required>
+                                            </div>
+
+                                            <div class="md:col-span-2">
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Relationship *</label>
+                                                <select name="emergency_contact_relationship" class="form-input" required>
+                                                    <option value="">Select Relationship</option>
+                                                    <option value="spouse" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'spouse' ? 'selected' : '' }}>Spouse</option>
+                                                    <option value="parent" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'parent' ? 'selected' : '' }}>Parent</option>
+                                                    <option value="sibling" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'sibling' ? 'selected' : '' }}>Sibling</option>
+                                                    <option value="child" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'child' ? 'selected' : '' }}>Child</option>
+                                                    <option value="friend" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'friend' ? 'selected' : '' }}>Friend</option>
+                                                    <option value="colleague" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'colleague' ? 'selected' : '' }}>Colleague</option>
+                                                    <option value="other" {{ old('emergency_contact_relationship', $user->metadata['emergency_contact_relationship'] ?? '') == 'other' ? 'selected' : '' }}>Other</option>
+                                                </select>
+                                            </div>
+
+                                            <div class="md:col-span-2">
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Address</label>
+                                                <input type="text" name="emergency_contact_address" 
+                                                       value="{{ old('emergency_contact_address', $user->metadata['emergency_contact_address'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="Contact person's address (optional)">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Secondary Emergency Contact -->
+                                    <div class="p-4 rounded-lg border" 
+                                         style="border-color: var(--border-color); background-color: var(--bg-tertiary);">
+                                        <h4 class="font-medium mb-3" style="color: var(--text-primary);">
+                                            <i class="fas fa-user-friends mr-2" style="color: var(--info);"></i>
+                                            Secondary Emergency Contact (Optional)
+                                        </h4>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Full Name</label>
+                                                <input type="text" name="secondary_emergency_name" 
+                                                       value="{{ old('secondary_emergency_name', $user->metadata['secondary_emergency_name'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="Full name">
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Phone Number</label>
+                                                <input type="text" name="secondary_emergency_phone" 
+                                                       value="{{ old('secondary_emergency_phone', $user->metadata['secondary_emergency_phone'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="Phone number">
+                                            </div>
+
+                                            <div class="md:col-span-2">
+                                                <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Relationship</label>
+                                                <select name="secondary_emergency_relationship" class="form-input">
+                                                    <option value="">Select Relationship</option>
+                                                    <option value="spouse" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'spouse' ? 'selected' : '' }}>Spouse</option>
+                                                    <option value="parent" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'parent' ? 'selected' : '' }}>Parent</option>
+                                                    <option value="sibling" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'sibling' ? 'selected' : '' }}>Sibling</option>
+                                                    <option value="child" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'child' ? 'selected' : '' }}>Child</option>
+                                                    <option value="friend" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'friend' ? 'selected' : '' }}>Friend</option>
+                                                    <option value="colleague" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'colleague' ? 'selected' : '' }}>Colleague</option>
+                                                    <option value="other" {{ old('secondary_emergency_relationship', $user->metadata['secondary_emergency_relationship'] ?? '') == 'other' ? 'selected' : '' }}>Other</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Medical Information -->
+                                    <div>
+                                        <h4 class="font-medium mb-3" style="color: var(--text-primary);">
+                                            <i class="fas fa-notes-medical mr-2" style="color: var(--danger);"></i>
+                                            Medical Information (Optional)
+                                        </h4>
+                                        <div class="space-y-3">
+                                            <div>
+                                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                    Medical Conditions
+                                                    <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Any conditions we should be aware of)</span>
+                                                </label>
+                                                <textarea name="medical_conditions" rows="2"
+                                                          class="form-input"
+                                                          placeholder="List any medical conditions, allergies, or special requirements">{{ old('medical_conditions', $user->metadata['medical_conditions'] ?? '') }}</textarea>
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                                    Insurance Information
+                                                    <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Health insurance details)</span>
+                                                </label>
+                                                <input type="text" name="insurance_info" 
+                                                       value="{{ old('insurance_info', $user->metadata['insurance_info'] ?? '') }}" 
+                                                       class="form-input"
+                                                       placeholder="Insurance provider and policy number (optional)">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
+                                    <button type="button" 
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('tenant');" 
+                                            class="btn-secondary">
+                                        <i class="fas fa-arrow-left mr-2"></i>Back
+                                    </button>
+                                    <div class="space-x-3">
+                                        <button type="button" 
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('password');" 
+                                                class="btn-outline">
+                                            Next: Security <i class="fas fa-arrow-right ml-1"></i>
+                                        </button>
+                                        <button type="submit" class="btn-warning" id="emergencySubmitBtn">
+                                            <i class="fas fa-save mr-2"></i>Save Contacts
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Password Tab -->
+                    <div class="tab-pane hidden" id="passwordPane" data-tab-pane="password">
+                        <div class="card p-6 mb-6">
+                            <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Change Password</h3>
+                            
+                            <div class="mb-6 p-4 rounded-lg" style="background-color: var(--bg-tertiary); border: 1px solid var(--border-color);">
+                                <h4 class="font-medium mb-2" style="color: var(--text-primary);">
+                                    <i class="fas fa-shield-alt mr-2" style="color: var(--warning);"></i>
+                                    Password Requirements
+                                </h4>
+                                <ul class="text-sm space-y-1" style="color: var(--text-secondary);">
+                                    <li class="flex items-center">
+                                        <i class="fas fa-check mr-2" style="color: var(--success);"></i>
+                                        At least 8 characters
+                                    </li>
+                                    <li class="flex items-center">
+                                        <i class="fas fa-check mr-2" style="color: var(--success);"></i>
+                                        Uppercase and lowercase letters
+                                    </li>
+                                    <li class="flex items-center">
+                                        <i class="fas fa-check mr-2" style="color: var(--success);"></i>
+                                        At least one number
+                                    </li>
+                                    <li class="flex items-center">
+                                        <i class="fas fa-check mr-2" style="color: var(--success);"></i>
+                                        At least one special character
+                                    </li>
+                                </ul>
+                            </div>
+                            
+                            <form action="{{ route('tenant.profile.password.update') }}" method="POST" id="passwordFormElement">
+                                @csrf
+                                @method('PUT')
+                                
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Current Password *
+                                            <button type="button" onclick="togglePassword('currentPassword')" 
+                                                    class="ml-2 text-xs" style="color: var(--warning);">
+                                                <i class="fas fa-eye"></i> Show
+                                            </button>
+                                        </label>
+                                        <input type="password" name="current_password" 
+                                               class="form-input"
+                                               required id="currentPassword">
+                                        @error('current_password')
+                                            <p class="text-xs mt-1" style="color: var(--danger);">{{ $message }}</p>
+                                        @enderror
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            New Password *
+                                            <button type="button" onclick="togglePassword('newPassword')" 
+                                                    class="ml-2 text-xs" style="color: var(--warning);">
+                                                <i class="fas fa-eye"></i> Show
+                                            </button>
+                                        </label>
+                                        <input type="password" name="password" 
+                                               class="form-input"
+                                               required id="newPassword"
+                                               onkeyup="checkPasswordStrength(this.value)">
+                                        <div class="mt-2 hidden" id="passwordStrength">
+                                            <div class="flex items-center space-x-2">
+                                                <div class="flex-1 h-2 rounded-full overflow-hidden" style="background-color: var(--bg-tertiary);">
+                                                    <div class="h-full rounded-full" id="strengthBar"></div>
+                                                </div>
+                                                <span class="text-xs font-medium" id="strengthText"></span>
+                                            </div>
+                                        </div>
+                                        @error('password')
+                                            <p class="text-xs mt-1" style="color: var(--danger);">{{ $message }}</p>
+                                        @enderror
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Confirm New Password *
+                                            <button type="button" onclick="togglePassword('confirmPassword')" 
+                                                    class="ml-2 text-xs" style="color: var(--warning);">
+                                                <i class="fas fa-eye"></i> Show
+                                            </button>
+                                        </label>
+                                        <input type="password" name="password_confirmation" 
+                                               class="form-input"
+                                               required id="confirmPassword">
+                                    </div>
+
+                                    <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
+                                        <button type="button" 
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('emergency');" 
+                                                class="btn-secondary">
+                                            <i class="fas fa-arrow-left mr-2"></i>Back
+                                        </button>
+                                        <button type="submit" class="btn-warning" id="passwordSubmitBtn">
+                                            <i class="fas fa-key mr-2"></i>Change Password
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div><!-- /#tabContent -->
             </div>
         </div>
     </div>
 </div>
 
 <!-- Verification Modal -->
-<div id="verificationModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 p-4">
-    <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6" style="color: var(--text-primary);">
+<div id="verificationModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 p-4" style="display: none;">
+    <div class="rounded-lg shadow-xl max-w-md w-full p-6 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+         style="background-color: var(--card-bg); color: var(--text-primary); border: 1px solid var(--border-color);">
         <div class="flex justify-between items-center mb-4">
-            <h3 class="text-lg font-semibold">Verify Phone Number</h3>
-            <button onclick="closeVerifyModal()" class="text-gray-500 hover:text-gray-700">
+            <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
+                <i class="fas fa-shield-alt mr-2" style="color: var(--warning);"></i>
+                Verify Phone Number
+            </h3>
+            <button onclick="closeVerifyModal()" 
+                    class="hover:opacity-70 transition" 
+                    style="color: var(--text-secondary);">
                 <i class="fas fa-times"></i>
             </button>
         </div>
@@ -1307,14 +1328,14 @@
         
         <div class="space-y-4">
             <div>
-                <label class="block text-sm font-medium mb-2">Verification Code</label>
+                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Verification Code</label>
                 <input type="text" id="modalVerificationCode" 
-                       class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                       placeholder="Enter 6-digit code" maxlength="6">
+                       class="form-input text-center text-lg font-mono"
+                       placeholder="123456" maxlength="6">
             </div>
             
             <div class="flex justify-between items-center">
-                <button onclick="resendVerificationCode()" class="text-sm" style="color: var(--warning);">
+                <button onclick="resendVerificationCode()" class="text-sm hover:underline" style="color: var(--warning);">
                     <i class="fas fa-redo mr-1"></i>Resend Code
                 </button>
                 <div class="text-xs" style="color: var(--text-secondary);" id="countdown">
@@ -1336,11 +1357,74 @@
 
 @push('styles')
 <style>
-/* Tab Styles */
+/* ============================================================
+   ✅ THEME-CONSISTENT FORM CONTROLS
+   ============================================================ */
+.form-input {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    outline: none;
+    font-family: inherit;
+}
+
+.form-input:focus {
+    border-color: var(--warning);
+    box-shadow: 0 0 0 3px rgba(var(--warning-rgb), 0.15);
+}
+
+.form-input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.6;
+}
+
+.form-input:disabled,
+.form-input[readonly] {
+    background-color: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: not-allowed;
+}
+
+.form-input.error {
+    border-color: var(--danger);
+    box-shadow: 0 0 0 3px rgba(var(--danger-rgb), 0.15);
+}
+
+/* Checkbox theming */
+.form-checkbox {
+    width: 1rem;
+    height: 1rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    cursor: pointer;
+    accent-color: var(--warning);
+    transition: all 0.2s ease;
+}
+
+.form-checkbox:checked {
+    background-color: var(--warning);
+    border-color: var(--warning);
+}
+
+.form-checkbox:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(var(--warning-rgb), 0.2);
+}
+
+/* ============================================================
+   TAB STYLES
+   ============================================================ */
 .tab-button {
     border-bottom: 2px solid transparent;
     color: var(--text-secondary);
     transition: all 0.3s ease;
+    cursor: pointer;
+    background: transparent;
 }
 
 .tab-button:hover {
@@ -1368,10 +1452,12 @@
 }
 
 .hidden {
-    display: none !important;
+    display: none;
 }
 
-/* Dashboard Switcher Styles */
+/* ============================================================
+   DASHBOARD SWITCHER
+   ============================================================ */
 .dashboard-switcher {
     position: relative;
 }
@@ -1397,7 +1483,7 @@
 }
 
 .dashboard-switch-option:hover {
-    background-color: rgba(var(--warning-rgb), 0.1);
+    background-color: rgba(var(--warning-rgb), 0.08);
     padding-left: 1rem;
 }
 
@@ -1406,8 +1492,11 @@
     border-left: 3px solid var(--warning);
 }
 
-/* Button styles */
-.btn-primary, .btn-secondary, .btn-danger, .btn-outline, .btn-warning {
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn-primary, .btn-secondary, .btn-danger, .btn-outline,
+.btn-warning, .btn-success {
     padding: 0.5rem 1rem;
     border-radius: 0.375rem;
     font-weight: 500;
@@ -1417,6 +1506,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    font-family: inherit;
 }
 
 .btn-warning {
@@ -1425,6 +1515,16 @@
 }
 
 .btn-warning:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+.btn-success {
+    background-color: var(--success);
+    color: white;
+}
+
+.btn-success:hover {
     opacity: 0.9;
     transform: translateY(-1px);
 }
@@ -1455,7 +1555,7 @@
 }
 
 .btn-danger:hover {
-    background-color: #dc2626;
+    opacity: 0.9;
 }
 
 .btn-sm {
@@ -1463,19 +1563,30 @@
     font-size: 0.875rem;
 }
 
-/* Phone verification input styling */
-#verificationCode {
+/* ============================================================
+   QUICK ACTION ROWS
+   ============================================================ */
+.quick-action-item:hover {
+    background-color: rgba(var(--warning-rgb), 0.06);
+}
+
+/* ============================================================
+   VERIFICATION INPUT
+   ============================================================ */
+#verificationCode, #modalVerificationCode {
     font-family: 'Courier New', monospace;
     letter-spacing: 2px;
     text-align: center;
 }
 
-#verificationCode:focus {
+#verificationCode:focus, #modalVerificationCode:focus {
     border-color: var(--warning);
-    box-shadow: 0 0 0 3px rgba(var(--warning-rgb), 0.1);
+    box-shadow: 0 0 0 3px rgba(var(--warning-rgb), 0.15);
 }
 
-/* Toast animation */
+/* ============================================================
+   TOAST
+   ============================================================ */
 .toast {
     animation: slideInRight 0.3s ease-out;
 }
@@ -1491,7 +1602,9 @@
     }
 }
 
-/* Responsive */
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
 @media (max-width: 768px) {
     .tab-button {
         font-size: 0.75rem;
@@ -1501,17 +1614,6 @@
     .card {
         padding: 1rem !important;
     }
-}
-
-/* Error styling */
-.border-red-500 {
-    border-color: #ef4444 !important;
-}
-
-/* Checkbox styling */
-input[type="checkbox"]:checked {
-    background-color: var(--warning) !important;
-    border-color: var(--warning) !important;
 }
 
 /* Password strength meter */
@@ -1529,26 +1631,22 @@ input[type="checkbox"]:checked {
 <script>
 // ==================== DASHBOARD SWITCHER FUNCTIONALITY ====================
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize dashboard switcher for profile page
     const switcherBtn = document.getElementById('profileSwitcherBtn');
     const switcherMenu = document.getElementById('profileSwitcherMenu');
     const currentRole = '{{ $currentRole }}';
     
     if (switcherBtn && switcherMenu) {
-        // Toggle dropdown
         switcherBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             switcherMenu.classList.toggle('show');
         });
         
-        // Close dropdown when clicking outside
         document.addEventListener('click', function(e) {
             if (!switcherBtn.contains(e.target) && !switcherMenu.contains(e.target)) {
                 switcherMenu.classList.remove('show');
             }
         });
         
-        // Handle dashboard switching
         const switchOptions = document.querySelectorAll('#profileSwitcherMenu .dashboard-switch-option');
         switchOptions.forEach(option => {
             option.addEventListener('click', async function(e) {
@@ -1569,7 +1667,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 
-                // Show loading state
                 const originalHTML = switcherBtn.innerHTML;
                 switcherBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Switching...';
                 switcherBtn.disabled = true;
@@ -1610,54 +1707,80 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// Timer variables
 let countdownInterval = null;
-let timerSeconds = 600; // 10 minutes = 600 seconds
+let timerSeconds = 600;
 
-// Tab Management
+// ==================== TAB FUNCTIONS ====================
+const TAB_NAMES = ['personal', 'contact', 'tenant', 'emergency', 'password'];
+
 function initTabs() {
     const tabButtons = document.querySelectorAll('#tabNav .tab-button');
-    const tabPanes = document.querySelectorAll('.tab-pane');
-    
+
     tabButtons.forEach(button => {
-        button.addEventListener('click', function() {
+        button.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
             const tabName = this.getAttribute('data-tab');
-            showTab(tabName);
+            if (tabName) showTab(tabName);
         });
+    });
+
+    const hash = window.location.hash.replace('#', '');
+    if (hash && TAB_NAMES.includes(hash)) {
+        showTab(hash, false);
+    }
+
+    window.addEventListener('hashchange', function () {
+        const h = window.location.hash.replace('#', '');
+        if (h && TAB_NAMES.includes(h)) {
+            showTab(h, false);
+        }
     });
 }
 
-function showTab(tabName) {
-    const tabPanes = document.querySelectorAll('.tab-pane');
-    tabPanes.forEach(pane => {
+function showTab(tabName, updateHash = true) {
+    if (!TAB_NAMES.includes(tabName)) {
+        console.warn('[Profile] Unknown tab:', tabName);
+        return;
+    }
+
+    document.querySelectorAll('.tab-pane').forEach(pane => {
         pane.classList.remove('active');
         pane.classList.add('hidden');
+        pane.style.display = 'none';
     });
-    
-    const tabButtons = document.querySelectorAll('#tabNav .tab-button');
-    tabButtons.forEach(button => {
+
+    document.querySelectorAll('#tabNav .tab-button').forEach(button => {
         button.classList.remove('active-tab');
-        button.style.borderColor = 'transparent';
+        button.style.borderBottomColor = 'transparent';
         button.style.color = 'var(--text-secondary)';
     });
-    
+
     const selectedPane = document.getElementById(tabName + 'Pane');
     if (selectedPane) {
         selectedPane.classList.remove('hidden');
         selectedPane.classList.add('active');
+        selectedPane.style.display = 'block';
     }
-    
+
     const selectedButton = document.querySelector(`#tabNav .tab-button[data-tab="${tabName}"]`);
     if (selectedButton) {
         selectedButton.classList.add('active-tab');
-        selectedButton.style.borderColor = 'var(--warning)';
+        selectedButton.style.borderBottomColor = 'var(--warning)';
         selectedButton.style.color = 'var(--warning)';
     }
-    
-    window.location.hash = tabName;
+
+    if (updateHash) {
+        history.replaceState(null, '', '#' + tabName);
+    }
+
+    const tabNav = document.getElementById('tabNav');
+    if (tabNav) {
+        tabNav.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 }
 
-// Form Submission Handling
+// ==================== FORM SUBMISSION ====================
 function setupForms() {
     const forms = ['personalInfoForm', 'contactInfoForm', 'tenantInfoForm', 'emergencyInfoForm', 'passwordFormElement'];
     
@@ -1683,41 +1806,26 @@ function submitForm(form) {
     fetch(form.action, {
         method: form.method,
         body: new FormData(form),
-        headers: {
-            'X-Requested-With': 'XMLHttpRequest'
-        }
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
     })
     .then(response => response.json())
     .then(data => {
         if (data.success) {
             showToast('success', data.message || 'Changes saved successfully!');
-            
-            if (data.profile_completion) {
-                updateProfileCompletion(data.profile_completion);
-            }
-            
+            if (data.profile_completion) updateProfileCompletion(data.profile_completion);
             if (data.user) {
                 Object.keys(data.user).forEach(key => {
                     const input = form.querySelector(`[name="${key}"]`);
-                    if (input && input.type !== 'password') {
-                        input.value = data.user[key];
-                    }
+                    if (input && input.type !== 'password') input.value = data.user[key];
                 });
             }
-            
-            if (data.reload) {
-                setTimeout(() => location.reload(), 2000);
-            }
-            
+            if (data.reload) setTimeout(() => location.reload(), 2000);
         } else {
             showToast('error', data.message || 'Failed to save changes.');
-            
             if (data.errors) {
                 Object.keys(data.errors).forEach(field => {
                     const input = form.querySelector(`[name="${field}"]`);
-                    if (input) {
-                        input.classList.add('border-red-500');
-                    }
+                    if (input) input.classList.add('error');
                 });
             }
         }
@@ -1732,13 +1840,7 @@ function submitForm(form) {
     });
 }
 
-// Photo Management
-document.getElementById('photoInput')?.addEventListener('change', function(e) {
-    if (this.files && this.files[0]) {
-        uploadPhoto(this.files[0]);
-    }
-});
-
+// ==================== PHOTO MANAGEMENT ====================
 function uploadPhoto(file) {
     const uploadBtn = document.getElementById('uploadBtn');
     if (!uploadBtn) return;
@@ -1762,43 +1864,7 @@ function uploadPhoto(file) {
     .then(data => {
         if (data.success) {
             showToast('success', 'Profile photo updated successfully!');
-            
-            if (data.photo_url) {
-                const img = document.getElementById('profileImage');
-                if (img) {
-                    img.src = data.photo_url;
-                } else {
-                    const placeholder = document.getElementById('avatarPlaceholder');
-                    if (placeholder) {
-                        const newImg = document.createElement('img');
-                        newImg.id = 'profileImage';
-                        newImg.src = data.photo_url;
-                        newImg.alt = 'Profile Photo';
-                        newImg.className = 'w-32 h-32 rounded-full object-cover border-4 mx-auto shadow-lg lazy';
-                        newImg.style.borderColor = 'var(--warning)';
-                        placeholder.parentNode.replaceChild(newImg, placeholder);
-                    }
-                }
-                
-                const uploadBtnSpan = uploadBtn.querySelector('span');
-                if (uploadBtnSpan) uploadBtnSpan.textContent = 'Change Photo';
-                
-                if (!document.getElementById('removeBtn')) {
-                    const removeBtn = document.createElement('button');
-                    removeBtn.id = 'removeBtn';
-                    removeBtn.className = 'btn-danger btn-sm w-full mt-2';
-                    removeBtn.innerHTML = '<i class="fas fa-trash mr-2"></i>Remove Photo';
-                    removeBtn.onclick = () => removeProfilePhoto();
-                    uploadBtn.parentNode.appendChild(removeBtn);
-                }
-            }
-            
-            if (data.profile_completion) {
-                updateProfileCompletion(data.profile_completion);
-            }
-            
-            document.getElementById('photoInput').value = '';
-            
+            setTimeout(() => window.location.reload(), 1000);
         } else {
             showToast('error', data.message || 'Failed to update photo');
         }
@@ -1835,28 +1901,7 @@ function removeProfilePhoto() {
     .then(data => {
         if (data.success) {
             showToast('success', 'Profile photo removed successfully!');
-            
-            const img = document.getElementById('profileImage');
-            if (img) {
-                const placeholder = document.createElement('div');
-                placeholder.id = 'avatarPlaceholder';
-                placeholder.className = 'w-32 h-32 rounded-full flex items-center justify-center font-semibold text-white text-3xl mx-auto shadow-lg';
-                placeholder.style.background = 'linear-gradient(135deg, var(--warning), var(--orange))';
-                placeholder.textContent = '{{ $user->getInitials() }}';
-                img.parentNode.replaceChild(placeholder, img);
-                
-                const uploadBtn = document.getElementById('uploadBtn');
-                if (uploadBtn) {
-                    const span = uploadBtn.querySelector('span');
-                    if (span) span.textContent = 'Upload Photo';
-                }
-                
-                removeBtn.remove();
-            }
-            
-            if (data.profile_completion) {
-                updateProfileCompletion(data.profile_completion);
-            }
+            setTimeout(() => window.location.reload(), 1000);
         } else {
             showToast('error', data.message || 'Failed to remove photo');
         }
@@ -1871,7 +1916,7 @@ function removeProfilePhoto() {
     });
 }
 
-// Phone Verification Functions
+// ==================== PHONE VERIFICATION ====================
 function sendPhoneVerification() {
     const phoneNumber = document.getElementById('phoneNumber')?.value;
     
@@ -1956,10 +2001,11 @@ function verifyPhone() {
             const verificationSection = document.getElementById('verificationCodeSection');
             if (verificationSection) {
                 verificationSection.innerHTML = `
-                    <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+                    <div class="rounded-lg p-3" 
+                         style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.3);">
                         <div class="flex items-center">
-                            <i class="fas fa-check-circle text-green-500 mr-2"></i>
-                            <span class="text-sm text-green-700">Phone number verified successfully!</span>
+                            <i class="fas fa-check-circle mr-2" style="color: var(--success);"></i>
+                            <span class="text-sm" style="color: var(--success);">Phone number verified successfully!</span>
                         </div>
                     </div>
                 `;
@@ -1968,8 +2014,10 @@ function verifyPhone() {
             setTimeout(() => window.location.reload(), 2000);
         } else {
             showToast('error', data.message || 'Invalid verification code. Please try again.');
-            codeInput.value = '';
-            codeInput.focus();
+            if (codeInput) {
+                codeInput.value = '';
+                codeInput.focus();
+            }
         }
     })
     .catch(error => {
@@ -1999,9 +2047,7 @@ function startTimer(seconds) {
     const timerDisplay = document.getElementById('countdownTimer');
     if (!timerDisplay) return;
     
-    if (countdownInterval) {
-        clearInterval(countdownInterval);
-    }
+    if (countdownInterval) clearInterval(countdownInterval);
     
     let remaining = seconds;
     
@@ -2024,7 +2070,7 @@ function startTimer(seconds) {
     }, 1000);
 }
 
-// Email Verification
+// ==================== EMAIL VERIFICATION ====================
 function sendEmailVerification() {
     showToast('info', 'Sending verification email...');
     
@@ -2049,11 +2095,10 @@ function sendEmailVerification() {
     });
 }
 
-// Password Functions
+// ==================== PASSWORD ====================
 function togglePassword(fieldId) {
     const field = document.getElementById(fieldId);
     if (!field) return;
-    
     const type = field.getAttribute('type') === 'password' ? 'text' : 'password';
     field.setAttribute('type', type);
 }
@@ -2086,15 +2131,15 @@ function checkPasswordStrength(password) {
     
     let color, width, text;
     if (strength <= 2) {
-        color = '#ef4444';
+        color = 'var(--danger)';
         width = '33%';
         text = 'Weak';
     } else if (strength <= 4) {
-        color = '#f59e0b';
+        color = 'var(--warning)';
         width = '66%';
         text = 'Medium';
     } else {
-        color = '#10b981';
+        color = 'var(--success)';
         width = '100%';
         text = 'Strong';
     }
@@ -2105,20 +2150,16 @@ function checkPasswordStrength(password) {
     strengthText.style.color = color;
 }
 
-// Download Tenant Data
+// ==================== DOWNLOAD DATA ====================
 function downloadTenantData() {
     showToast('info', 'Preparing your data for download...');
     
     fetch('{{ route("tenant.profile.data.download") }}', {
         method: 'GET',
-        headers: {
-            'Accept': 'application/json'
-        }
+        headers: { 'Accept': 'application/json' }
     })
     .then(response => {
-        if (response.ok) {
-            return response.blob();
-        }
+        if (response.ok) return response.blob();
         throw new Error('Failed to download data');
     })
     .then(blob => {
@@ -2138,20 +2179,15 @@ function downloadTenantData() {
     });
 }
 
-// Modal Functions
+// ==================== MODAL ====================
 function showVerifyModal() {
     const modal = document.getElementById('verificationModal');
-    if (modal) modal.classList.remove('hidden');
+    if (modal) modal.style.display = 'block';
 }
 
 function closeVerifyModal() {
     const modal = document.getElementById('verificationModal');
-    if (modal) modal.classList.add('hidden');
-}
-
-function resendModalVerificationCode() {
-    sendPhoneVerification();
-    startCountdown(60);
+    if (modal) modal.style.display = 'none';
 }
 
 function submitVerificationCode() {
@@ -2170,35 +2206,16 @@ function submitVerificationCode() {
     closeVerifyModal();
 }
 
-function startCountdown(seconds) {
-    const timerElement = document.getElementById('timer');
-    if (!timerElement) return;
-    
-    let remaining = seconds;
-    const countdown = setInterval(() => {
-        remaining--;
-        timerElement.textContent = remaining;
-        
-        if (remaining <= 0) {
-            clearInterval(countdown);
-            const countdownElement = document.getElementById('countdown');
-            if (countdownElement) {
-                countdownElement.innerHTML = 'Ready to resend';
-            }
-        }
-    }, 1000);
-}
-
-// Toast Notification System
+// ==================== TOAST ====================
 function showToast(type, message) {
     const container = document.getElementById('toastContainer');
     if (!container) return;
     
     const toast = document.createElement('div');
     const colors = {
-        success: '#10b981',
-        error: '#ef4444',
-        info: '#3b82f6'
+        success: 'var(--success)',
+        error: 'var(--danger)',
+        info: 'var(--info)'
     };
     
     const icons = {
@@ -2207,7 +2224,7 @@ function showToast(type, message) {
         info: 'fa-info-circle'
     };
     
-    toast.style.backgroundColor = colors[type] || '#6b7280';
+    toast.style.backgroundColor = colors[type] || 'var(--text-secondary)';
     toast.style.color = 'white';
     toast.className = 'px-4 py-3 rounded-lg shadow-lg flex items-center transform transition-all duration-300 mb-2';
     toast.innerHTML = `<i class="fas ${icons[type] || 'fa-bell'} mr-2"></i><span>${message}</span>`;
@@ -2222,30 +2239,27 @@ function showToast(type, message) {
 }
 
 function updateProfileCompletion(percentage) {
-    const completionElements = document.querySelectorAll('[data-profile-completion]');
-    completionElements.forEach(el => {
+    document.querySelectorAll('[data-profile-completion]').forEach(el => {
         el.textContent = `${percentage}%`;
     });
 }
 
-// Initialize
+// ==================== INIT ====================
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('Tenant Profile page loaded - Dashboard aware');
+    console.log('Tenant Profile page loaded - Theme consistent');
     
     initTabs();
     setupForms();
     
-    // Set up photo input
     const photoInput = document.getElementById('photoInput');
     if (photoInput) {
-        photoInput.addEventListener('change', function(e) {
+        photoInput.addEventListener('change', function() {
             if (this.files && this.files[0]) {
                 uploadPhoto(this.files[0]);
             }
         });
     }
     
-    // Check for saved verification timer
     @if(!$user->phone_verified_at && $user->phone)
     if (localStorage.getItem('verificationSentAt')) {
         const sentAt = parseInt(localStorage.getItem('verificationSentAt'));
@@ -2258,12 +2272,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     @endif
-    
-    // Handle hash navigation
-    const hash = window.location.hash.replace('#', '');
-    if (['personal', 'contact', 'tenant', 'emergency', 'password'].includes(hash)) {
-        showTab(hash);
-    }
 });
 </script>
 @endpush

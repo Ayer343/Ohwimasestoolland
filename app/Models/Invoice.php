@@ -17,26 +17,26 @@ class Invoice extends Model
     use HasFactory, SoftDeletes;
 
     // ✅ INVOICE STATUS CONSTANTS
-    const STATUS_PENDING = 'pending';
-    const STATUS_PROCESSING = 'processing';
-    const STATUS_PAID = 'paid';
-    const STATUS_OVERDUE = 'overdue';
-    const STATUS_CANCELLED = 'cancelled';
-    const STATUS_PARTIAL = 'partial';
-    const STATUS_REFUNDED = 'refunded';
+    const STATUS_PENDING      = 'pending';
+    const STATUS_PROCESSING   = 'processing';
+    const STATUS_PAID         = 'paid';
+    const STATUS_OVERDUE      = 'overdue';
+    const STATUS_CANCELLED    = 'cancelled';
+    const STATUS_PARTIAL      = 'partial';
+    const STATUS_REFUNDED     = 'refunded';
     const STATUS_CONSOLIDATED = 'consolidated';
 
     // ✅ PAYMENT METHOD CONSTANTS
-    const METHOD_CASH = 'cash';
-    const METHOD_BANK_TRANSFER = 'bank_transfer';
-    const METHOD_CHEQUE = 'cheque';
-    const METHOD_CARD = 'card';
-    const METHOD_MOBILE_MONEY = 'mobile_money';
-    const METHOD_BULK_PAYMENT = 'bulk_payment';
-    const METHOD_MTN_MOMO = 'mtn_momo';
-    const METHOD_TELECEL_CASH = 'telecel_cash';
+    const METHOD_CASH            = 'cash';
+    const METHOD_BANK_TRANSFER   = 'bank_transfer';
+    const METHOD_CHEQUE          = 'cheque';
+    const METHOD_CARD            = 'card';
+    const METHOD_MOBILE_MONEY    = 'mobile_money';
+    const METHOD_BULK_PAYMENT    = 'bulk_payment';
+    const METHOD_MTN_MOMO        = 'mtn_momo';
+    const METHOD_TELECEL_CASH    = 'telecel_cash';
     const METHOD_AIRTELTIGO_CASH = 'airteltigo_cash';
-    const METHOD_PAYSTACK = 'paystack';
+    const METHOD_PAYSTACK        = 'paystack';
 
     protected $table = 'invoices';
 
@@ -76,30 +76,30 @@ class Invoice extends Model
         'archive_reason',
         'archived_at',
         'archive_approved_by_tenant',
-        'archive_approved_at'
+        'archive_approved_at',
     ];
 
     protected $casts = [
-        'due_date' => 'datetime',
-        'payment_date' => 'datetime',
-        'penalty_applied_date' => 'datetime',
-        'last_reminder_sent_at' => 'datetime',
-        'amount' => 'decimal:2',
-        'penalty_amount' => 'decimal:2',
-        'is_bulk_payment' => 'boolean',
-        'bulk_months' => 'integer',
-        'covers_periods' => 'array',
-        'bulk_coverage_start' => 'datetime',
-        'bulk_coverage_end' => 'datetime',
-        'reminder_count' => 'integer',
-        'metadata' => 'array',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
-        'deleted_at' => 'datetime',
-        'year_end_archived_at' => 'datetime',
-        'archived_at' => 'datetime',
-        'archive_approved_at' => 'datetime',
-        'archive_approved_by_tenant' => 'boolean'
+        'due_date'                    => 'datetime',
+        'payment_date'                => 'datetime',
+        'penalty_applied_date'        => 'datetime',
+        'last_reminder_sent_at'       => 'datetime',
+        'amount'                      => 'decimal:2',
+        'penalty_amount'              => 'decimal:2',
+        'is_bulk_payment'             => 'boolean',
+        'bulk_months'                 => 'integer',
+        'covers_periods'              => 'array',
+        'bulk_coverage_start'         => 'date',
+        'bulk_coverage_end'           => 'date',
+        'reminder_count'              => 'integer',
+        'metadata'                    => 'array',
+        'created_at'                  => 'datetime',
+        'updated_at'                  => 'datetime',
+        'deleted_at'                  => 'datetime',
+        'year_end_archived_at'        => 'datetime',
+        'archived_at'                 => 'datetime',
+        'archive_approved_at'         => 'datetime',
+        'archive_approved_by_tenant'  => 'boolean',
     ];
 
     protected $appends = [
@@ -126,7 +126,7 @@ class Invoice extends Model
         'generation_method',
         'coverage_summary',
         'is_coverage_active',
-        'total_amount'
+        'total_amount',
     ];
 
     // ========== RELATIONSHIPS ==========
@@ -176,28 +176,34 @@ class Invoice extends Model
         return $this->childInvoices()->where('is_bulk_payment', false);
     }
 
+    /**
+     * ✅ FIX: Return the landlord relationship via property, not a model call.
+     * The original `$this->property->landlord()` returned a Builder, not a
+     * relation instance, and broke eager loading.
+     */
     public function landlord()
     {
-        return $this->property->landlord();
+        return $this->hasOneThrough(
+            User::class,
+            Property::class,
+            'id',            // properties.id
+            'id',            // users.id
+            'property_id',   // invoices.property_id
+            'landlord_id'    // properties.landlord_id
+        );
     }
 
     // ========== SCOPES ==========
 
-    /**
-     * Scope to exclude consolidated invoices
-     */
     public function scopeExcludeConsolidated($query)
     {
         return $query->where('status', '!=', self::STATUS_CONSOLIDATED);
     }
 
-    /**
-     * Scope to only include invoices that are eligible for overdue marking
-     */
     public function scopeEligibleForOverdue($query)
     {
         return $query->where('status', self::STATUS_PENDING)
-                    ->where('status', '!=', self::STATUS_CONSOLIDATED) // ✅ FIX: Exclude consolidated
+                    ->where('status', '!=', self::STATUS_CONSOLIDATED)
                     ->whereDate('due_date', '<', now()->startOfDay());
     }
 
@@ -239,8 +245,12 @@ class Invoice extends Model
 
     public function scopeUnpaid($query)
     {
-        return $query->whereIn('status', [self::STATUS_PENDING, self::STATUS_OVERDUE, self::STATUS_PROCESSING])
-                    ->where('status', '!=', self::STATUS_CONSOLIDATED);
+        return $query->whereIn('status', [
+                    self::STATUS_PENDING,
+                    self::STATUS_OVERDUE,
+                    self::STATUS_PROCESSING,
+                ])
+                ->where('status', '!=', self::STATUS_CONSOLIDATED);
     }
 
     public function scopeBulkPayments($query)
@@ -284,14 +294,14 @@ class Invoice extends Model
     {
         return $query->where('is_bulk_payment', true)
                     ->where('status', self::STATUS_PAID)
-                    ->where(function($q) use ($period) {
+                    ->where(function ($q) use ($period) {
                         $q->whereJsonContains('covers_periods', $period)
-                          ->orWhere(function($sub) use ($period) {
+                          ->orWhere(function ($sub) use ($period) {
                               $periodDate = Carbon::createFromFormat('Y-m', $period)->startOfMonth();
                               $sub->whereNotNull('bulk_coverage_start')
-                                   ->whereNotNull('bulk_coverage_end')
-                                   ->where('bulk_coverage_start', '<=', $periodDate)
-                                   ->where('bulk_coverage_end', '>=', $periodDate->copy()->endOfMonth());
+                                  ->whereNotNull('bulk_coverage_end')
+                                  ->where('bulk_coverage_start', '<=', $periodDate)
+                                  ->where('bulk_coverage_end', '>=', $periodDate->copy()->endOfMonth());
                           });
                     });
     }
@@ -305,9 +315,9 @@ class Invoice extends Model
 
     public function scopeDueSoonForReminder($query, int $daysBefore)
     {
-        $today = now()->startOfDay();
+        $today      = now()->startOfDay();
         $targetDate = $today->copy()->addDays($daysBefore);
-        
+
         return $query->whereIn('status', [self::STATUS_PENDING, self::STATUS_OVERDUE])
                     ->whereDate('due_date', '<=', $targetDate)
                     ->whereDate('due_date', '>', $today);
@@ -315,13 +325,13 @@ class Invoice extends Model
 
     public function scopeNeedsReminder($query, int $daysBefore)
     {
-        $today = now()->startOfDay();
+        $today      = now()->startOfDay();
         $targetDate = $today->copy()->addDays($daysBefore);
-        
+
         return $query->whereIn('status', [self::STATUS_PENDING, self::STATUS_OVERDUE])
                     ->whereDate('due_date', '<=', $targetDate)
                     ->whereDate('due_date', '>', $today)
-                    ->where(function($q) {
+                    ->where(function ($q) {
                         $q->whereNull('last_reminder_sent_at')
                           ->orWhere('last_reminder_sent_at', '<', now()->subDay());
                     });
@@ -330,11 +340,11 @@ class Invoice extends Model
     public function scopeOverdueForPenalty($query, int $gracePeriodDays)
     {
         $penaltyDate = now()->subDays($gracePeriodDays)->startOfDay();
-        
+
         return $query->where('status', self::STATUS_PENDING)
-                    ->where('status', '!=', self::STATUS_CONSOLIDATED) // ✅ FIX: Exclude consolidated
+                    ->where('status', '!=', self::STATUS_CONSOLIDATED)
                     ->whereDate('due_date', '<', $penaltyDate)
-                    ->where(function($q) {
+                    ->where(function ($q) {
                         $q->whereNull('penalty_applied_date')
                           ->orWhere('penalty_amount', 0);
                     });
@@ -365,10 +375,47 @@ class Invoice extends Model
         return $query->where('year_end_archive_year', $year);
     }
 
+    /**
+     * ✅ ADDED: Scope used by YearEndArchiveService::getLandlordYearEndStatistics()
+     * and any caller that reads "invoices from year X".
+     *
+     * Filters by:
+     *   - paid status
+     *   - payment_date (or fallback to created_at) in the given year
+     *   - not soft-deleted
+     *
+     * Note: payment_date can be null on legacy records. `whereYear()` on a
+     * null column returns false (excluded). If you need to also match
+     * created_at, use `scopeFromAnyYear`.
+     */
+    public function scopeFromYear($query, int $year)
+    {
+        return $query->where('status', self::STATUS_PAID)
+                    ->whereYear('payment_date', $year)
+                    ->whereNull('deleted_at');
+    }
+
+    /**
+     * ✅ ADDED: Matches a year against either payment_date OR created_at.
+     * Useful when historical imports have no payment_date recorded.
+     */
+    public function scopeFromAnyYear($query, int $year)
+    {
+        return $query->where('status', self::STATUS_PAID)
+                    ->where(function ($q) use ($year) {
+                        $q->whereYear('payment_date', $year)
+                          ->orWhere(function ($sub) use ($year) {
+                              $sub->whereNull('payment_date')
+                                  ->whereYear('created_at', $year);
+                          });
+                    })
+                    ->whereNull('deleted_at');
+    }
+
     public function scopeEligibleForYearEndArchive($query, $year = null)
     {
         $year = $year ?? now()->subYear()->year;
-        
+
         return $query->where('status', self::STATUS_PAID)
                     ->whereNull('year_end_archived_at')
                     ->whereYear('created_at', '<=', $year);
@@ -377,7 +424,7 @@ class Invoice extends Model
     public function scopeEligibleForPostPaymentArchive($query, int $retentionMonths = 3)
     {
         $cutoffDate = now()->subMonths($retentionMonths);
-        
+
         return $query->where('status', self::STATUS_PAID)
                     ->whereNotNull('year_end_archived_at')
                     ->whereNull('deleted_at')
@@ -387,107 +434,71 @@ class Invoice extends Model
 
     // ========== STATUS CHECK METHODS ==========
 
-    public function isProcessing(): bool
-    {
-        return $this->status === self::STATUS_PROCESSING;
-    }
-
-    public function isPaid(): bool
-    {
-        return $this->status === self::STATUS_PAID;
-    }
-
-    public function isPending(): bool
-    {
-        return $this->status === self::STATUS_PENDING;
-    }
+    public function isProcessing(): bool  { return $this->status === self::STATUS_PROCESSING; }
+    public function isPaid(): bool        { return $this->status === self::STATUS_PAID; }
+    public function isPending(): bool     { return $this->status === self::STATUS_PENDING; }
+    public function isPartial(): bool     { return $this->status === self::STATUS_PARTIAL; }
+    public function isCancelled(): bool   { return $this->status === self::STATUS_CANCELLED; }
+    public function isRefunded(): bool    { return $this->status === self::STATUS_REFUNDED; }
+    public function isConsolidated(): bool{ return $this->status === self::STATUS_CONSOLIDATED; }
+    public function isBulkPayment(): bool { return $this->is_bulk_payment === true; }
+    public function hasPenalty(): bool    { return $this->penalty_amount > 0; }
 
     public function isOverdue(): bool
     {
-        // ✅ FIX: Consolidated invoices should never be considered overdue
         if ($this->status === self::STATUS_CONSOLIDATED) {
             return false;
         }
-        
-        return $this->status === self::STATUS_OVERDUE || 
-               ($this->status === self::STATUS_PENDING && $this->due_date && $this->due_date->isPast());
-    }
 
-    public function isPartial(): bool
-    {
-        return $this->status === self::STATUS_PARTIAL;
-    }
-
-    public function isCancelled(): bool
-    {
-        return $this->status === self::STATUS_CANCELLED;
-    }
-
-    public function isRefunded(): bool
-    {
-        return $this->status === self::STATUS_REFUNDED;
-    }
-
-    public function isConsolidated(): bool
-    {
-        return $this->status === self::STATUS_CONSOLIDATED;
-    }
-
-    public function isBulkPayment(): bool
-    {
-        return $this->is_bulk_payment === true;
-    }
-
-    public function hasPenalty(): bool
-    {
-        return $this->penalty_amount > 0;
+        return $this->status === self::STATUS_OVERDUE
+            || ($this->status === self::STATUS_PENDING && $this->due_date && $this->due_date->isPast());
     }
 
     public function isPayable(): bool
     {
-        // ✅ FIX: Consolidated invoices are not payable
         if ($this->status === self::STATUS_CONSOLIDATED) {
             return false;
         }
-        
-        return in_array($this->status, [self::STATUS_PENDING, self::STATUS_OVERDUE, self::STATUS_PROCESSING]);
+
+        return in_array($this->status, [
+            self::STATUS_PENDING,
+            self::STATUS_OVERDUE,
+            self::STATUS_PROCESSING,
+        ]);
     }
 
     public function canBeEdited(): bool
     {
-        // ✅ FIX: Consolidated invoices cannot be edited
         if ($this->status === self::STATUS_CONSOLIDATED) {
             return false;
         }
-        
+
         return !in_array($this->status, [
-            self::STATUS_PAID, 
+            self::STATUS_PAID,
             self::STATUS_CANCELLED,
-            self::STATUS_REFUNDED
+            self::STATUS_REFUNDED,
         ]) && !$this->isBulkPayment();
     }
 
     public function canBeCancelled(): bool
     {
-        // ✅ FIX: Consolidated invoices cannot be cancelled
         if ($this->status === self::STATUS_CONSOLIDATED) {
             return false;
         }
-        
+
         return in_array($this->status, [
-            self::STATUS_PENDING, 
-            self::STATUS_OVERDUE, 
-            self::STATUS_PROCESSING
+            self::STATUS_PENDING,
+            self::STATUS_OVERDUE,
+            self::STATUS_PROCESSING,
         ]) && !$this->isBulkPayment();
     }
 
     public function canBeDeleted(): bool
     {
-        // ✅ FIX: Consolidated invoices cannot be deleted
         if ($this->status === self::STATUS_CONSOLIDATED) {
             return false;
         }
-        
+
         return !$this->isPaid() && !$this->payment()->exists();
     }
 
@@ -498,9 +509,6 @@ class Invoice extends Model
 
     // ========== BULK COVERAGE METHODS ==========
 
-    /**
-     * Check if this invoice covers a specific period
-     */
     public function coversPeriod(string $period): bool
     {
         if (!$this->isBulkPayment() || !$this->isPaid()) {
@@ -508,7 +516,7 @@ class Invoice extends Model
         }
 
         $coveredPeriods = $this->getCoveredPeriods();
-        
+
         if (!empty($coveredPeriods) && in_array($period, $coveredPeriods)) {
             return true;
         }
@@ -516,17 +524,14 @@ class Invoice extends Model
         if ($this->bulk_coverage_start && $this->bulk_coverage_end) {
             $periodDate = Carbon::createFromFormat('Y-m', $period)->startOfMonth();
             return $periodDate->between(
-                $this->bulk_coverage_start->startOfMonth(),
-                $this->bulk_coverage_end->endOfMonth()
+                $this->bulk_coverage_start->copy()->startOfMonth(),
+                $this->bulk_coverage_end->copy()->endOfMonth()
             );
         }
 
         return false;
     }
 
-    /**
-     * Get covered periods array from invoice
-     */
     public function getCoveredPeriods(): array
     {
         if (!$this->isBulkPayment()) {
@@ -534,8 +539,7 @@ class Invoice extends Model
         }
 
         $periods = $this->covers_periods;
-        
-        // If it's a string (JSON), decode it
+
         if (is_string($periods)) {
             $decoded = json_decode($periods, true);
             if (is_array($decoded)) {
@@ -543,17 +547,15 @@ class Invoice extends Model
             }
             return [];
         }
-        
-        // If it's already an array, return it
+
         if (is_array($periods)) {
             return $periods;
         }
 
-        // If covers_periods is empty, try to generate from bulk_coverage dates
         if ($this->bulk_coverage_start && $this->bulk_coverage_end) {
             $generatedPeriods = [];
             $current = $this->bulk_coverage_start->copy()->startOfMonth();
-            $end = $this->bulk_coverage_end->copy()->startOfMonth();
+            $end     = $this->bulk_coverage_end->copy()->startOfMonth();
 
             while ($current <= $end) {
                 $generatedPeriods[] = $current->format('Y-m');
@@ -573,11 +575,11 @@ class Invoice extends Model
         }
 
         $this->covers_periods = $periods;
-        
+
         if ($start) {
             $this->bulk_coverage_start = Carbon::createFromFormat('Y-m', $start)->startOfMonth();
         }
-        
+
         if ($end) {
             $this->bulk_coverage_end = Carbon::createFromFormat('Y-m', $end)->endOfMonth();
         }
@@ -592,15 +594,15 @@ class Invoice extends Model
     public function markAsYearEndArchived(int $year): bool
     {
         return $this->update([
-            'year_end_archived_at' => now(),
+            'year_end_archived_at'  => now(),
             'year_end_archive_year' => $year,
-            'original_year' => $year,
-            'archive_type' => 'year_end',
-            'metadata' => array_merge($this->metadata ?? [], [
-                'year_end_archived' => true,
-                'year_end_archived_at' => now()->toDateTimeString(),
-                'year_end_archive_year' => $year
-            ])
+            'original_year'         => $year,
+            'archive_type'          => 'year_end',
+            'metadata'              => array_merge($this->metadata ?? [], [
+                'year_end_archived'     => true,
+                'year_end_archived_at'  => now()->toDateTimeString(),
+                'year_end_archive_year' => $year,
+            ]),
         ]);
     }
 
@@ -609,8 +611,8 @@ class Invoice extends Model
     public function markAsProcessing(?string $paymentMethod = null): void
     {
         $data = [
-            'status' => self::STATUS_PROCESSING,
-            'updated_by' => auth()->check() ? auth()->id() : null
+            'status'     => self::STATUS_PROCESSING,
+            'updated_by' => auth()->check() ? auth()->id() : null,
         ];
 
         if ($paymentMethod) {
@@ -618,35 +620,35 @@ class Invoice extends Model
         }
 
         $this->update($data);
-        
+
         $this->addNote('Payment processing started via ' . ($paymentMethod ?? 'unknown method'));
     }
 
     public function markAsPaid($paymentMethod, $paymentReference = null, $paidAmount = null): void
     {
         $data = [
-            'payment_method' => $paymentMethod,
+            'payment_method'    => $paymentMethod,
             'payment_reference' => $paymentReference,
-            'payment_date' => now(),
-            'updated_by' => auth()->check() ? auth()->id() : null
+            'payment_date'      => now(),
+            'updated_by'        => auth()->check() ? auth()->id() : null,
         ];
 
         if ($paidAmount && $paidAmount < $this->total_amount) {
             $data['status'] = self::STATUS_PARTIAL;
-            
+
             $metadata = $this->metadata ?? [];
             $metadata['partial_payments'] = array_merge($metadata['partial_payments'] ?? [], [
                 [
-                    'paid_amount' => $paidAmount,
+                    'paid_amount'      => $paidAmount,
                     'remaining_amount' => $this->total_amount - $paidAmount,
-                    'paid_at' => now()->toDateTimeString(),
-                    'reference' => $paymentReference
-                ]
+                    'paid_at'          => now()->toDateTimeString(),
+                    'reference'        => $paymentReference,
+                ],
             ]);
             $data['metadata'] = $metadata;
         } else {
             $data['status'] = self::STATUS_PAID;
-            
+
             if ($this->isBulkPayment() && !empty($this->covers_periods)) {
                 $metadata = $this->metadata ?? [];
                 $metadata['coverage_activated_at'] = now()->toDateTimeString();
@@ -655,45 +657,44 @@ class Invoice extends Model
         }
 
         $this->update($data);
-        
+
         $this->markNotificationSent('payment_confirmation');
-        
-        $note = "Marked as " . ($data['status'] === self::STATUS_PARTIAL ? 'partially paid' : 'paid') . " via {$paymentMethod}";
+
+        $note = 'Marked as ' . ($data['status'] === self::STATUS_PARTIAL ? 'partially paid' : 'paid') . " via {$paymentMethod}";
         if ($paymentReference) {
             $note .= " (Ref: {$paymentReference})";
         }
         if ($paidAmount && $paidAmount < $this->total_amount) {
-            $note .= " - Amount paid: " . number_format($paidAmount, 2);
+            $note .= ' - Amount paid: ' . number_format($paidAmount, 2);
         }
         $this->addNote($note);
     }
 
     public function applyPenalty(float $penaltyAmount, ?string $reason = null): void
     {
-        // ✅ FIX: Don't apply penalties to consolidated invoices
         if ($this->status === self::STATUS_CONSOLIDATED) {
             Log::warning("Attempted to apply penalty to consolidated invoice #{$this->id}");
             return;
         }
-        
+
         $this->update([
-            'penalty_amount' => $penaltyAmount,
+            'penalty_amount'       => $penaltyAmount,
             'penalty_applied_date' => now(),
-            'status' => $this->due_date && $this->due_date->isPast() 
-                ? self::STATUS_OVERDUE 
+            'status'               => $this->due_date && $this->due_date->isPast()
+                ? self::STATUS_OVERDUE
                 : $this->status,
-            'updated_by' => auth()->check() ? auth()->id() : null
+            'updated_by'           => auth()->check() ? auth()->id() : null,
         ]);
 
-        $this->addNote("Penalty applied: " . ($reason ? $reason . " - " : "") . "Amount: " . number_format($penaltyAmount, 2));
+        $this->addNote('Penalty applied: ' . ($reason ? $reason . ' - ' : '') . 'Amount: ' . number_format($penaltyAmount, 2));
     }
 
     public function removePenalty(?string $reason = null): void
     {
         $this->update([
-            'penalty_amount' => 0.00,
+            'penalty_amount'       => 0.00,
             'penalty_applied_date' => null,
-            'updated_by' => auth()->check() ? auth()->id() : null
+            'updated_by'           => auth()->check() ? auth()->id() : null,
         ]);
 
         if ($reason) {
@@ -704,8 +705,8 @@ class Invoice extends Model
     public function markAsCancelled(?string $reason = null): void
     {
         $this->update([
-            'status' => self::STATUS_CANCELLED,
-            'updated_by' => auth()->check() ? auth()->id() : null
+            'status'     => self::STATUS_CANCELLED,
+            'updated_by' => auth()->check() ? auth()->id() : null,
         ]);
 
         if ($reason) {
@@ -716,13 +717,13 @@ class Invoice extends Model
     public function resetToPending(): void
     {
         $this->update([
-            'status' => self::STATUS_PENDING,
-            'payment_method' => null,
+            'status'            => self::STATUS_PENDING,
+            'payment_method'    => null,
             'payment_reference' => null,
-            'payment_date' => null,
-            'updated_by' => auth()->check() ? auth()->id() : null
+            'payment_date'      => null,
+            'updated_by'        => auth()->check() ? auth()->id() : null,
         ]);
-        
+
         $this->addNote('Payment failed/cancelled - reset to pending');
     }
 
@@ -731,42 +732,42 @@ class Invoice extends Model
     public function markNotificationSent(string $type = 'generation'): bool
     {
         $metadata = $this->metadata ?? [];
-        
+
         if (!isset($metadata['notifications'])) {
             $metadata['notifications'] = [];
         }
-        
+
         $metadata['notifications'][$type] = [
             'sent_at' => now()->toDateTimeString(),
-            'type' => $type
+            'type'    => $type,
         ];
-        
-        $metadata['notification_sent_at'] = now()->toDateTimeString();
+
+        $metadata['notification_sent_at']    = now()->toDateTimeString();
         $metadata['notification_sent_count'] = ($metadata['notification_sent_count'] ?? 0) + 1;
-        
+
         $this->metadata = $metadata;
-        
+
         return $this->save();
     }
 
     public function markReminderSent(): bool
     {
         $this->last_reminder_sent_at = now();
-        $this->reminder_count = ($this->reminder_count ?? 0) + 1;
-        
+        $this->reminder_count        = ($this->reminder_count ?? 0) + 1;
+
         $metadata = $this->metadata ?? [];
-        
+
         if (!isset($metadata['reminders'])) {
             $metadata['reminders'] = [];
         }
-        
+
         $metadata['reminders'][] = [
-            'sent_at' => now()->toDateTimeString(),
-            'days_before_due' => $this->days_until_due
+            'sent_at'         => now()->toDateTimeString(),
+            'days_before_due' => $this->days_until_due,
         ];
-        
+
         $this->metadata = $metadata;
-        
+
         return $this->save();
     }
 
@@ -775,30 +776,30 @@ class Invoice extends Model
         if (!$this->isPayable()) {
             return false;
         }
-        
+
         $daysUntilDue = $this->days_until_due;
-        
+
         if ($daysUntilDue === null || $daysUntilDue > $reminderDaysBefore) {
             return false;
         }
-        
+
         if ($this->last_reminder_sent_at && $this->last_reminder_sent_at->isToday()) {
             return false;
         }
-        
+
         return true;
     }
 
     public function getReminderStatus(): array
     {
         $settings = SystemSetting::getSettings();
-        
+
         return [
             'reminders_enabled' => $settings->shouldSendPaymentReminders(),
-            'reminder_days' => $settings->getReminderDaysBefore(),
-            'should_send' => $this->shouldSendReminder($settings->getReminderDaysBefore()),
-            'last_sent' => $this->last_reminder_sent_at,
-            'count' => $this->reminder_count ?? 0
+            'reminder_days'     => $settings->getReminderDaysBefore(),
+            'should_send'       => $this->shouldSendReminder($settings->getReminderDaysBefore()),
+            'last_sent'         => $this->last_reminder_sent_at,
+            'count'             => $this->reminder_count ?? 0,
         ];
     }
 
@@ -807,26 +808,22 @@ class Invoice extends Model
     public function addNote(string $note): void
     {
         $currentNotes = $this->notes ?? '';
-        $timestamp = now()->format('Y-m-d H:i:s');
-        $userName = auth()->check() ? auth()->user()->name : 'System';
-        
+        $timestamp    = now()->format('Y-m-d H:i:s');
+        $userName     = auth()->check() ? auth()->user()->name : 'System';
+
         $newNote = "[{$timestamp}] {$userName}: {$note}";
-        
+
         $this->update([
-            'notes' => ($currentNotes ? $currentNotes . "\n" : '') . $newNote
+            'notes' => ($currentNotes ? $currentNotes . "\n" : '') . $newNote,
         ]);
     }
 
     public function updateMetadata(array $metadata, bool $merge = true): void
     {
         $currentMetadata = $this->metadata ?? [];
-        
-        if ($merge) {
-            $newMetadata = array_merge($currentMetadata, $metadata);
-        } else {
-            $newMetadata = $metadata;
-        }
-        
+
+        $newMetadata = $merge ? array_merge($currentMetadata, $metadata) : $metadata;
+
         $this->update(['metadata' => $newMetadata]);
     }
 
@@ -843,24 +840,24 @@ class Invoice extends Model
     public function validateForGeneration(): array
     {
         $errors = [];
-        
+
         if (!$this->property) {
             $errors[] = 'Property not found';
         } elseif ($this->property->status !== 'active') {
             $errors[] = 'Property is not active';
         }
-        
+
         if ($this->amount <= 0) {
             $errors[] = 'Invoice amount must be greater than 0';
         }
-        
+
         if (!$this->due_date || $this->due_date->isPast()) {
             $errors[] = 'Due date must be in the future';
         }
-        
+
         return [
-            'valid' => empty($errors),
-            'errors' => $errors
+            'valid'  => empty($errors),
+            'errors' => $errors,
         ];
     }
 
@@ -873,61 +870,61 @@ class Invoice extends Model
 
     public function getStatusDisplayAttribute(): string
     {
-        return match($this->status) {
-            self::STATUS_PENDING => 'Pending',
-            self::STATUS_PROCESSING => 'Processing',
-            self::STATUS_PAID => 'Paid',
-            self::STATUS_OVERDUE => 'Overdue',
-            self::STATUS_PARTIAL => 'Partial',
-            self::STATUS_CANCELLED => 'Cancelled',
-            self::STATUS_REFUNDED => 'Refunded',
+        return match ($this->status) {
+            self::STATUS_PENDING      => 'Pending',
+            self::STATUS_PROCESSING   => 'Processing',
+            self::STATUS_PAID         => 'Paid',
+            self::STATUS_OVERDUE      => 'Overdue',
+            self::STATUS_PARTIAL      => 'Partial',
+            self::STATUS_CANCELLED    => 'Cancelled',
+            self::STATUS_REFUNDED     => 'Refunded',
             self::STATUS_CONSOLIDATED => 'Consolidated',
-            default => ucfirst($this->status)
+            default                   => ucfirst($this->status),
         };
     }
 
     public function getStatusBadgeClassAttribute(): string
     {
-        return match($this->status) {
-            self::STATUS_PAID => 'bg-green-100 text-green-800',
-            self::STATUS_PENDING => 'bg-yellow-100 text-yellow-800',
-            self::STATUS_PROCESSING => 'bg-blue-100 text-blue-800',
-            self::STATUS_OVERDUE => 'bg-red-100 text-red-800',
-            self::STATUS_PARTIAL => 'bg-purple-100 text-purple-800',
-            self::STATUS_CANCELLED => 'bg-gray-100 text-gray-800',
-            self::STATUS_REFUNDED => 'bg-indigo-100 text-indigo-800',
+        return match ($this->status) {
+            self::STATUS_PAID         => 'bg-green-100 text-green-800',
+            self::STATUS_PENDING      => 'bg-yellow-100 text-yellow-800',
+            self::STATUS_PROCESSING   => 'bg-blue-100 text-blue-800',
+            self::STATUS_OVERDUE      => 'bg-red-100 text-red-800',
+            self::STATUS_PARTIAL      => 'bg-purple-100 text-purple-800',
+            self::STATUS_CANCELLED    => 'bg-gray-100 text-gray-800',
+            self::STATUS_REFUNDED     => 'bg-indigo-100 text-indigo-800',
             self::STATUS_CONSOLIDATED => 'bg-orange-100 text-orange-800',
-            default => 'bg-gray-100 text-gray-800'
+            default                   => 'bg-gray-100 text-gray-800',
         };
     }
 
     public function getStatusColorAttribute(): string
     {
-        return match($this->status) {
-            self::STATUS_PAID => 'success',
-            self::STATUS_PENDING => 'warning',
-            self::STATUS_PROCESSING => 'info',
-            self::STATUS_OVERDUE => 'danger',
-            self::STATUS_PARTIAL => 'primary',
-            self::STATUS_CANCELLED => 'secondary',
-            self::STATUS_REFUNDED => 'indigo',
+        return match ($this->status) {
+            self::STATUS_PAID         => 'success',
+            self::STATUS_PENDING      => 'warning',
+            self::STATUS_PROCESSING   => 'info',
+            self::STATUS_OVERDUE      => 'danger',
+            self::STATUS_PARTIAL      => 'primary',
+            self::STATUS_CANCELLED    => 'secondary',
+            self::STATUS_REFUNDED     => 'indigo',
             self::STATUS_CONSOLIDATED => 'orange',
-            default => 'secondary'
+            default                   => 'secondary',
         };
     }
 
     public function getStatusIconAttribute(): string
     {
-        return match($this->status) {
-            self::STATUS_PAID => 'fas fa-check-circle',
-            self::STATUS_PENDING => 'fas fa-clock',
-            self::STATUS_PROCESSING => 'fas fa-spinner fa-spin',
-            self::STATUS_OVERDUE => 'fas fa-exclamation-circle',
-            self::STATUS_PARTIAL => 'fas fa-adjust',
-            self::STATUS_CANCELLED => 'fas fa-ban',
-            self::STATUS_REFUNDED => 'fas fa-undo',
+        return match ($this->status) {
+            self::STATUS_PAID         => 'fas fa-check-circle',
+            self::STATUS_PENDING      => 'fas fa-clock',
+            self::STATUS_PROCESSING   => 'fas fa-spinner fa-spin',
+            self::STATUS_OVERDUE      => 'fas fa-exclamation-circle',
+            self::STATUS_PARTIAL      => 'fas fa-adjust',
+            self::STATUS_CANCELLED    => 'fas fa-ban',
+            self::STATUS_REFUNDED     => 'fas fa-undo',
             self::STATUS_CONSOLIDATED => 'fas fa-layer-group',
-            default => 'fas fa-question-circle'
+            default                   => 'fas fa-question-circle',
         };
     }
 
@@ -939,7 +936,7 @@ class Invoice extends Model
             }
             return 'Bulk Payment';
         }
-        
+
         try {
             return Carbon::createFromFormat('Y-m', $this->period)->format('F Y');
         } catch (\Exception $e) {
@@ -952,7 +949,7 @@ class Invoice extends Model
         if (!$this->isOverdue() || !$this->due_date) {
             return 0;
         }
-        
+
         return max(0, now()->startOfDay()->diffInDays($this->due_date->startOfDay()));
     }
 
@@ -961,7 +958,7 @@ class Invoice extends Model
         if (!$this->due_date || $this->isPaid() || $this->isOverdue() || $this->isConsolidated()) {
             return null;
         }
-        
+
         $days = now()->startOfDay()->diffInDays($this->due_date->startOfDay(), false);
         return $days > 0 ? $days : 0;
     }
@@ -971,7 +968,7 @@ class Invoice extends Model
         if ($this->isPaid() || $this->isOverdue() || $this->isConsolidated() || !$this->due_date) {
             return false;
         }
-        
+
         $daysUntil = $this->days_until_due;
         return $daysUntil !== null && $daysUntil <= 7 && $daysUntil > 0;
     }
@@ -983,20 +980,22 @@ class Invoice extends Model
 
     public function getPaymentMethodDisplayAttribute(): string
     {
-        if (!$this->payment_method) return 'N/A';
-        
-        return match($this->payment_method) {
-            self::METHOD_CASH => 'Cash',
-            self::METHOD_BANK_TRANSFER => 'Bank Transfer',
-            self::METHOD_CHEQUE => 'Cheque',
-            self::METHOD_CARD => 'Credit/Debit Card',
-            self::METHOD_MOBILE_MONEY => 'Mobile Money',
-            self::METHOD_MTN_MOMO => 'MTN Mobile Money',
-            self::METHOD_TELECEL_CASH => 'Telecel Cash',
+        if (!$this->payment_method) {
+            return 'N/A';
+        }
+
+        return match ($this->payment_method) {
+            self::METHOD_CASH            => 'Cash',
+            self::METHOD_BANK_TRANSFER   => 'Bank Transfer',
+            self::METHOD_CHEQUE          => 'Cheque',
+            self::METHOD_CARD            => 'Credit/Debit Card',
+            self::METHOD_MOBILE_MONEY    => 'Mobile Money',
+            self::METHOD_MTN_MOMO        => 'MTN Mobile Money',
+            self::METHOD_TELECEL_CASH    => 'Telecel Cash',
             self::METHOD_AIRTELTIGO_CASH => 'AirtelTigo Cash',
-            self::METHOD_PAYSTACK => 'Paystack',
-            self::METHOD_BULK_PAYMENT => 'Bulk Payment',
-            default => ucwords(str_replace('_', ' ', $this->payment_method))
+            self::METHOD_PAYSTACK        => 'Paystack',
+            self::METHOD_BULK_PAYMENT    => 'Bulk Payment',
+            default                      => ucwords(str_replace('_', ' ', $this->payment_method)),
         };
     }
 
@@ -1017,8 +1016,7 @@ class Invoice extends Model
 
     public function getFormattedAmountAttribute(): string
     {
-        $settings = SystemSetting::getSettings();
-        return $settings->formatAmount($this->amount);
+        return SystemSetting::getSettings()->formatAmount($this->amount);
     }
 
     public function getFormattedPenaltyAttribute(): string
@@ -1026,14 +1024,12 @@ class Invoice extends Model
         if (!$this->penalty_amount) {
             return 'GHS 0.00';
         }
-        $settings = SystemSetting::getSettings();
-        return $settings->formatAmount($this->penalty_amount);
+        return SystemSetting::getSettings()->formatAmount($this->penalty_amount);
     }
 
     public function getFormattedTotalAmountAttribute(): string
     {
-        $settings = SystemSetting::getSettings();
-        return $settings->formatAmount($this->total_amount);
+        return SystemSetting::getSettings()->formatAmount($this->total_amount);
     }
 
     public function getNotificationSentAttribute(): bool
@@ -1059,7 +1055,6 @@ class Invoice extends Model
         if (!$this->last_reminder_sent_at) {
             return null;
         }
-        
         return $this->last_reminder_sent_at->diffForHumans();
     }
 
@@ -1081,16 +1076,20 @@ class Invoice extends Model
         }
 
         $periods = $this->getCoveredPeriods();
-        
+
         return [
-            'total_months' => count($periods),
-            'periods' => $periods,
-            'formatted_periods' => collect($periods)->map(function($period) {
-                return Carbon::createFromFormat('Y-m', $period)->format('M Y');
+            'total_months'      => count($periods),
+            'periods'           => $periods,
+            'formatted_periods' => collect($periods)->map(function ($period) {
+                try {
+                    return Carbon::createFromFormat('Y-m', $period)->format('M Y');
+                } catch (\Exception $e) {
+                    return (string) $period;
+                }
             })->toArray(),
-            'start' => $this->bulk_coverage_start?->format('M Y'),
-            'end' => $this->bulk_coverage_end?->format('M Y'),
-            'is_active' => $this->isPaid()
+            'start'             => $this->bulk_coverage_start?->format('M Y'),
+            'end'               => $this->bulk_coverage_end?->format('M Y'),
+            'is_active'         => $this->isPaid(),
         ];
     }
 
@@ -1118,48 +1117,48 @@ class Invoice extends Model
     public static function getPaymentMethods(): array
     {
         return [
-            self::METHOD_CASH => 'Cash',
-            self::METHOD_BANK_TRANSFER => 'Bank Transfer',
-            self::METHOD_CHEQUE => 'Cheque',
-            self::METHOD_CARD => 'Credit/Debit Card',
-            self::METHOD_MOBILE_MONEY => 'Mobile Money',
-            self::METHOD_MTN_MOMO => 'MTN Mobile Money',
-            self::METHOD_TELECEL_CASH => 'Telecel Cash',
+            self::METHOD_CASH            => 'Cash',
+            self::METHOD_BANK_TRANSFER   => 'Bank Transfer',
+            self::METHOD_CHEQUE          => 'Cheque',
+            self::METHOD_CARD            => 'Credit/Debit Card',
+            self::METHOD_MOBILE_MONEY    => 'Mobile Money',
+            self::METHOD_MTN_MOMO        => 'MTN Mobile Money',
+            self::METHOD_TELECEL_CASH    => 'Telecel Cash',
             self::METHOD_AIRTELTIGO_CASH => 'AirtelTigo Cash',
-            self::METHOD_PAYSTACK => 'Paystack',
-            self::METHOD_BULK_PAYMENT => 'Bulk Payment',
+            self::METHOD_PAYSTACK        => 'Paystack',
+            self::METHOD_BULK_PAYMENT    => 'Bulk Payment',
         ];
     }
 
     public function getSummary(): array
     {
         return [
-            'id' => $this->id,
-            'property' => $this->property->name ?? 'Unknown',
-            'unit' => $this->unit->unit_number ?? null,
-            'period' => $this->formatted_period,
-            'amount' => $this->formatted_amount,
-            'penalty' => $this->formatted_penalty,
-            'total' => $this->formatted_total_amount,
-            'due_date' => $this->due_date?->format('Y-m-d'),
-            'status' => [
-                'text' => $this->status_display,
+            'id'                    => $this->id,
+            'property'              => $this->property->name ?? 'Unknown',
+            'unit'                  => $this->unit->unit_number ?? null,
+            'period'                => $this->formatted_period,
+            'amount'                => $this->formatted_amount,
+            'penalty'               => $this->formatted_penalty,
+            'total'                 => $this->formatted_total_amount,
+            'due_date'              => $this->due_date?->format('Y-m-d'),
+            'status'                => [
+                'text'  => $this->status_display,
                 'color' => $this->status_color,
                 'badge' => $this->status_badge_class,
-                'icon' => $this->status_icon
+                'icon'  => $this->status_icon,
             ],
-            'days_until_due' => $this->days_until_due,
-            'days_overdue' => $this->days_overdue,
-            'is_payable' => $this->isPayable(),
-            'is_bulk' => $this->isBulkPayment(),
-            'coverage' => $this->coverage_summary,
-            'reminder_status' => $this->getReminderStatus(),
-            'notification_sent' => $this->notification_sent,
-            'generation_method' => $this->generation_method,
-            'is_year_end_archived' => $this->isYearEndArchived(),
+            'days_until_due'        => $this->days_until_due,
+            'days_overdue'          => $this->days_overdue,
+            'is_payable'            => $this->isPayable(),
+            'is_bulk'               => $this->isBulkPayment(),
+            'coverage'              => $this->coverage_summary,
+            'reminder_status'       => $this->getReminderStatus(),
+            'notification_sent'     => $this->notification_sent,
+            'generation_method'     => $this->generation_method,
+            'is_year_end_archived'  => $this->isYearEndArchived(),
             'year_end_archive_year' => $this->year_end_archive_year,
-            'original_year' => $this->original_year,
-            'archive_type' => $this->archive_type
+            'original_year'         => $this->original_year,
+            'archive_type'          => $this->archive_type,
         ];
     }
 
@@ -1170,26 +1169,24 @@ class Invoice extends Model
         parent::boot();
 
         static::creating(function ($invoice) {
-            // Set created_by if not set
             if (auth()->check() && !isset($invoice->created_by)) {
                 $invoice->created_by = auth()->id();
             } elseif (!isset($invoice->created_by)) {
-                $invoice->created_by = 1; // System user ID
+                $invoice->created_by = 1;
             }
-            
-            // Generate invoice number if not set
+
             if (empty($invoice->invoice_number)) {
                 $invoice->invoice_number = 'INV-' . date('Y') . '-' . str_pad(self::max('id') + 1, 6, '0', STR_PAD_LEFT);
             }
-            
+
             if (!$invoice->due_date) {
                 $invoice->due_date = now()->addDays(30);
             }
-            
+
             if (is_null($invoice->penalty_amount)) {
                 $invoice->penalty_amount = 0.00;
             }
-            
+
             if (isset($invoice->attributes['total_amount'])) {
                 unset($invoice->attributes['total_amount']);
             }
@@ -1203,8 +1200,7 @@ class Invoice extends Model
             if (isset($invoice->attributes['total_amount'])) {
                 unset($invoice->attributes['total_amount']);
             }
-            
-            // Set updated_by on update
+
             if (auth()->check() && !isset($invoice->updated_by)) {
                 $invoice->updated_by = auth()->id();
             }
@@ -1214,16 +1210,16 @@ class Invoice extends Model
             if ($invoice->isBulkPayment()) {
                 self::where('bulk_payment_id', $invoice->id)
                     ->update([
-                        'bulk_payment_id' => null,
+                        'bulk_payment_id'        => null,
                         'bulk_payment_reference' => null,
-                        'updated_by' => auth()->check() ? auth()->id() : null
+                        'updated_by'             => auth()->check() ? auth()->id() : null,
                     ]);
             }
-            
+
             if ($invoice->isPaid()) {
                 throw new \Exception('Cannot delete paid invoices');
             }
-            
+
             if ($invoice->isConsolidated()) {
                 throw new \Exception('Cannot delete consolidated invoices');
             }

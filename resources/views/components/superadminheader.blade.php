@@ -300,7 +300,9 @@
         <span class="menu-text">MAIN NAVIGATION</span>
     </div>
 
-    {{-- Role-Based Dashboard Links --}}
+    {{-- ============================================ --}}
+    {{-- 🏠 ROLE-BASED DASHBOARD LINK --}}
+    {{-- ============================================ --}}
     @if($isSuperAdmin)
         <a href="{{ route('super-admin.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('super-admin.dashboard') ? 'active' : '' }}">
             <i class="fas fa-home mr-4"></i>
@@ -325,6 +327,90 @@
         <a href="{{ route('tenant.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('tenant.dashboard') ? 'active' : '' }}">
             <i class="fas fa-home mr-4"></i>
             <span class="nav-text">Dashboard</span>
+        </a>
+    @endif
+
+    {{-- ============================================ --}}
+    {{-- ⚙️ SYSTEM SETTINGS — moved up (Super Admin only) --}}
+    {{-- ============================================ --}}
+    @if($isSuperAdmin)
+        <div class="nav-divider mt-1">
+            <span class="menu-text">SYSTEM SETTINGS</span>
+        </div>
+
+        <a href="{{ route('admin.system-settings.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.system-settings.*') ? 'active' : '' }}">
+            <i class="fas fa-cog mr-4"></i>
+            <span class="nav-text">System Settings</span>
+        </a>
+    @endif
+
+    {{-- ============================================ --}}
+    {{-- 💰 BILLING MANAGEMENT — moved up (Super Admin only) --}}
+    {{-- ============================================ --}}
+    @if($isSuperAdmin)
+        <div class="nav-divider mt-1">
+            <span class="menu-text">BILLING MANAGEMENT</span>
+        </div>
+
+        <button id="billingManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200" style="color: var(--sidebar-text);">
+            <i class="fas fa-file-invoice-dollar mr-4"></i>
+            <span class="nav-text flex-grow">Billing Management</span>
+            @if(($pendingAgreements ?? 0) > 0 || ($awaitingSignature ?? 0) > 0 || ($pendingPayments ?? 0) > 0)
+                <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                    {{ ($pendingAgreements ?? 0) + ($awaitingSignature ?? 0) + ($pendingPayments ?? 0) }}
+                </span>
+            @else
+                <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
+            @endif
+        </button>
+    @endif
+
+    {{-- ============================================ --}}
+    {{-- 📄 INVOICE MANAGEMENT — moved up --}}
+    {{-- ============================================ --}}
+    <div class="nav-divider mt-1">
+        <span class="menu-text">INVOICE MANAGEMENT</span>
+    </div>
+
+    <button id="invoiceManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200" style="color: var(--sidebar-text);">
+        <i class="fas fa-file-invoice-dollar mr-4"></i>
+        <span class="nav-text flex-grow">Invoice Management</span>
+        @php
+            $totalInvoiceNotifications = ($landlordEligibleForArchive > 0 ? 1 : 0) +
+                                        ($landlordUnpaidPreviousYears > 0 ? 1 : 0) +
+                                        ($tenantEligibleForArchive > 0 ? 1 : 0) +
+                                        ($tenantUnpaidPreviousYears > 0 ? 1 : 0);
+        @endphp
+        @if($totalInvoiceNotifications > 0)
+            <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {{ $totalInvoiceNotifications > 9 ? '9+' : $totalInvoiceNotifications }}
+            </span>
+        @else
+            <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
+        @endif
+    </button>
+
+    {{-- ============================================ --}}
+    {{-- 💳 PAYMENT MANAGEMENT — NEW GROUPED SECTION --}}
+    {{-- Payment Providers + Payments combined --}}
+    {{-- ============================================ --}}
+    @if($isSuperAdmin || $isAdmin || $isDeveloper)
+        <div class="nav-divider mt-1">
+            <span class="menu-text">PAYMENT MANAGEMENT</span>
+        </div>
+
+        {{-- Payment Providers — Super Admin OR Developer only --}}
+        @if($isSuperAdmin || $isDeveloper)
+            <a href="{{ route('admin.payment-providers.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.payment-providers.*') ? 'active' : '' }}">
+                <i class="fas fa-credit-card mr-4"></i>
+                <span class="nav-text">Payment Providers</span>
+            </a>
+        @endif
+
+        {{-- Payments — Super Admin, Admin, Developer --}}
+        <a href="{{ route('admin.payments.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.payments.*') ? 'active' : '' }}">
+            <i class="fas fa-money-bill-wave mr-4"></i>
+            <span class="nav-text">Payments</span>
         </a>
     @endif
 
@@ -370,7 +456,7 @@
         <span class="menu-text">COMMUNICATION</span>
     </div>
 
-    <!-- ✅ FIXED: Email Accounts Link - Admin uses Super Admin linked accounts ONLY -->
+    <!-- ✅ Email Accounts Link - Admin uses Super Admin linked accounts ONLY -->
     <button id="emailManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('email-accounts.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
         <i class="fas fa-envelope mr-4"></i>
         <span class="nav-text flex-grow">Email Management</span>
@@ -460,63 +546,9 @@
     </button>
     @endif
 
-    {{-- SYSTEM SETTINGS SECTION - Only for Super Admin --}}
-    @if($isSuperAdmin)
-        <div class="nav-divider mt-1">
-            <span class="menu-text">SYSTEM SETTINGS</span>
-        </div>
-
-        <a href="{{ route('admin.system-settings.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.system-settings.*') ? 'active' : '' }}">
-            <i class="fas fa-cog mr-4"></i>
-            <span class="nav-text">System Settings</span>
-        </a>
-    @endif
-
     {{-- ============================================ --}}
-    {{-- 💰 SUPER ADMIN BILLING SECTION --}}
+    {{-- 🛠️ SYSTEM MANAGEMENT --}}
     {{-- ============================================ --}}
-    @if($isSuperAdmin)
-        <div class="nav-divider mt-1">
-            <span class="menu-text">BILLING MANAGEMENT</span>
-        </div>
-
-        <button id="billingManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200" style="color: var(--sidebar-text);">
-            <i class="fas fa-file-invoice-dollar mr-4"></i>
-            <span class="nav-text flex-grow">Billing Management</span>
-            @if(($pendingAgreements ?? 0) > 0 || ($awaitingSignature ?? 0) > 0 || ($pendingPayments ?? 0) > 0)
-                <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                    {{ ($pendingAgreements ?? 0) + ($awaitingSignature ?? 0) + ($pendingPayments ?? 0) }}
-                </span>
-            @else
-                <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
-            @endif
-        </button>
-    @endif
-
-    {{-- ========== INVOICE MANAGEMENT SECTION WITH MODAL ========== --}}
-    <div class="nav-divider mt-1">
-        <span class="menu-text">INVOICE MANAGEMENT</span>
-    </div>
-
-    <button id="invoiceManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200" style="color: var(--sidebar-text);">
-        <i class="fas fa-file-invoice-dollar mr-4"></i>
-        <span class="nav-text flex-grow">Invoice Management</span>
-        @php
-            $totalInvoiceNotifications = ($landlordEligibleForArchive > 0 ? 1 : 0) +
-                                        ($landlordUnpaidPreviousYears > 0 ? 1 : 0) +
-                                        ($tenantEligibleForArchive > 0 ? 1 : 0) +
-                                        ($tenantUnpaidPreviousYears > 0 ? 1 : 0);
-        @endphp
-        @if($totalInvoiceNotifications > 0)
-            <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                {{ $totalInvoiceNotifications > 9 ? '9+' : $totalInvoiceNotifications }}
-            </span>
-        @else
-            <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
-        @endif
-    </button>
-
-    {{-- SYSTEM MANAGEMENT SECTION --}}
     <div class="nav-divider mt-1">
         <span class="menu-text">SYSTEM MANAGEMENT</span>
     </div>
@@ -541,11 +573,6 @@
         <span class="nav-text">Property Units</span>
     </a>
 
-    <a href="{{ route('admin.payments.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.payments.*') ? 'active' : '' }}">
-        <i class="fas fa-credit-card mr-4"></i>
-        <span class="nav-text">Payments</span>
-    </a>
-
     <button id="administrativeToolsBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{
         request()->routeIs('admin.security-posts.*') ||
         request()->routeIs('admin.security-shifts.*') ||
@@ -565,19 +592,7 @@
         @endif
     </button>
 
-    {{-- ========== PAYMENT PROVIDERS SECTION - Super Admin AND Developer Access ========== --}}
-    @if($isSuperAdmin || $isDeveloper)
-        <div class="nav-divider mt-1">
-            <span class="menu-text">PAYMENT CONFIGURATION</span>
-        </div>
-
-        <a href="{{ route('admin.payment-providers.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.payment-providers.*') ? 'active' : '' }}">
-            <i class="fas fa-credit-card mr-4"></i>
-            <span class="nav-text">Payment Providers</span>
-        </a>
-    @endif
-
-        {{-- ============================================ --}}
+    {{-- ============================================ --}}
     {{-- 🧹 SANITATION MANAGEMENT --}}
     {{-- ============================================ --}}
     @if($isSuperAdmin || $isAdmin || $isDeveloper)

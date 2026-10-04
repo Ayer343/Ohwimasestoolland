@@ -22,12 +22,16 @@ class InvoiceService
         $this->notificationService = $notificationService;
     }
 
+    /* ============================================================
+       MONTHLY GENERATION
+       ============================================================ */
+
     /**
-     * Generate monthly invoices for all properties with auto-generation check
-     * ✅ FIXED: Now generates invoices for ALL property statuses (active, inactive,
-     * under_maintenance, vacant, under_construction)
-     * ✅ FIXED: Uses system setting value directly (no multipliers)
-     * ✅ FIXED: Routes notifications through NotificationService (email + SMS + WhatsApp)
+     * Generate monthly invoices for all properties.
+     *
+     * ✅ Uses system setting value directly (no multipliers)
+     * ✅ Routes notifications through NotificationService
+     * ✅ Skips periods covered by paid bulk payments
      */
     public function generateMonthlyInvoices(?string $period = null, ?bool $forceSendNotifications = null): array
     {
@@ -79,15 +83,15 @@ class InvoiceService
                 'status_breakdown' => $properties->groupBy('status')->map->count()->toArray(),
             ]);
 
-            $generatedCount          = 0;
-            $skippedCount            = 0;
-            $skippedDueToBulkCount   = 0;
-            $failedCount             = 0;
-            $updatedCount            = 0;
-            $notificationsSent       = 0;
-            $failedNotifications     = [];
-            $generatedInvoices       = [];
-            $updatedInvoices         = [];
+            $generatedCount        = 0;
+            $skippedCount          = 0;
+            $skippedDueToBulkCount = 0;
+            $failedCount           = 0;
+            $updatedCount          = 0;
+            $notificationsSent     = 0;
+            $failedNotifications   = [];
+            $generatedInvoices     = [];
+            $updatedInvoices       = [];
 
             $shouldSendNotifications = $forceSendNotifications ?? $settings->shouldSendPaymentReminders();
 
@@ -141,10 +145,10 @@ class InvoiceService
                         $updatedInvoices[] = $existingInvoice->id;
 
                         Log::info("Updated existing invoice for property", [
-                            'property_id'     => $property->id,
-                            'invoice_id'      => $existingInvoice->id,
-                            'amount'          => $amount,
-                            'status'          => $property->status,
+                            'property_id' => $property->id,
+                            'invoice_id'  => $existingInvoice->id,
+                            'amount'      => $amount,
+                            'status'      => $property->status,
                         ]);
                     } else {
                         $invoice = Invoice::create([
@@ -220,18 +224,18 @@ class InvoiceService
                 'period'   => $generationPeriod,
                 'due_date' => $dueDate->format('Y-m-d'),
                 'details'  => [
-                    'generated'              => $generatedCount,
-                    'updated'                => $updatedCount,
-                    'skipped'                => $skippedCount,
-                    'skipped_bulk_coverage'  => $skippedDueToBulkCount,
-                    'failed'                 => $failedCount,
-                    'notifications_sent'     => $notificationsSent,
-                    'overdue_marked'         => $overdueResult['count'] ?? 0,
-                    'overdue_notified'       => $overdueResult['notified_count'] ?? 0,
-                    'generated_invoices'     => $generatedInvoices,
-                    'updated_invoices'       => $updatedInvoices,
-                    'failed_notifications'   => $failedNotifications,
-                    'amount_per_invoice'     => $settings->monthly_dues_amount,
+                    'generated'             => $generatedCount,
+                    'updated'               => $updatedCount,
+                    'skipped'               => $skippedCount,
+                    'skipped_bulk_coverage' => $skippedDueToBulkCount,
+                    'failed'                => $failedCount,
+                    'notifications_sent'    => $notificationsSent,
+                    'overdue_marked'        => $overdueResult['count'] ?? 0,
+                    'overdue_notified'      => $overdueResult['notified_count'] ?? 0,
+                    'generated_invoices'    => $generatedInvoices,
+                    'updated_invoices'      => $updatedInvoices,
+                    'failed_notifications'  => $failedNotifications,
+                    'amount_per_invoice'    => $settings->monthly_dues_amount,
                 ],
             ];
 
@@ -250,8 +254,8 @@ class InvoiceService
     }
 
     /**
-     * ✅ FIXED: Calculate invoice amount based on system setting
-     * ✅ NO MULTIPLIERS - All properties get the same amount from system settings
+     * Calculate invoice amount based on system setting.
+     * No multipliers — all properties get the same amount from settings.
      */
     private function calculateInvoiceAmountForProperty(Property $property, SystemSetting $settings): float
     {
@@ -259,39 +263,37 @@ class InvoiceService
 
         if ($amount === null || $amount <= 0) {
             Log::warning('Invalid amount from calculateMonthlyDuesForProperty, using monthly_dues_amount directly', [
-                'property_id'          => $property->id,
-                'property_status'      => $property->status,
-                'calculated_amount'    => $amount,
-                'monthly_dues_amount'  => $settings->monthly_dues_amount,
-                'calculation_method'   => $settings->calculation_method,
+                'property_id'         => $property->id,
+                'property_status'     => $property->status,
+                'calculated_amount'   => $amount,
+                'monthly_dues_amount' => $settings->monthly_dues_amount,
+                'calculation_method'  => $settings->calculation_method,
             ]);
             $amount = (float) $settings->monthly_dues_amount;
         }
 
         Log::debug('Invoice amount calculated from system settings', [
-            'property_id'          => $property->id,
-            'property_status'      => $property->status,
-            'amount'               => $amount,
-            'source'               => $settings->calculation_method,
-            'monthly_dues_amount'  => $settings->monthly_dues_amount,
+            'property_id'         => $property->id,
+            'property_status'     => $property->status,
+            'amount'              => $amount,
+            'source'              => $settings->calculation_method,
+            'monthly_dues_amount' => $settings->monthly_dues_amount,
         ]);
 
         return $amount;
     }
 
-    /**
-     * Generate bulk payment invoice for multiple months
-     */
+    /* ============================================================
+       BULK PAYMENTS
+       ============================================================ */
+
     public function generateBulkPaymentInvoice(Property $property, int $months, ?string $startMonth = null, array $invoiceIds = []): array
     {
         try {
             $settings = SystemSetting::getSettings();
 
             if (!$settings->isBulkPaymentEnabled()) {
-                return [
-                    'success' => false,
-                    'message' => 'Bulk payments are currently disabled.',
-                ];
+                return ['success' => false, 'message' => 'Bulk payments are currently disabled.'];
             }
 
             if (!$settings->validateBulkMonths($months)) {
@@ -341,7 +343,7 @@ class InvoiceService
                 ->whereIn('period', $periods)
                 ->whereIn('status', ['pending', 'overdue'])
                 ->where('is_bulk_payment', false)
-                ->whereNull('bulk_parent_id')
+                ->whereNull('bulk_payment_id')
                 ->get();
 
             if (!empty($invoiceIds)) {
@@ -349,7 +351,7 @@ class InvoiceService
                     ->where('property_id', $property->id)
                     ->whereIn('status', ['pending', 'overdue'])
                     ->where('is_bulk_payment', false)
-                    ->whereNull('bulk_parent_id')
+                    ->whereNull('bulk_payment_id')
                     ->whereNotIn('id', $existingInvoices->pluck('id')->toArray())
                     ->get();
 
@@ -371,8 +373,8 @@ class InvoiceService
 
             foreach ($periods as $period) {
                 if (isset($existingInvoicesByPeriod[$period])) {
-                    $invoice              = $existingInvoicesByPeriod[$period];
-                    $totalAmount         += $invoice->amount;
+                    $invoice                = $existingInvoicesByPeriod[$period];
+                    $totalAmount           += $invoice->amount;
                     $consolidatedInvoices[] = $invoice->id;
                     $periodsWithExisting[]  = $period;
                 } else {
@@ -387,34 +389,34 @@ class InvoiceService
                 ->format('Y-m');
 
             $bulkInvoice = Invoice::create([
-                'property_id'          => $property->id,
-                'period'               => $startMonth . '_to_' . $coverageEnd,
-                'amount'               => $totalAmount,
-                'due_date'             => Carbon::now()->addDays($settings->grace_period_days ?? 14),
-                'status'               => 'pending',
-                'is_bulk_payment'      => true,
-                'bulk_months'          => $months,
-                'bulk_start_month'     => $coverageStart,
-                'bulk_end_month'       => $coverageEnd,
-                'covers_periods'       => json_encode($coveragePeriods),
-                'bulk_coverage_start'  => $coverageStart,
-                'bulk_coverage_end'    => $coverageEnd,
-                'description'          => "Bulk payment for {$months} months covering: " . implode(', ', array_map(function ($p) {
+                'property_id'         => $property->id,
+                'period'              => $startMonth . '_to_' . $coverageEnd,
+                'amount'              => $totalAmount,
+                'due_date'            => Carbon::now()->addDays($settings->grace_period_days ?? 14),
+                'status'              => 'pending',
+                'is_bulk_payment'     => true,
+                'bulk_months'         => $months,
+                'bulk_start_month'    => $coverageStart,
+                'bulk_end_month'      => $coverageEnd,
+                'covers_periods'      => json_encode($coveragePeriods),
+                'bulk_coverage_start' => $coverageStart,
+                'bulk_coverage_end'   => $coverageEnd,
+                'description'         => "Bulk payment for {$months} months covering: " . implode(', ', array_map(function ($p) {
                     return Carbon::parse($p . '-01')->format('M Y');
                 }, $coveragePeriods)),
-                'created_by'           => auth()->id(),
-                'notes'                => "📦 Bulk payment created for {$months} months",
+                'created_by'          => auth()->id(),
+                'notes'               => "📦 Bulk payment created for {$months} months",
             ]);
 
             if (!empty($consolidatedInvoices)) {
                 Invoice::whereIn('id', $consolidatedInvoices)->update([
-                    'status'                  => 'consolidated',
-                    'bulk_payment_id'         => $bulkInvoice->id,
-                    'bulk_payment_reference'  => $bulkInvoice->id . '-BULK',
-                    'payment_date'            => null,
-                    'payment_method'          => null,
-                    'payment_reference'       => null,
-                    'notes'                   => DB::raw("CONCAT(IFNULL(notes, ''), '\n📦 Consolidated into bulk payment #{$bulkInvoice->id} on " . now()->format('Y-m-d') . "')"),
+                    'status'                 => 'consolidated',
+                    'bulk_payment_id'        => $bulkInvoice->id,
+                    'bulk_payment_reference' => $bulkInvoice->id . '-BULK',
+                    'payment_date'           => null,
+                    'payment_method'         => null,
+                    'payment_reference'      => null,
+                    'notes'                  => DB::raw("CONCAT(IFNULL(notes, ''), '\n📦 Consolidated into bulk payment #{$bulkInvoice->id} on " . now()->format('Y-m-d') . "')"),
                 ]);
             }
 
@@ -429,13 +431,13 @@ class InvoiceService
             }
 
             Log::info("Bulk payment invoice created", [
-                'property_id'       => $property->id,
-                'months'            => $months,
-                'coverage_periods'  => $coveragePeriods,
-                'amount'            => $totalAmount,
-                'invoice_id'        => $bulkInvoice->id,
-                'property_status'   => $property->status,
-                'monthly_amount'    => $monthlyAmount,
+                'property_id'     => $property->id,
+                'months'          => $months,
+                'coverage_periods'=> $coveragePeriods,
+                'amount'          => $totalAmount,
+                'invoice_id'      => $bulkInvoice->id,
+                'property_status' => $property->status,
+                'monthly_amount'  => $monthlyAmount,
             ]);
 
             return [
@@ -452,22 +454,15 @@ class InvoiceService
             DB::rollBack();
             Log::error('Failed to generate bulk payment invoice: ' . $e->getMessage());
 
-            return [
-                'success' => false,
-                'message' => 'Failed to create bulk payment: ' . $e->getMessage(),
-            ];
+            return ['success' => false, 'message' => 'Failed to create bulk payment: ' . $e->getMessage()];
         }
     }
 
-    /**
-     * Process bulk payment after payment is completed
-     */
     public function processBulkPayment(Invoice $bulkInvoice, string $transactionId): array
     {
         try {
             DB::beginTransaction();
 
-            $settings        = SystemSetting::getSettings();
             $coveragePeriods = $bulkInvoice->covers_periods;
 
             if (is_string($coveragePeriods)) {
@@ -501,10 +496,10 @@ class InvoiceService
 
             $consolidatedCount = Invoice::where('bulk_payment_id', $bulkInvoice->id)
                 ->update([
-                    'payment_date'        => null,
-                    'payment_method'      => null,
-                    'payment_reference'   => $transactionId . '-CONSOLIDATED',
-                    'notes'               => DB::raw("CONCAT(IFNULL(notes, ''), '\n✅ Covered by bulk payment #{$bulkInvoice->id} on " . now()->format('Y-m-d') . "')"),
+                    'payment_date'      => null,
+                    'payment_method'    => null,
+                    'payment_reference' => $transactionId . '-CONSOLIDATED',
+                    'notes'             => DB::raw("CONCAT(IFNULL(notes, ''), '\n✅ Covered by bulk payment #{$bulkInvoice->id} on " . now()->format('Y-m-d') . "')"),
                 ]);
 
             DB::commit();
@@ -530,16 +525,14 @@ class InvoiceService
                 'transaction_id'  => $transactionId,
             ]);
 
-            return [
-                'success' => false,
-                'message' => 'Failed to process bulk payment: ' . $e->getMessage(),
-            ];
+            return ['success' => false, 'message' => 'Failed to process bulk payment: ' . $e->getMessage()];
         }
     }
 
-    /**
-     * Check if a period is covered by an active bulk payment
-     */
+    /* ============================================================
+       COVERAGE
+       ============================================================ */
+
     public function isPeriodCoveredByBulkPayment(Property $property, string $period): bool
     {
         try {
@@ -562,9 +555,6 @@ class InvoiceService
         }
     }
 
-    /**
-     * Get all active bulk coverages for a property
-     */
     public function getActiveBulkCoverages(Property $property): array
     {
         try {
@@ -606,9 +596,6 @@ class InvoiceService
         }
     }
 
-    /**
-     * Get property coverage summary
-     */
     public function getPropertyCoverageSummary(Property $property): array
     {
         try {
@@ -646,12 +633,10 @@ class InvoiceService
         }
     }
 
-    /**
-     * Send invoice notification to landlord.
-     *
-     * ✅ REWRITTEN: Now delegates to NotificationService so email + SMS +
-     * WhatsApp all fire according to the System Setting channel arrays.
-     */
+    /* ============================================================
+       NOTIFICATIONS
+       ============================================================ */
+
     private function sendInvoiceNotification(Property $property, Invoice $invoice): array
     {
         try {
@@ -660,8 +645,6 @@ class InvoiceService
             if (!$landlord) {
                 return ['sent' => false, 'reason' => 'No landlord found'];
             }
-
-            $settings = SystemSetting::getSettings();
 
             $hasEmail = !empty(trim($landlord->email ?? ''));
             $hasPhone = !empty(trim($landlord->phone ?? ''));
@@ -708,17 +691,13 @@ class InvoiceService
 
         } catch (\Throwable $e) {
             Log::error('[InvoiceService] Failed to send invoice notification: ' . $e->getMessage(), [
-                'invoice_id' => $invoice->id,
+                'invoice_id'  => $invoice->id,
                 'property_id' => $property->id,
             ]);
             return ['sent' => false, 'reason' => $e->getMessage()];
         }
     }
 
-    /**
-     * Mark all overdue invoices - ✅ FIXED: Exclude consolidated invoices
-     * ✅ NEW: Sends overdue notification to landlord via NotificationService
-     */
     public function markOverdueInvoices(): array
     {
         try {
@@ -761,7 +740,6 @@ class InvoiceService
 
                 $overdueCount++;
 
-                // ── Notify the landlord via every configured channel ──
                 try {
                     $result = $this->notificationService->sendLandlordInvoiceOverdue($invoice->fresh());
 
@@ -796,12 +774,12 @@ class InvoiceService
             Log::info("Marked {$overdueCount} invoices as overdue, applied penalties to {$penaltyAppliedCount}, notified {$notifiedCount} landlords");
 
             return [
-                'success'                => true,
-                'count'                  => $overdueCount,
-                'penalty_applied_count'  => $penaltyAppliedCount,
-                'notified_count'         => $notifiedCount,
-                'failed_notifications'   => $failedNotifications,
-                'message'                => "Marked {$overdueCount} invoices as overdue, applied penalties to {$penaltyAppliedCount}, notified {$notifiedCount} landlords",
+                'success'               => true,
+                'count'                 => $overdueCount,
+                'penalty_applied_count' => $penaltyAppliedCount,
+                'notified_count'        => $notifiedCount,
+                'failed_notifications'  => $failedNotifications,
+                'message'               => "Marked {$overdueCount} invoices as overdue, applied penalties to {$penaltyAppliedCount}, notified {$notifiedCount} landlords",
             ];
         } catch (\Exception $e) {
             Log::error("Failed to mark overdue invoices: " . $e->getMessage());
@@ -813,9 +791,61 @@ class InvoiceService
         }
     }
 
-    /**
-     * Get landlord's outstanding invoices
-     */
+    public function sendInvoiceStatusUpdateNotification(int $invoiceId, string $status): array
+    {
+        try {
+            $invoice  = Invoice::with(['property', 'property.landlord'])->findOrFail($invoiceId);
+            $landlord = $invoice->property->landlord;
+
+            if (!$landlord) {
+                return ['sent' => false, 'reason' => 'No landlord found'];
+            }
+
+            $settings = SystemSetting::getSettings();
+            if (!$settings->shouldSendPaymentReminders()) {
+                return ['sent' => false, 'reason' => 'Notifications disabled'];
+            }
+
+            $result = match ($status) {
+                'paid'    => $this->notificationService->sendLandlordPaymentConfirmation($invoice),
+                'overdue' => $this->notificationService->sendLandlordInvoiceOverdue($invoice),
+                'pending' => $this->notificationService->sendLandlordInvoiceReminder($invoice),
+                default   => null,
+            };
+
+            if ($result === null) {
+                return ['sent' => false, 'reason' => 'Unknown status'];
+            }
+
+            $dispatched = $result['dispatched'] ?? [];
+            $sent       = !empty(array_filter($dispatched));
+
+            if ($sent) {
+                $invoice->addNote(
+                    "Status update notification dispatched to landlord on "
+                    . now()->format('Y-m-d H:i:s')
+                    . " via: " . implode(', ', array_keys(array_filter($dispatched)))
+                );
+            }
+
+            return [
+                'sent'       => $sent,
+                'reason'     => $sent ? 'Success' : 'Dispatched to zero channels',
+                'dispatched' => $dispatched,
+                'channels'   => $result['channels'] ?? [],
+                'skipped'    => $result['skipped']  ?? [],
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('Failed to send invoice status update notification: ' . $e->getMessage());
+            return ['sent' => false, 'reason' => $e->getMessage()];
+        }
+    }
+
+    /* ============================================================
+       LANDLORD / PAYMENT QUERIES
+       ============================================================ */
+
     public function getLandlordOutstandingInvoices(int $landlordId): array
     {
         try {
@@ -831,26 +861,23 @@ class InvoiceService
             $totalDue = $invoices->sum('total_amount');
 
             return [
-                'success'            => true,
-                'total_due'          => $totalDue,
-                'outstanding_count'  => $invoices->count(),
-                'overdue_count'      => $invoices->where('status', 'overdue')->count(),
+                'success'           => true,
+                'total_due'         => $totalDue,
+                'outstanding_count' => $invoices->count(),
+                'overdue_count'     => $invoices->where('status', 'overdue')->count(),
             ];
 
         } catch (\Exception $e) {
             Log::error('Failed to get landlord outstanding invoices: ' . $e->getMessage());
             return [
-                'success'            => false,
-                'total_due'          => 0,
-                'outstanding_count'  => 0,
-                'overdue_count'      => 0,
+                'success'           => false,
+                'total_due'         => 0,
+                'outstanding_count' => 0,
+                'overdue_count'     => 0,
             ];
         }
     }
 
-    /**
-     * Get payment summary for selected invoices
-     */
     public function getPaymentSummary(array $invoiceIds): array
     {
         try {
@@ -880,51 +907,51 @@ class InvoiceService
                     'property_address' => $property->house_number . ' ' . $property->street_name,
                     'invoices'         => $propertyInvoices->map(function ($invoice) use ($settings) {
                         return [
-                            'id'                => $invoice->id,
-                            'invoice_number'    => $invoice->invoice_number,
-                            'period'            => $invoice->period,
-                            'formatted_period'  => $this->formatPeriodForDisplay($invoice),
-                            'amount'            => $invoice->amount,
-                            'penalty_amount'    => $invoice->penalty_amount ?? 0,
-                            'total_amount'      => $invoice->total_amount,
-                            'formatted_amount'  => $settings->formatAmount($invoice->total_amount),
-                            'due_date'          => $invoice->due_date->format('Y-m-d'),
-                            'status'            => $invoice->status,
+                            'id'               => $invoice->id,
+                            'invoice_number'   => $invoice->invoice_number,
+                            'period'           => $invoice->period,
+                            'formatted_period' => $this->formatPeriodForDisplay($invoice),
+                            'amount'           => $invoice->amount,
+                            'penalty_amount'   => $invoice->penalty_amount ?? 0,
+                            'total_amount'     => $invoice->total_amount,
+                            'formatted_amount' => $settings->formatAmount($invoice->total_amount),
+                            'due_date'         => $invoice->due_date->format('Y-m-d'),
+                            'status'           => $invoice->status,
                         ];
                     }),
-                    'total'            => $propertyInvoices->sum('total_amount'),
-                    'formatted_total'  => $settings->formatAmount($propertyInvoices->sum('total_amount')),
-                    'count'            => $propertyInvoices->count(),
+                    'total'           => $propertyInvoices->sum('total_amount'),
+                    'formatted_total' => $settings->formatAmount($propertyInvoices->sum('total_amount')),
+                    'count'           => $propertyInvoices->count(),
                 ];
             });
 
             return [
-                'success'                => true,
-                'total'                  => $totalAmount,
-                'formatted_total'        => $settings->formatAmount($totalAmount),
-                'count'                  => $invoices->count(),
-                'invoices'               => $invoices->map(function ($invoice) use ($settings) {
+                'success'                 => true,
+                'total'                   => $totalAmount,
+                'formatted_total'         => $settings->formatAmount($totalAmount),
+                'count'                   => $invoices->count(),
+                'invoices'                => $invoices->map(function ($invoice) use ($settings) {
                     return [
-                        'id'                => $invoice->id,
-                        'invoice_number'    => $invoice->invoice_number,
-                        'property_name'     => $invoice->property->property_name ?? $invoice->property->street_name,
-                        'period'            => $invoice->period,
-                        'formatted_period'  => $this->formatPeriodForDisplay($invoice),
-                        'amount'            => $invoice->amount,
-                        'penalty_amount'    => $invoice->penalty_amount ?? 0,
-                        'total_amount'      => $invoice->total_amount,
-                        'formatted_amount'  => $settings->formatAmount($invoice->total_amount),
-                        'due_date'          => $invoice->due_date->format('Y-m-d'),
-                        'status'            => $invoice->status,
-                        'is_overdue'        => $invoice->isOverdue(),
+                        'id'               => $invoice->id,
+                        'invoice_number'   => $invoice->invoice_number,
+                        'property_name'    => $invoice->property->property_name ?? $invoice->property->street_name,
+                        'period'           => $invoice->period,
+                        'formatted_period' => $this->formatPeriodForDisplay($invoice),
+                        'amount'           => $invoice->amount,
+                        'penalty_amount'   => $invoice->penalty_amount ?? 0,
+                        'total_amount'     => $invoice->total_amount,
+                        'formatted_amount' => $settings->formatAmount($invoice->total_amount),
+                        'due_date'         => $invoice->due_date->format('Y-m-d'),
+                        'status'           => $invoice->status,
+                        'is_overdue'       => $invoice->isOverdue(),
                     ];
                 }),
-                'grouped_by_property'    => $groupedByProperty,
-                'has_penalties'          => $invoices->where('penalty_amount', '>', 0)->count() > 0,
-                'total_penalty_amount'   => $invoices->sum('penalty_amount'),
-                'formatted_total_penalty'=> $settings->formatAmount($invoices->sum('penalty_amount')),
-                'currency_symbol'        => $settings->currency_symbol,
-                'settings'               => [
+                'grouped_by_property'     => $groupedByProperty,
+                'has_penalties'           => $invoices->where('penalty_amount', '>', 0)->count() > 0,
+                'total_penalty_amount'    => $invoices->sum('penalty_amount'),
+                'formatted_total_penalty' => $settings->formatAmount($invoices->sum('penalty_amount')),
+                'currency_symbol'         => $settings->currency_symbol,
+                'settings'                => [
                     'grace_period'  => $settings->grace_period_days,
                     'late_penalty'  => $settings->late_payment_percentage,
                     'fixed_penalty' => $settings->fixed_penalty_amount,
@@ -945,96 +972,10 @@ class InvoiceService
         }
     }
 
-    /**
-     * Format period for display, handling both regular and bulk invoices
-     */
-    private function formatPeriodForDisplay(Invoice $invoice): string
-    {
-        if ($invoice->is_bulk_payment && $invoice->bulk_coverage_start && $invoice->bulk_coverage_end) {
-            try {
-                $start = Carbon::parse($invoice->bulk_coverage_start . '-01');
-                $end   = Carbon::parse($invoice->bulk_coverage_end . '-01');
-                return $start->format('M Y') . ' - ' . $end->format('M Y');
-            } catch (\Exception $e) {
-                return $this->formatPeriodFromString($invoice->period);
-            }
-        }
+    /* ============================================================
+       BULK PAYMENT OPTIONS / MANUAL GENERATION
+       ============================================================ */
 
-        return $this->formatPeriodFromString($invoice->period);
-    }
-
-    /**
-     * Safely format a period string (YYYY-MM) to a readable month/year
-     */
-    private function formatPeriodFromString(string $period): string
-    {
-        if (empty($period)) {
-            return 'N/A';
-        }
-
-        try {
-            if (strpos($period, '_to_') !== false) {
-                $parts = explode('_to_', $period);
-                if (count($parts) === 2) {
-                    try {
-                        $start = Carbon::parse($parts[0] . '-01');
-                        $end   = Carbon::parse($parts[1] . '-01');
-                        return $start->format('M Y') . ' - ' . $end->format('M Y');
-                    } catch (\Exception $e) {
-                        return $period;
-                    }
-                }
-                return $period;
-            }
-
-            if (preg_match('/^\d{4}-\d{2}$/', $period)) {
-                return Carbon::parse($period . '-01')->format('F Y');
-            }
-
-            return $period;
-        } catch (\Exception $e) {
-            Log::warning("Failed to format period: {$period}", ['error' => $e->getMessage()]);
-            return $period;
-        }
-    }
-
-    /**
-     * Get penalty information for descriptions
-     */
-    private function getPenaltyInformation(SystemSetting $settings, bool $forDisplay = false): string
-    {
-        $penaltyInfo = "";
-
-        if ($settings->fixed_penalty_amount > 0) {
-            $penaltyAmount = $settings->formatAmount($settings->fixed_penalty_amount);
-            if ($forDisplay) {
-                $penaltyInfo = "Fixed penalty: {$penaltyAmount} after {$settings->grace_period_days} days grace period";
-            } else {
-                $penaltyInfo = ". Late payment penalty: {$penaltyAmount} after {$settings->grace_period_days} days";
-            }
-        } elseif ($settings->late_payment_percentage > 0) {
-            $percentage = $settings->late_payment_percentage;
-            if ($forDisplay) {
-                $penaltyInfo = "Late fee: {$percentage}% after {$settings->grace_period_days} days grace period";
-            } else {
-                $penaltyInfo = ". Late payment fee: {$percentage}% after {$settings->grace_period_days} days";
-            }
-        }
-
-        return $penaltyInfo;
-    }
-
-    /**
-     * Validate period format (YYYY-MM)
-     */
-    private function isValidPeriod(string $period): bool
-    {
-        return (bool) preg_match('/^\d{4}-\d{2}$/', $period);
-    }
-
-    /**
-     * Check if invoice should be generated for a property and period
-     */
     public function shouldGenerateInvoice(int $propertyId, string $period): bool
     {
         $property = Property::find($propertyId);
@@ -1058,9 +999,6 @@ class InvoiceService
         return true;
     }
 
-    /**
-     * Get bulk payment options for a property
-     */
     public function getBulkPaymentOptions(Property $property): array
     {
         $settings = SystemSetting::getSettings();
@@ -1086,21 +1024,17 @@ class InvoiceService
         }
 
         return [
-            'enabled'                   => true,
-            'has_active_coverage'       => !empty($activeCoverages),
-            'active_coverages'          => $activeCoverages,
-            'available_months'          => $availableMonths,
-            'max_months'                => $settings->getMaxBulkMonths(),
-            'monthly_amount'            => $settings->calculateMonthlyDuesForProperty($property),
-            'formatted_monthly_amount'  => $settings->formatAmount($settings->calculateMonthlyDuesForProperty($property)),
-            'discount_percentage'       => $settings->bulk_payment_discount ?? 0,
+            'enabled'                  => true,
+            'has_active_coverage'      => !empty($activeCoverages),
+            'active_coverages'         => $activeCoverages,
+            'available_months'         => $availableMonths,
+            'max_months'               => $settings->getMaxBulkMonths(),
+            'monthly_amount'           => $settings->calculateMonthlyDuesForProperty($property),
+            'formatted_monthly_amount' => $settings->formatAmount($settings->calculateMonthlyDuesForProperty($property)),
+            'discount_percentage'      => $settings->bulk_payment_discount ?? 0,
         ];
     }
 
-    /**
-     * Manually generate a single invoice
-     * ✅ UPDATED: Now supports all property statuses with system setting value
-     */
     public function generateManualInvoice(int $propertyId, string $period, ?float $amount = null, Carbon $dueDate, ?bool $sendNotification = null): array
     {
         try {
@@ -1115,10 +1049,7 @@ class InvoiceService
 
             $property = Property::find($propertyId);
             if (!$property) {
-                return [
-                    'success' => false,
-                    'message' => 'Property not found.',
-                ];
+                return ['success' => false, 'message' => 'Property not found.'];
             }
 
             if ($this->isPeriodCoveredByBulkPayment($property, $period)) {
@@ -1178,15 +1109,23 @@ class InvoiceService
             DB::rollBack();
             Log::error("Manual invoice generation failed: " . $e->getMessage());
 
-            return [
-                'success' => false,
-                'message' => 'Failed to generate invoice: ' . $e->getMessage(),
-            ];
+            return ['success' => false, 'message' => 'Failed to generate invoice: ' . $e->getMessage()];
         }
     }
 
+    /* ============================================================
+       FILTERED QUERIES — returns a query builder (NOT a paginator)
+       ============================================================ */
+
     /**
-     * Get invoices with applied filters
+     * Build the base query for filtered invoice listings.
+     *
+     * ✅ FIXED: Previously returned `$query->paginate(15)` — a paginator.
+     * Callers that needed `->get()` or `->paginate()` on the result then
+     * failed with "Method ...::paginate does not exist". This now returns
+     * the query builder so each caller decides how to fetch.
+     *
+     * Callers MUST call `->paginate(...)` or `->get()` on the result.
      */
     public function getInvoicesWithFilters(array $filters, ?User $user = null)
     {
@@ -1200,9 +1139,7 @@ class InvoiceService
         if (!empty($filters['status'])) {
             $query->where('status', $filters['status']);
         } else {
-            if (empty($filters['status']) || $filters['status'] !== 'consolidated') {
-                $query->where('status', '!=', 'consolidated');
-            }
+            $query->where('status', '!=', 'consolidated');
         }
 
         if (!empty($filters['period'])) {
@@ -1215,7 +1152,49 @@ class InvoiceService
             } elseif ($filters['type'] === 'regular') {
                 $query->where('is_bulk_payment', false)
                       ->whereNull('bulk_payment_id');
+            } elseif ($filters['type'] === 'child') {
+                $query->whereNotNull('bulk_payment_id');
             }
+        }
+
+        // Advanced filters (used by the admin index dropdowns)
+        if (!empty($filters['has_parent'])) {
+            if ($filters['has_parent'] === 'yes') {
+                $query->whereNotNull('bulk_payment_id');
+            } elseif ($filters['has_parent'] === 'no') {
+                $query->whereNull('bulk_payment_id');
+            }
+        }
+
+        if (!empty($filters['is_bulk'])) {
+            $query->where('is_bulk_payment', $filters['is_bulk'] === 'yes');
+        }
+
+        if (!empty($filters['has_coverage'])) {
+            if ($filters['has_coverage'] === 'yes') {
+                $query->where('is_bulk_payment', true)
+                      ->where('status', 'paid')
+                      ->whereNotNull('covers_periods')
+                      ->whereJsonLength('covers_periods', '>', 0);
+            } elseif ($filters['has_coverage'] === 'no') {
+                $query->where(function ($q) {
+                    $q->where('is_bulk_payment', false)
+                      ->orWhere('status', '!=', 'paid')
+                      ->orWhereNull('covers_periods')
+                      ->orWhereJsonLength('covers_periods', 0);
+                });
+            }
+        }
+
+        if (!empty($filters['has_discount'])) {
+            $query->where(function ($q) use ($filters) {
+                $has = $filters['has_discount'] === 'yes';
+                $q->where('discount_amount', $has ? '>' : '<=', 0);
+            });
+        }
+
+        if (!empty($filters['has_penalty'])) {
+            $query->where('penalty_amount', $filters['has_penalty'] === 'yes' ? '>' : '<=', 0);
         }
 
         if (!empty($filters['search'])) {
@@ -1230,73 +1209,68 @@ class InvoiceService
             });
         }
 
-        if ($user && !$user->isSuperAdmin() && !$user->isAdmin() && $user->isLandlord()) {
+        // Landlord scoping
+        if ($user && $user->isLandlord() && !$user->isSuperAdmin() && !$user->isAdmin()) {
             $propertyIds = Property::where('landlord_id', $user->id)->pluck('id');
             $query->whereIn('property_id', $propertyIds);
         }
 
-        $query->orderBy('due_date', 'desc');
-
-        return $query->paginate(15);
+        return $query->orderBy('due_date', 'desc');
     }
 
-    /**
-     * Get invoice statistics for dashboard
-     */
+    /* ============================================================
+       STATISTICS
+       ============================================================ */
+
     public function getInvoiceStatistics(?User $user = null): array
     {
         try {
             $query = Invoice::query()->whereNull('deleted_at');
 
-            if ($user) {
-                if ($user->isLandlord()) {
-                    $propertyIds = Property::where('landlord_id', $user->id)->pluck('id');
-                    $query->whereIn('property_id', $propertyIds);
-                }
+            if ($user && $user->isLandlord() && !$user->isSuperAdmin() && !$user->isAdmin()) {
+                $propertyIds = Property::where('landlord_id', $user->id)->pluck('id');
+                $query->whereIn('property_id', $propertyIds);
             }
 
-            $totalInvoices      = (clone $query)->where('status', '!=', 'consolidated')->count();
-            $paidInvoices       = (clone $query)->where('status', 'paid')->where('status', '!=', 'consolidated')->count();
-            $pendingInvoices    = (clone $query)->where('status', 'pending')->where('status', '!=', 'consolidated')->count();
-            $overdueInvoices    = (clone $query)->where('status', 'overdue')->where('status', '!=', 'consolidated')->count();
-            $totalPenalties     = (clone $query)->where('status', '!=', 'consolidated')->where('penalty_amount', '>', 0)->sum('penalty_amount');
-            $totalDue           = (clone $query)->whereIn('status', ['pending', 'overdue'])->where('status', '!=', 'consolidated')->sum('total_amount');
-            $totalRevenue       = (clone $query)->where('status', 'paid')->where('status', '!=', 'consolidated')->sum('total_amount');
-            $consolidatedCount  = Invoice::where('status', 'consolidated')->whereNull('deleted_at')->count();
+            $totalInvoices     = (clone $query)->where('status', '!=', 'consolidated')->count();
+            $paidInvoices      = (clone $query)->where('status', 'paid')->count();
+            $pendingInvoices   = (clone $query)->where('status', 'pending')->count();
+            $overdueInvoices   = (clone $query)->where('status', 'overdue')->count();
+            $totalPenalties    = (clone $query)->where('status', '!=', 'consolidated')->where('penalty_amount', '>', 0)->sum('penalty_amount');
+            $totalDue          = (clone $query)->whereIn('status', ['pending', 'overdue'])->sum('total_amount');
+            $totalRevenue      = (clone $query)->where('status', 'paid')->sum('total_amount');
+            $consolidatedCount = Invoice::where('status', 'consolidated')->whereNull('deleted_at')->count();
 
             $collectionRate = $totalInvoices > 0 ? round(($paidInvoices / $totalInvoices) * 100, 2) : 0;
 
             return [
-                'total_invoices'         => $totalInvoices,
-                'paid_invoices'          => $paidInvoices,
-                'pending_invoices'       => $pendingInvoices,
-                'overdue_invoices'       => $overdueInvoices,
-                'consolidated_invoices'  => $consolidatedCount,
-                'total_due'              => $totalDue,
-                'total_revenue'          => $totalRevenue,
-                'total_penalties'        => $totalPenalties,
-                'collection_rate'        => $collectionRate,
+                'total_invoices'        => $totalInvoices,
+                'paid_invoices'         => $paidInvoices,
+                'pending_invoices'      => $pendingInvoices,
+                'overdue_invoices'      => $overdueInvoices,
+                'consolidated_invoices' => $consolidatedCount,
+                'total_due'             => $totalDue,
+                'total_revenue'         => $totalRevenue,
+                'total_penalties'       => $totalPenalties,
+                'collection_rate'       => $collectionRate,
             ];
 
         } catch (\Exception $e) {
             Log::error("Failed to get invoice statistics: " . $e->getMessage());
             return [
-                'total_invoices'         => 0,
-                'paid_invoices'          => 0,
-                'pending_invoices'       => 0,
-                'overdue_invoices'       => 0,
-                'consolidated_invoices'  => 0,
-                'total_due'              => 0,
-                'total_revenue'          => 0,
-                'total_penalties'        => 0,
-                'collection_rate'        => 0,
+                'total_invoices'        => 0,
+                'paid_invoices'         => 0,
+                'pending_invoices'      => 0,
+                'overdue_invoices'      => 0,
+                'consolidated_invoices' => 0,
+                'total_due'             => 0,
+                'total_revenue'         => 0,
+                'total_penalties'       => 0,
+                'collection_rate'       => 0,
             ];
         }
     }
 
-    /**
-     * Get notification status for an invoice
-     */
     public function getInvoiceNotificationStatus(int $invoiceId): array
     {
         try {
@@ -1401,23 +1375,20 @@ class InvoiceService
         }
     }
 
-    /**
-     * Validate invoice configuration
-     */
     public function validateInvoiceConfiguration(): array
     {
         try {
             $settings = SystemSetting::getSettings();
 
             $config = [
-                'auto_generate_invoices'        => $settings->auto_generate_invoices,
-                'send_payment_reminders'        => $settings->send_payment_reminders,
-                'reminder_days_before'          => $settings->reminder_days_before,
-                'grace_period_days'             => $settings->grace_period_days,
-                'monthly_dues_amount'           => $settings->monthly_dues_amount,
-                'calculation_method'            => $settings->calculation_method,
-                'payment_recipient_configured'  => $settings->isPaymentRecipientConfigured(),
-                'payment_methods_enabled'       => $settings->hasEnabledPaymentMethods(),
+                'auto_generate_invoices'       => $settings->auto_generate_invoices,
+                'send_payment_reminders'       => $settings->send_payment_reminders,
+                'reminder_days_before'         => $settings->reminder_days_before,
+                'grace_period_days'            => $settings->grace_period_days,
+                'monthly_dues_amount'          => $settings->monthly_dues_amount,
+                'calculation_method'           => $settings->calculation_method,
+                'payment_recipient_configured' => $settings->isPaymentRecipientConfigured(),
+                'payment_methods_enabled'      => $settings->hasEnabledPaymentMethods(),
             ];
 
             $issues = [];
@@ -1453,26 +1424,18 @@ class InvoiceService
                 ]);
             }
 
-            return [
-                'valid'  => $isValid,
-                'issues' => $issues,
-                'config' => $config,
-            ];
+            return ['valid' => $isValid, 'issues' => $issues, 'config' => $config];
 
         } catch (\Exception $e) {
             Log::error("Failed to validate invoice configuration: " . $e->getMessage());
-
-            return [
-                'valid'  => false,
-                'issues' => ['Validation error: ' . $e->getMessage()],
-                'config' => [],
-            ];
+            return ['valid' => false, 'issues' => ['Validation error: ' . $e->getMessage()], 'config' => []];
         }
     }
 
-    /**
-     * Process payment for selected invoices
-     */
+    /* ============================================================
+       PAYMENT PROCESSING
+       ============================================================ */
+
     public function processPaymentForInvoices(array $invoiceIds, string $transactionId, string $paymentMethod): array
     {
         try {
@@ -1485,10 +1448,7 @@ class InvoiceService
                 ->get();
 
             if ($invoices->isEmpty()) {
-                return [
-                    'success' => false,
-                    'message' => 'No valid invoices found for payment.',
-                ];
+                return ['success' => false, 'message' => 'No valid invoices found for payment.'];
             }
 
             $totalAmount   = $invoices->sum('total_amount');
@@ -1500,40 +1460,40 @@ class InvoiceService
                 $periods      = $invoices->pluck('period')->unique()->toArray();
 
                 $bulkInvoice = Invoice::create([
-                    'property_id'          => $firstInvoice->property_id,
-                    'period'               => min($periods) . '_to_' . max($periods),
-                    'amount'               => $totalAmount,
-                    'due_date'             => now()->addDays(14),
-                    'status'               => 'paid',
-                    'is_bulk_payment'      => true,
-                    'bulk_months'          => count($periods),
-                    'bulk_start_month'     => min($periods),
-                    'bulk_end_month'       => max($periods),
-                    'covers_periods'       => json_encode($periods),
-                    'bulk_coverage_start'  => min($periods),
-                    'bulk_coverage_end'    => max($periods),
-                    'payment_date'         => now(),
-                    'payment_method'       => $paymentMethod,
-                    'payment_reference'    => $transactionId,
-                    'description'          => "Bulk payment covering: " . implode(', ', array_map(function ($p) {
+                    'property_id'         => $firstInvoice->property_id,
+                    'period'              => min($periods) . '_to_' . max($periods),
+                    'amount'              => $totalAmount,
+                    'due_date'            => now()->addDays(14),
+                    'status'              => 'paid',
+                    'is_bulk_payment'     => true,
+                    'bulk_months'         => count($periods),
+                    'bulk_start_month'    => min($periods),
+                    'bulk_end_month'      => max($periods),
+                    'covers_periods'      => json_encode($periods),
+                    'bulk_coverage_start' => min($periods),
+                    'bulk_coverage_end'   => max($periods),
+                    'payment_date'        => now(),
+                    'payment_method'      => $paymentMethod,
+                    'payment_reference'   => $transactionId,
+                    'description'         => "Bulk payment covering: " . implode(', ', array_map(function ($p) {
                         return Carbon::parse($p . '-01')->format('M Y');
                     }, $periods)),
-                    'created_by'           => auth()->id(),
-                    'notes'                => "📦 Bulk payment created from " . count($invoices) . " individual invoices",
+                    'created_by'          => auth()->id(),
+                    'notes'               => "📦 Bulk payment created from " . count($invoices) . " individual invoices",
                 ]);
 
                 $bulkInvoiceId = $bulkInvoice->id;
 
                 foreach ($invoices as $invoice) {
                     $invoice->update([
-                        'status'                  => 'consolidated',
-                        'bulk_payment_id'         => $bulkInvoice->id,
-                        'bulk_payment_reference'  => $transactionId,
-                        'payment_date'            => null,
-                        'payment_method'          => null,
-                        'payment_reference'       => null,
-                        'notes'                   => ($invoice->notes ? $invoice->notes . "\n" : '')
-                                                     . "📦 Consolidated into bulk payment #{$bulkInvoice->id}",
+                        'status'                 => 'consolidated',
+                        'bulk_payment_id'        => $bulkInvoice->id,
+                        'bulk_payment_reference' => $transactionId,
+                        'payment_date'           => null,
+                        'payment_method'         => null,
+                        'payment_reference'      => null,
+                        'notes'                  => ($invoice->notes ? $invoice->notes . "\n" : '')
+                                                    . "📦 Consolidated into bulk payment #{$bulkInvoice->id}",
                     ]);
                     $updatedCount++;
                 }
@@ -1578,64 +1538,86 @@ class InvoiceService
                 'transaction_id' => $transactionId,
             ]);
 
-            return [
-                'success' => false,
-                'message' => 'Failed to process payment: ' . $e->getMessage(),
-            ];
+            return ['success' => false, 'message' => 'Failed to process payment: ' . $e->getMessage()];
         }
     }
 
-    /**
-     * Send invoice status update notification
-     */
-    public function sendInvoiceStatusUpdateNotification(int $invoiceId, string $status): array
+    /* ============================================================
+       HELPERS
+       ============================================================ */
+
+    private function formatPeriodForDisplay(Invoice $invoice): string
     {
-        try {
-            $invoice  = Invoice::with(['property', 'property.landlord'])->findOrFail($invoiceId);
-            $landlord = $invoice->property->landlord;
-
-            if (!$landlord) {
-                return ['sent' => false, 'reason' => 'No landlord found'];
+        if ($invoice->is_bulk_payment && $invoice->bulk_coverage_start && $invoice->bulk_coverage_end) {
+            try {
+                $start = Carbon::parse($invoice->bulk_coverage_start . '-01');
+                $end   = Carbon::parse($invoice->bulk_coverage_end . '-01');
+                return $start->format('M Y') . ' - ' . $end->format('M Y');
+            } catch (\Exception $e) {
+                return $this->formatPeriodFromString($invoice->period);
             }
-
-            $settings = SystemSetting::getSettings();
-            if (!$settings->shouldSendPaymentReminders()) {
-                return ['sent' => false, 'reason' => 'Notifications disabled'];
-            }
-
-            $result = match ($status) {
-                'paid'    => $this->notificationService->sendLandlordPaymentConfirmation($invoice),
-                'overdue' => $this->notificationService->sendLandlordInvoiceOverdue($invoice),
-                'pending' => $this->notificationService->sendLandlordInvoiceReminder($invoice),
-                default   => null,
-            };
-
-            if ($result === null) {
-                return ['sent' => false, 'reason' => 'Unknown status'];
-            }
-
-            $dispatched = $result['dispatched'] ?? [];
-            $sent       = !empty(array_filter($dispatched));
-
-            if ($sent) {
-                $invoice->addNote(
-                    "Status update notification dispatched to landlord on "
-                    . now()->format('Y-m-d H:i:s')
-                    . " via: " . implode(', ', array_keys(array_filter($dispatched)))
-                );
-            }
-
-            return [
-                'sent'       => $sent,
-                'reason'     => $sent ? 'Success' : 'Dispatched to zero channels',
-                'dispatched' => $dispatched,
-                'channels'   => $result['channels'] ?? [],
-                'skipped'    => $result['skipped']  ?? [],
-            ];
-
-        } catch (\Exception $e) {
-            Log::error('Failed to send invoice status update notification: ' . $e->getMessage());
-            return ['sent' => false, 'reason' => $e->getMessage()];
         }
+
+        return $this->formatPeriodFromString($invoice->period);
+    }
+
+    private function formatPeriodFromString(string $period): string
+    {
+        if (empty($period)) {
+            return 'N/A';
+        }
+
+        try {
+            if (strpos($period, '_to_') !== false) {
+                $parts = explode('_to_', $period);
+                if (count($parts) === 2) {
+                    try {
+                        $start = Carbon::parse($parts[0] . '-01');
+                        $end   = Carbon::parse($parts[1] . '-01');
+                        return $start->format('M Y') . ' - ' . $end->format('M Y');
+                    } catch (\Exception $e) {
+                        return $period;
+                    }
+                }
+                return $period;
+            }
+
+            if (preg_match('/^\d{4}-\d{2}$/', $period)) {
+                return Carbon::parse($period . '-01')->format('F Y');
+            }
+
+            return $period;
+        } catch (\Exception $e) {
+            Log::warning("Failed to format period: {$period}", ['error' => $e->getMessage()]);
+            return $period;
+        }
+    }
+
+    private function getPenaltyInformation(SystemSetting $settings, bool $forDisplay = false): string
+    {
+        $penaltyInfo = "";
+
+        if ($settings->fixed_penalty_amount > 0) {
+            $penaltyAmount = $settings->formatAmount($settings->fixed_penalty_amount);
+            if ($forDisplay) {
+                $penaltyInfo = "Fixed penalty: {$penaltyAmount} after {$settings->grace_period_days} days grace period";
+            } else {
+                $penaltyInfo = ". Late payment penalty: {$penaltyAmount} after {$settings->grace_period_days} days";
+            }
+        } elseif ($settings->late_payment_percentage > 0) {
+            $percentage = $settings->late_payment_percentage;
+            if ($forDisplay) {
+                $penaltyInfo = "Late fee: {$percentage}% after {$settings->grace_period_days} days grace period";
+            } else {
+                $penaltyInfo = ". Late payment fee: {$percentage}% after {$settings->grace_period_days} days";
+            }
+        }
+
+        return $penaltyInfo;
+    }
+
+    private function isValidPeriod(string $period): bool
+    {
+        return (bool) preg_match('/^\d{4}-\d{2}$/', $period);
     }
 }

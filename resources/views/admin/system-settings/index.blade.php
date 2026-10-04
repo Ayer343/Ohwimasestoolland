@@ -18,6 +18,19 @@
                     <h2 class="text-xl font-semibold flex items-center flex-wrap gap-2" style="color: var(--text-primary);">
                         <i class="fas fa-cogs mr-2" style="color: var(--primary);"></i>
                         System Settings
+
+                        {{-- Office payment status pill — visible at a glance --}}
+                        @if($settings->exists)
+                            @if($settings->isOfflinePaymentAllowed())
+                                <span class="px-3 py-1 rounded-full text-xs font-medium badge-success">
+                                    <i class="fas fa-hand-holding-usd mr-1"></i> Office Payments On
+                                </span>
+                            @else
+                                <span class="px-3 py-1 rounded-full text-xs font-medium badge-danger">
+                                    <i class="fas fa-ban mr-1"></i> Office Payments Blocked
+                                </span>
+                            @endif
+                        @endif
                     </h2>
                     <div class="text-sm flex items-center flex-wrap gap-2 mt-1" style="color: var(--text-secondary);">
                         <i class="fas fa-sliders-h mr-2"></i>
@@ -317,6 +330,141 @@
     </div>
     @endif
 
+    <!-- ============================================================ -->
+    <!-- OFFICE PAYMENT COLLECTION CARD (NEW)                         -->
+    <!-- Controls whether admins can mark invoices as paid manually    -->
+    <!-- ============================================================ -->
+    @if($settings->exists)
+    <div class="card">
+        <div class="p-6" style="border-top: 4px solid {{ $settings->isOfflinePaymentAllowed() ? 'var(--success)' : 'var(--danger)' }};">
+            <div class="flex items-center justify-between mb-6 flex-wrap gap-4">
+                <div class="flex items-center">
+                    <div class="w-10 h-10 rounded-full flex items-center justify-center mr-3"
+                         style="background-color: rgba(var({{ $settings->isOfflinePaymentAllowed() ? '--success-rgb' : '--danger-rgb' }}), 0.1);">
+                        <i class="fas fa-hand-holding-usd text-xl"
+                           style="color: {{ $settings->isOfflinePaymentAllowed() ? 'var(--success)' : 'var(--danger)' }};"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
+                            Office Payment Collection
+                        </h3>
+                        <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                            Control whether admins can mark invoices as paid from the office
+                        </p>
+                    </div>
+                </div>
+                <span class="px-3 py-1 rounded-full text-sm font-medium badge-{{ $settings->isOfflinePaymentAllowed() ? 'success' : 'danger' }}">
+                    <i class="fas fa-{{ $settings->isOfflinePaymentAllowed() ? 'check-circle' : 'ban' }} mr-1"></i>
+                    {{ $settings->isOfflinePaymentAllowed() ? 'ENABLED' : 'BLOCKED' }}
+                </span>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {{-- Current Status --}}
+                <div class="card p-4"
+                     style="border-top: 4px solid {{ $settings->isOfflinePaymentAllowed() ? 'var(--success)' : 'var(--danger)' }};">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="font-medium" style="color: var(--text-primary);">
+                            Physical / Office Payments
+                        </span>
+                        <span class="px-3 py-1 rounded-full text-sm font-medium badge-{{ $settings->isOfflinePaymentAllowed() ? 'success' : 'danger' }}">
+                            {{ $settings->isOfflinePaymentAllowed() ? 'ALLOWED' : 'BLOCKED' }}
+                        </span>
+                    </div>
+                    <p class="text-sm mt-2" style="color: var(--text-secondary);">
+                        @if($settings->isOfflinePaymentAllowed())
+                            <i class="fas fa-check-circle mr-1" style="color: var(--success);"></i>
+                            Admins can mark invoices as paid at the office when a landlord
+                            pays cash, by cheque, or through a bank deposit.
+                        @else
+                            <i class="fas fa-ban mr-1" style="color: var(--danger);"></i>
+                            Admins cannot mark invoices as paid. Landlords must use the
+                            online payment gateway.
+                        @endif
+                    </p>
+                </div>
+
+                {{-- What this controls --}}
+                <div class="card p-4" style="border-top: 4px solid var(--info);">
+                    <span class="font-medium mb-2 block" style="color: var(--text-primary);">
+                        What this controls
+                    </span>
+                    <ul class="text-xs mt-2 space-y-1" style="color: var(--text-secondary);">
+                        <li>
+                            <i class="fas fa-{{ $settings->isOfflinePaymentAllowed() ? 'check' : 'times' }} mr-1"
+                               style="color: {{ $settings->isOfflinePaymentAllowed() ? 'var(--success)' : 'var(--danger)' }};"></i>
+                            <strong>Mark as Paid</strong> button on each invoice row
+                        </li>
+                        <li>
+                            <i class="fas fa-{{ $settings->isOfflinePaymentAllowed() ? 'check' : 'times' }} mr-1"
+                               style="color: {{ $settings->isOfflinePaymentAllowed() ? 'var(--success)' : 'var(--danger)' }};"></i>
+                            <strong>Mark as Paid</strong> button in the bulk selection bar
+                        </li>
+                        <li>
+                            <i class="fas fa-{{ $settings->isOfflinePaymentAllowed() ? 'check' : 'times' }} mr-1"
+                               style="color: {{ $settings->isOfflinePaymentAllowed() ? 'var(--success)' : 'var(--danger)' }};"></i>
+                            <strong>Paid</strong> status in the Bulk Update modal
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            {{-- Toggle form --}}
+            <div class="mt-6 pt-4 border-t" style="border-color: var(--border-color);">
+                <form action="{{ route('admin.system-settings.toggle-offline-payment') }}"
+                      method="POST"
+                      class="flex items-center justify-between flex-wrap gap-4">
+                    @csrf
+                    <input type="hidden" name="allow_offline_payment"
+                           value="{{ $settings->isOfflinePaymentAllowed() ? '0' : '1' }}">
+
+                    <div class="flex items-center space-x-4 flex-wrap">
+                        <span class="font-medium" style="color: var(--text-primary);">Quick Toggle:</span>
+                        @if($settings->isOfflinePaymentAllowed())
+                            <button type="submit"
+                                    class="btn-danger px-4 py-2 rounded-lg font-medium inline-flex items-center"
+                                    onclick="return confirm('Block office payments? Admins will no longer be able to mark invoices as paid — landlords must pay online.')">
+                                <i class="fas fa-ban mr-2"></i> Block Office Payments
+                            </button>
+                        @else
+                            <button type="submit"
+                                    class="btn-success px-4 py-2 rounded-lg font-medium inline-flex items-center"
+                                    onclick="return confirm('Allow office payments? Admins will be able to mark invoices as paid for cash, cheque, or bank-deposit payments.')">
+                                <i class="fas fa-check mr-2"></i> Allow Office Payments
+                            </button>
+                        @endif
+                    </div>
+
+                    <a href="{{ route('admin.system-settings.edit') }}#payment-settings"
+                       class="btn-info px-3 py-1 rounded-lg font-medium inline-flex items-center text-sm">
+                        <i class="fas fa-cog mr-1"></i> Advanced Settings
+                    </a>
+                </form>
+            </div>
+
+            {{-- Warning banner when blocked --}}
+            @if(!$settings->isOfflinePaymentAllowed())
+            <div class="mt-4 p-3 rounded-lg"
+                 style="background-color: rgba(var(--danger-rgb), 0.1); border-left: 4px solid var(--danger);">
+                <div class="flex items-start">
+                    <i class="fas fa-exclamation-triangle mt-1 mr-2" style="color: var(--danger);"></i>
+                    <div>
+                        <p class="text-sm font-medium" style="color: var(--danger);">
+                            Office payments are currently blocked
+                        </p>
+                        <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                            Landlords can only pay through the online gateway. If a landlord
+                            arrives with cash, they will need to be redirected to the online
+                            payment flow.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            @endif
+        </div>
+    </div>
+    @endif
+
     <!-- Alerts -->
     @if(session('success') || session('error') || session('info'))
     <div class="card">
@@ -499,6 +647,13 @@
                                 <span class="text-sm" style="color: var(--text-primary);">Bulk Payments</span>
                                 <span class="px-2 py-1 rounded-full text-xs font-medium badge-{{ $settings->enable_bulk_payments ? 'success' : 'warning' }}">
                                     {{ $settings->enable_bulk_payments ? 'Enabled' : 'Disabled' }}
+                                </span>
+                            </div>
+                            {{-- New row: Office Payments status --}}
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm" style="color: var(--text-primary);">Office Payments</span>
+                                <span class="px-2 py-1 rounded-full text-xs font-medium badge-{{ $settings->isOfflinePaymentAllowed() ? 'success' : 'danger' }}">
+                                    {{ $settings->isOfflinePaymentAllowed() ? 'Allowed' : 'Blocked' }}
                                 </span>
                             </div>
                         </div>
@@ -1347,7 +1502,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.done) {
                 showBanner('success',
                     '✅ Configuration applied',
-                    'System name is now “' + (data.app_name || '') + '”. The .env file has been updated.',
+                    'System name is now "' + (data.app_name || '') + '". The .env file has been updated.',
                     'Completed after ' + pollAttempts + ' checks'
                 );
                 stopPolling();
@@ -1376,7 +1531,7 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 showBanner('warning',
                     'Waiting for queue worker…',
-                    'No jobs pending and .env hasn’t updated yet. Is a worker running? Try “Run Now”.',
+                    'No jobs pending and .env hasn\'t updated yet. Is a worker running? Try "Run Now".',
                     'Attempt ' + pollAttempts
                 );
             }
@@ -1397,7 +1552,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (pollAttempts >= MAX_ATTEMPTS) {
             showBanner('warning',
                 'Still processing…',
-                'The update is taking longer than expected. Check the queue worker or click “Run Now”.',
+                'The update is taking longer than expected. Check the queue worker or click "Run Now".',
                 'Gave up after ' + pollAttempts + ' checks'
             );
             return;

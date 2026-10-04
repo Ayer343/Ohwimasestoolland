@@ -4319,9 +4319,6 @@ Route::middleware(['auth', 'multi.auth.user:0'])->prefix('admin')->name('admin.'
     // ========== SMS SENDER ID (ADMIN-EDITABLE ONLY) ==========
     // Whitelisted endpoint — plain admins can update ONLY the sender ID.
     // Developers and super-admins also hit this for the AJAX save path.
-    // NOTE: This route MUST come BEFORE the catch-all PUT above if you
-    // ever reorder; currently it sits in a separate path so ordering is
-    // irrelevant. Kept explicit for future readers.
     Route::post('/system-settings/update-sender-id', [SystemSettingController::class, 'updateSenderId'])
         ->name('system-settings.update-sender-id');
 
@@ -4330,6 +4327,13 @@ Route::middleware(['auth', 'multi.auth.user:0'])->prefix('admin')->name('admin.'
         Route::post('/toggle', [SystemSettingController::class, 'toggleRegistration'])->name('toggle');
         Route::get('/status', [SystemSettingController::class, 'getRegistrationStatus'])->name('status');
     });
+
+    // ========== OFFLINE / OFFICE PAYMENT CONTROL ==========
+    // Controls whether admins can mark invoices as paid manually (cash,
+    
+    Route::post('/system-settings/toggle-offline-payment', [SystemSettingController::class, 'toggleOfflinePayment'])
+        ->name('system-settings.toggle-offline-payment');
+
 
     
     // ========== NOTIFICATION CHANNEL ROUTES ==========
@@ -4509,158 +4513,164 @@ Route::middleware(['auth', 'multi.auth.user:0'])->prefix('admin')->name('admin.'
     });
 });
 
+
 /*
 |--------------------------------------------------------------------------
-| Invoice Management Routes - COMPLETE WITH ALL ROUTES (PROPERLY ORDERED)
+| Invoice Management Routes — COMPLETE WITH ALL ROUTES (PROPERLY ORDERED)
 |--------------------------------------------------------------------------
+|
+| Notes on ordering:
+|   - Static (parameter-less) routes MUST come before parameterized ones.
+|   - Parameterized routes with a single {invoice} or {property} segment
+|     MUST come before any two-segment parameterized routes.
+|   - The index route is always last.
 |
 */
 
 // ==================== ADMIN INVOICE MANAGEMENT ROUTES ====================
 // Routes for Super Admin (type: 0) and Admin (type: 1)
 Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
-    
+
     // ---------- STATIC ROUTES (NO PARAMETERS) - MUST COME FIRST ----------
-    
+
     // Trash Management
     Route::get('/invoices/trash', [InvoiceController::class, 'trash'])->name('invoices.trash');
-    
-    // ========== NEW ARCHIVE MANAGEMENT ROUTES ==========
-    // Archive Management
+
+    // ========== ARCHIVE MANAGEMENT ROUTES ==========
     Route::get('/invoices/archives', [InvoiceController::class, 'archives'])->name('invoices.archives');
     Route::get('/invoices/archives/export-all', [InvoiceController::class, 'exportAllArchives'])->name('invoices.archives.export-all');
     Route::get('/invoices/archives/cleanup', [InvoiceController::class, 'archiveCleanup'])->name('invoices.archives.cleanup');
     Route::post('/invoices/archives/perform-cleanup', [InvoiceController::class, 'performArchiveCleanup'])->name('invoices.archives.perform-cleanup');
     Route::get('/invoices/archives/preview-cleanup', [InvoiceController::class, 'previewCleanup'])->name('invoices.archives.preview-cleanup');
-    
-    // Bulk delete archives (for selection cleanup)
     Route::post('/invoices/archives/bulk-delete', [InvoiceController::class, 'bulkDeleteArchives'])->name('invoices.archives.bulk-delete');
-    
+
     // Single Archive Operations (with {id} parameter)
     Route::get('/invoices/archives/{id}/pdf', [InvoiceController::class, 'exportArchivePDF'])->name('invoices.archives.pdf');
     Route::get('/invoices/archives/{id}/json', [InvoiceController::class, 'exportArchive'])->name('invoices.archives.json');
     Route::get('/invoices/archives/{id}/details', [InvoiceController::class, 'getArchiveDetails'])->name('invoices.archives.details');
-    
+
     // Archive Log Management
     Route::delete('/invoices/archives/logs/cleanup', [InvoiceController::class, 'cleanupOldLogs'])->name('invoices.archives.cleanup-logs');
     Route::delete('/invoices/archives/logs/selected', [InvoiceController::class, 'deleteSelectedLogs'])->name('invoices.archives.delete-selected-logs');
     Route::get('/invoices/archives/logs/preview', [InvoiceController::class, 'previewLogCleanup'])->name('invoices.archives.preview-logs');
     Route::get('/invoices/archives/logs/all', [InvoiceController::class, 'getAllRecordsForCleanup'])->name('invoices.archives.all-records');
-    
+
     // Archive Export for Cleanup
     Route::post('/invoices/archives/export-for-cleanup', [InvoiceController::class, 'exportArchivesForCleanup'])->name('invoices.archives.export-for-cleanup');
-    
+
     // ========== YEAR-END ARCHIVE ROUTES ==========
     Route::get('/invoices/year-end/management', [InvoiceController::class, 'yearEndManagement'])->name('invoices.year-end.management');
     Route::get('/invoices/year-end/statistics/{year?}', [InvoiceController::class, 'getYearEndStatistics'])->name('invoices.year-end.statistics');
     Route::post('/invoices/year-end/process', [InvoiceController::class, 'processYearEndArchive'])->name('invoices.year-end.process');
     Route::post('/invoices/year-end/send-reminders', [InvoiceController::class, 'sendYearEndReminders'])->name('invoices.year-end.send-reminders');
-    
+
     // Unpaid Invoices from Previous Years
     Route::get('/invoices/unpaid-previous-years', [InvoiceController::class, 'unpaidFromPreviousYears'])->name('invoices.unpaid-previous-years');
     Route::post('/invoices/send-reminder/{invoice}', [InvoiceController::class, 'sendReminder'])->name('invoices.send-reminder');
     Route::post('/invoices/bulk-send-reminders', [InvoiceController::class, 'bulkSendReminders'])->name('invoices.bulk-send-reminders');
     Route::get('/invoices/export-unpaid', [InvoiceController::class, 'exportUnpaidInvoices'])->name('invoices.export-unpaid');
     Route::post('/invoices/export-selected', [InvoiceController::class, 'exportSelectedInvoices'])->name('invoices.export-selected');
-    
+
     // Post-Payment Archiving
     Route::post('/invoices/post-payment-archive', [InvoiceController::class, 'processPostPaymentArchive'])->name('invoices.post-payment-archive');
     Route::get('/invoices/post-payment-preview', [InvoiceController::class, 'previewPostPaymentArchive'])->name('invoices.post-payment-preview');
-    
-    // ========== TENANT YEAR-END ARCHIVE ROUTES (if needed) ==========
+
+    // ========== TENANT YEAR-END ARCHIVE ROUTES ==========
     Route::get('/tenant-invoices/year-end/management', [TenantInvoiceController::class, 'yearEndManagement'])->name('tenant-invoices.year-end.management');
     Route::get('/tenant-invoices/year-end/statistics/{year?}', [TenantInvoiceController::class, 'getYearEndStatistics'])->name('tenant-invoices.year-end.statistics');
     Route::post('/tenant-invoices/year-end/process', [TenantInvoiceController::class, 'processYearEndArchive'])->name('tenant-invoices.year-end.process');
     Route::post('/tenant-invoices/year-end/send-reminders', [TenantInvoiceController::class, 'sendYearEndReminders'])->name('tenant-invoices.year-end.send-reminders');
-    
-    // PDF Export Routes (GET)
+
+    // ---------- PDF EXPORT ROUTES (GET/POST, STATIC) ----------
     Route::get('/invoices/export-current-page', [InvoiceController::class, 'exportCurrentPage'])->name('invoices.export-current-page');
     Route::get('/invoices/export-all-filtered', [InvoiceController::class, 'exportAllFiltered'])->name('invoices.export-all-filtered');
     Route::post('/invoices/bulk-export', [InvoiceController::class, 'bulkExport'])->name('invoices.bulk-export');
-    
-    // Admin PDF Export for single invoice
-    Route::get('/invoices/{invoice}/export-admin-pdf', [InvoiceController::class, 'exportAdminInvoicePdf'])->name('invoices.export-admin-pdf');
+
+    // Admin PDF Export for single/bulk invoices
     Route::post('/invoices/bulk-export-admin-pdf', [InvoiceController::class, 'bulkExportAdminPdf'])->name('invoices.bulk-export-admin-pdf');
     Route::get('/invoices/export-current-page-pdf', [InvoiceController::class, 'exportCurrentPagePdf'])->name('invoices.export-current-page-pdf');
     Route::get('/invoices/export-all-filtered-pdf', [InvoiceController::class, 'exportAllFilteredPdf'])->name('invoices.export-all-filtered-pdf');
     Route::post('/invoices/bulk-print', [InvoiceController::class, 'bulkPrintAdmin'])->name('invoices.bulk-print');
-    
-    // Statistics & Reports
+
+    // ---------- STATISTICS & REPORTS ----------
     Route::get('/invoices/statistics', [InvoiceController::class, 'getStatistics'])->name('invoices.statistics');
     Route::get('/invoices/export', [InvoiceController::class, 'export'])->name('invoices.export');
     Route::get('/invoices/generation-summary', [InvoiceController::class, 'getGenerationSummary'])->name('invoices.generation-summary');
     Route::get('/invoices/auto-generation-status', [InvoiceController::class, 'getAutoGenerationStatus'])->name('invoices.auto-generation-status');
     Route::get('/invoices/settings', [InvoiceController::class, 'getSettings'])->name('invoices.settings');
-    
-    // Bulk Coverage (static)
+
+    // ---------- BULK COVERAGE (static) ----------
+    // ✅ ADDED: both names point to the same action so old and new code work
     Route::get('/invoices/check-bulk-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('invoices.check-bulk-coverage');
-    
+    Route::get('/invoices/check-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('invoices.check-coverage');
+
     // ---------- CREATE & GENERATION ROUTES ----------
     Route::get('/invoices/create', [InvoiceController::class, 'create'])->name('invoices.create');
     Route::post('/invoices/generate-manual', [InvoiceController::class, 'generateManual'])->name('invoices.generate-manual');
     Route::post('/invoices/generate-monthly', [InvoiceController::class, 'generateMonthlyInvoices'])->name('invoices.generate-monthly');
     Route::post('/invoices/manual-generate', [InvoiceController::class, 'manualGenerateInvoices'])->name('invoices.manual-generate');
     Route::post('/invoices/test-calculation', [InvoiceController::class, 'testCalculation'])->name('invoices.test-calculation');
-    
+
     // ---------- BULK OPERATIONS (NO PARAMETERS) ----------
     Route::post('/invoices/bulk-mark-paid', [InvoiceController::class, 'bulkMarkPaid'])->name('invoices.bulk-mark-paid');
     Route::post('/invoices/bulk-update-status', [InvoiceController::class, 'bulkUpdateStatus'])->name('invoices.bulk-update-status');
     Route::post('/invoices/trash/bulk-restore', [InvoiceController::class, 'bulkRestore'])->name('invoices.bulk-restore');
     Route::delete('/invoices/trash/bulk-force-delete', [InvoiceController::class, 'bulkForceDelete'])->name('invoices.bulk-force-delete');
     Route::delete('/invoices/trash/empty', [InvoiceController::class, 'emptyTrash'])->name('invoices.empty-trash');
-    
+
     // ---------- STATUS MANAGEMENT ----------
     Route::post('/invoices/mark-overdue', [InvoiceController::class, 'markOverdueInvoices'])->name('invoices.mark-overdue');
-    
+
     // ---------- SYSTEM SETTINGS ----------
     Route::post('/invoices/toggle-auto-generation', [InvoiceController::class, 'toggleAutoGeneration'])->name('invoices.toggle-auto-generation');
     Route::post('/invoices/update-reminder-settings', [InvoiceController::class, 'updateReminderSettings'])->name('invoices.update-reminder-settings');
-    
-    // ---------- PARAMETERIZED ROUTES (WITH {invoice}) - COMES AFTER STATIC ROUTES ----------
-    
+
+    // ---------- PARAMETERIZED ROUTES (WITH {invoice}) ----------
+
     // Read operations
     Route::get('/invoices/{invoice}', [InvoiceController::class, 'show'])->name('invoices.show');
     Route::get('/invoices/{invoice}/print', [InvoiceController::class, 'print'])->name('invoices.print');
-    
-    // Single PDF Export
+
+    // Single PDF Export (admin)
     Route::get('/invoices/{invoice}/export-pdf', [InvoiceController::class, 'exportSinglePdf'])->name('invoices.export-pdf');
-    
+    Route::get('/invoices/{invoice}/export-admin-pdf', [InvoiceController::class, 'exportAdminInvoicePdf'])->name('invoices.export-admin-pdf');
+
     // Delete eligibility check
     Route::get('/invoices/{invoice}/can-delete', [InvoiceController::class, 'checkCanDelete'])->name('invoices.can-delete');
-    
-    // Coverage info
+
+    // Coverage info (single invoice)
     Route::get('/invoices/{invoice}/coverage-info', [InvoiceController::class, 'getCoverageInfo'])->name('invoices.coverage-info');
-    
+
     // Status updates
     Route::post('/invoices/{invoice}/mark-paid', [InvoiceController::class, 'markAsPaid'])->name('invoices.mark-paid');
-    
+
     // Penalty management
     Route::post('/invoices/{invoice}/apply-penalty', [InvoiceController::class, 'applyPenalty'])->name('invoices.apply-penalty');
     Route::post('/invoices/{invoice}/remove-penalty', [InvoiceController::class, 'removePenalty'])->name('invoices.remove-penalty');
-    
+
     // Notification management
     Route::post('/invoices/{invoice}/resend-notification', [InvoiceController::class, 'resendNotification'])->name('invoices.resend-notification');
-    
+
     // Update & Delete
     Route::put('/invoices/{invoice}', [InvoiceController::class, 'update'])->name('invoices.update');
     Route::delete('/invoices/{invoice}', [InvoiceController::class, 'destroy'])->name('invoices.destroy');
-    
+
     // Consolidation management
     Route::post('/invoices/{bulkInvoice}/reverse-consolidation', [InvoiceController::class, 'reverseConsolidation'])->name('invoices.reverse-consolidation');
-    
+
     // Archive info (for single invoice)
     Route::get('/invoices/{invoice}/archive-info', [InvoiceController::class, 'getArchiveInfo'])->name('invoices.archive-info');
-    
-    // Eligible for year-end archive
+
+    // ---------- PARAMETERIZED ROUTES WITH MULTIPLE SEGMENTS ----------
     Route::get('/invoices/eligible-for-year-end/{year}', [InvoiceController::class, 'getEligibleForYearEndArchive'])->name('invoices.eligible-for-year-end');
-    
-    // ---------- PARAMETERIZED ROUTES WITH ID (FOR TRASH OPERATIONS) ----------
+
+    // Trash restore / force-delete by id
     Route::post('/invoices/trash/restore/{id}', [InvoiceController::class, 'restore'])->name('invoices.restore');
     Route::delete('/invoices/trash/force-delete/{id}', [InvoiceController::class, 'forceDelete'])->name('invoices.force-delete');
-    
-    // ---------- PARAMETERIZED ROUTES WITH PROPERTY ----------
+
+    // Property-scoped coverage summary (admin)
     Route::get('/properties/{property}/bulk-coverage-summary', [InvoiceController::class, 'getBulkCoverageSummary'])->name('invoices.bulk-coverage-summary');
-    
+
     // ---------- INDEX ROUTE (MUST BE LAST) ----------
     Route::get('/invoices', [InvoiceController::class, 'index'])->name('invoices.index');
 });
@@ -4668,59 +4678,65 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
 // ==================== LANDLORD INVOICE MANAGEMENT ROUTES ====================
 // Routes for Landlord (type: 2)
 Route::middleware(['auth', 'multi.auth.user:2'])->prefix('landlord')->name('landlord.')->group(function () {
-    
+
     // ---------- STATIC ROUTES (NO PARAMETERS) - MUST COME FIRST ----------
-    
+
     // Dashboard & Statistics
     Route::get('/dashboard/statistics', [InvoiceController::class, 'getLandlordStatistics'])->name('dashboard.statistics');
-    
+
     // PDF Export Routes (GET)
     Route::get('/invoices/export-current-page', [InvoiceController::class, 'landlordExportCurrentPage'])->name('invoices.export-current-page');
     Route::get('/invoices/export-all', [InvoiceController::class, 'landlordExportAllInvoices'])->name('invoices.export-all');
     Route::post('/invoices/bulk-export', [InvoiceController::class, 'landlordBulkExport'])->name('invoices.bulk-export');
-    
+
     // Payment Form
     Route::get('/invoices/payment/form', [InvoiceController::class, 'showPaymentForm'])->name('invoices.payment.form');
-    
+
     // Payment Confirmation
     Route::get('/payments/confirmation/{transactionId}', [PaymentController::class, 'showConfirmation'])->name('payments.confirmation');
     Route::post('/payments/failed', [PaymentController::class, 'handleFailedPayment'])->name('payments.failed');
-    
+
     // API Routes (no parameters)
     Route::get('/outstanding-invoices', [InvoiceController::class, 'getOutstandingInvoices'])->name('outstanding-invoices');
     Route::get('/outstanding-summary', [InvoiceController::class, 'getLandlordOutstandingSummary'])->name('outstanding-summary');
-    Route::get('/coverage-summary', [InvoiceController::class, 'getLandlordCoverageSummary'])->name('coverage-summary');
     Route::post('/payment-summary', [InvoiceController::class, 'getPaymentSummary'])->name('payment-summary');
+
+    // ✅ FIXED: renamed to landlord-coverage-summary so it no longer collides
+    // with the property-scoped 'coverage-summary' route below
+    Route::get('/coverage-summary', [InvoiceController::class, 'getLandlordCoverageSummary'])->name('landlord-coverage-summary');
+
+    // ✅ ADDED: both names point to the same action so old + new code work
     Route::get('/check-bulk-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('check-bulk-coverage');
-    
+    Route::get('/check-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('check-coverage');
+
     // ---------- BULK PAYMENT ROUTES ----------
     Route::post('/create-bulk-payment', [InvoiceController::class, 'createBulkPayment'])->name('create-bulk-payment');
     Route::post('/bulk-payments/create', [InvoiceController::class, 'createBulkPayment'])->name('bulk-payments.create');
-    
+
     // ---------- PARAMETERIZED ROUTES (WITH {invoice} or {property}) ----------
-    
+
     // Bulk payment options (property parameter)
     Route::get('/properties/{property}/bulk-payment-options', [InvoiceController::class, 'getBulkPaymentOptions'])->name('bulk-payment-options');
-    Route::get('/properties/{property}/coverage-summary', [InvoiceController::class, 'getBulkCoverageSummary'])->name('coverage-summary');
-    
+    Route::get('/properties/{property}/coverage-summary', [InvoiceController::class, 'getBulkCoverageSummary'])->name('property-coverage-summary');
+
     // Bulk payment processing (invoice parameter)
     Route::post('/bulk-payments/{bulkInvoice}/process', [InvoiceController::class, 'processBulkPayment'])->name('bulk-payments.process');
-    
+
     // Payment processing (POST)
     Route::post('/payments/process', [InvoiceController::class, 'processPayment'])->name('payments.process');
     Route::post('/invoices/process-payment', [InvoiceController::class, 'processPayment'])->name('invoices.process-payment');
-    
+
     // Invoice status check (invoice parameter)
     Route::get('/invoices/{invoice}/status', [InvoiceController::class, 'getLandlordInvoiceStatus'])->name('invoices.status');
     Route::get('/invoices/{invoice}/notification-status', [InvoiceController::class, 'getLandlordInvoiceNotificationStatus'])->name('invoices.notification-status');
-    
+
     // Invoice view and print (invoice parameter)
     Route::get('/invoices/{invoice}', [InvoiceController::class, 'showLandlordInvoice'])->name('invoices.show');
     Route::get('/invoices/{invoice}/print', [InvoiceController::class, 'printLandlordInvoice'])->name('invoices.print');
-    
+
     // Single PDF Export for landlord
     Route::get('/invoices/{invoice}/export-pdf', [InvoiceController::class, 'landlordExportSinglePdf'])->name('invoices.export-pdf');
-    
+
     // ---------- INDEX ROUTE (MUST BE LAST) ----------
     Route::get('/invoices', [InvoiceController::class, 'landlordInvoices'])->name('invoices');
 });
@@ -4728,15 +4744,16 @@ Route::middleware(['auth', 'multi.auth.user:2'])->prefix('landlord')->name('land
 // ==================== SHARED/GENERIC INVOICE ROUTES ====================
 // Routes accessible by multiple user types (with authorization checks inside controllers)
 Route::middleware(['auth'])->group(function () {
-    
-    // Payment summary API (accessible to all authenticated users)
+
+    // Payment summary API
     Route::post('/payment-summary', [InvoiceController::class, 'getPaymentSummary'])->name('payment-summary');
-    
-    // Outstanding invoices API (with middleware check inside controller)
+
+    // Outstanding invoices API
     Route::get('/outstanding-invoices', [InvoiceController::class, 'getOutstandingInvoices'])->name('outstanding-invoices');
-    
-    // Bulk coverage check (accessible to both admin and landlord with property ownership check)
+
+    // Bulk coverage check — both names so admin + landlord + shared code work
     Route::get('/check-bulk-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('check-bulk-coverage');
+    Route::get('/check-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('check-coverage');
 });
 
 // ==================== WEBHOOK ROUTES (NO AUTHENTICATION) ====================

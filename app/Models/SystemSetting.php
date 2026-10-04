@@ -23,6 +23,7 @@ class SystemSetting extends Model
         'system_address',
         'system_logo',
         'system_favicon',
+        'allow_offline_payment',
 
         // Default SMS Sender ID (admin-editable, overridden by per-provider values)
         'sms_sender_id',
@@ -173,6 +174,7 @@ class SystemSetting extends Model
         
         'auto_generate_invoices' => 'boolean',
         'send_payment_reminders' => 'boolean',
+        'allow_offline_payment' => 'boolean',
         
         // Payment Gateway Casts
         'enable_expresspay' => 'boolean',
@@ -400,6 +402,15 @@ class SystemSetting extends Model
             return false;
         }
     }
+
+    /**
+ * Whether admins can mark invoices as paid from the office
+ * (cash, cheque, bank transfer recorded manually).
+ */
+public function isOfflinePaymentAllowed(): bool
+{
+    return (bool) ($this->allow_offline_payment ?? true);
+}
 
     // ========== SMS SENDER ID METHODS (NEW) ==========
 

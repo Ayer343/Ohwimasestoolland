@@ -582,7 +582,8 @@
                 <!-- Tab Content Container -->
                 <div id="tabContent">
                     <!-- Personal Information Tab -->
-                    <div class="tab-pane active" id="personalPane">
+                    <!-- ✅ FIX: Added data-tab-pane attribute for robust lookup -->
+                    <div class="tab-pane active" id="personalPane" data-tab-pane="personal">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Personal Information</h3>
                             
@@ -703,8 +704,11 @@
                                 </div>
 
                                 <div class="flex justify-end space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                    <button type="button" onclick="showTab('contact')" class="btn-outline">
-                                        Next: Contact Info
+                                    <!-- ✅ FIX: Added preventDefault + stopPropagation to Next buttons -->
+                                    <button type="button" 
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('contact');" 
+                                            class="btn-outline">
+                                        Next: Contact Info <i class="fas fa-arrow-right ml-1"></i>
                                     </button>
                                     <button type="submit" class="btn-primary" id="personalSubmitBtn">
                                         <i class="fas fa-save mr-2"></i>Save Changes
@@ -715,7 +719,8 @@
                     </div>
 
                     <!-- Contact Information Tab -->
-                    <div class="tab-pane hidden" id="contactPane">
+                    <!-- ✅ FIX: Added data-tab-pane attribute -->
+                    <div class="tab-pane hidden" id="contactPane" data-tab-pane="contact">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Contact Information</h3>
                             
@@ -839,12 +844,17 @@
                                 </div>
 
                                 <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                    <button type="button" onclick="showTab('personal')" class="btn-secondary">
+                                    <!-- ✅ FIX: Added preventDefault + stopPropagation -->
+                                    <button type="button" 
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('personal');" 
+                                            class="btn-secondary">
                                         <i class="fas fa-arrow-left mr-2"></i>Back
                                     </button>
                                     <div class="space-x-3">
-                                        <button type="button" onclick="showTab('password')" class="btn-outline">
-                                            Next: Security
+                                        <button type="button" 
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('password');" 
+                                                class="btn-outline">
+                                            Next: Security <i class="fas fa-arrow-right ml-1"></i>
                                         </button>
                                         <button type="submit" class="btn-primary" id="contactSubmitBtn">
                                             <i class="fas fa-save mr-2"></i>Save Changes
@@ -856,7 +866,8 @@
                     </div>
 
                     <!-- Password Tab -->
-                    <div class="tab-pane hidden" id="passwordPane">
+                    <!-- ✅ FIX: Added data-tab-pane attribute -->
+                    <div class="tab-pane hidden" id="passwordPane" data-tab-pane="password">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Security Settings</h3>
                             
@@ -953,7 +964,10 @@
                                     </div>
 
                                     <div class="flex justify-end space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                        <button type="button" onclick="showTab('contact')" class="btn-secondary">
+                                        <!-- ✅ FIX: Added preventDefault + stopPropagation -->
+                                        <button type="button" 
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('contact');" 
+                                                class="btn-secondary">
                                             <i class="fas fa-arrow-left mr-2"></i>Back
                                         </button>
                                         <button type="submit" class="btn-primary" id="passwordSubmitBtn">
@@ -981,6 +995,8 @@
     border-bottom: 2px solid transparent;
     color: var(--text-secondary);
     transition: all 0.3s ease;
+    cursor: pointer;
+    background: transparent;
 }
 
 .tab-button:hover {
@@ -1007,8 +1023,9 @@
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* ✅ FIX: Removed !important so JS inline display can override */
 .hidden {
-    display: none !important;
+    display: none;
 }
 
 /* Dashboard Switcher Styles */
@@ -1206,7 +1223,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         method: 'POST',
                         headers: {
                             'X-CSRF-TOKEN': csrfToken,
-                            'Content-Type': application/json',
+                            'Content-Type': 'application/json', // ✅ FIX: Was missing quotes
                             'Accept': 'application/json',
                             'X-Requested-With': 'XMLHttpRequest'
                         },
@@ -1239,47 +1256,86 @@ document.addEventListener('DOMContentLoaded', function() {
 let countdownInterval = null;
 let timerSeconds = 600; // 10 minutes = 600 seconds
 
-// Tab Functions
+// ==================== TAB FUNCTIONS (FIXED) ====================
+// ✅ FIX: Whitelist of valid tab names
+const TAB_NAMES = ['personal', 'contact', 'password'];
+
 function initTabs() {
     const tabButtons = document.querySelectorAll('#tabNav .tab-button');
-    const tabPanes = document.querySelectorAll('.tab-pane');
-    
+
     tabButtons.forEach(button => {
-        button.addEventListener('click', function() {
+        button.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
             const tabName = this.getAttribute('data-tab');
-            showTab(tabName);
+            if (tabName) showTab(tabName);
         });
+    });
+
+    // ✅ FIX: Restore last tab from URL hash (e.g. #contact)
+    const hash = window.location.hash.replace('#', '');
+    if (hash && TAB_NAMES.includes(hash)) {
+        showTab(hash, false); // don't rewrite the hash
+    }
+
+    // ✅ FIX: Support browser back/forward navigation
+    window.addEventListener('hashchange', function () {
+        const h = window.location.hash.replace('#', '');
+        if (h && TAB_NAMES.includes(h)) {
+            showTab(h, false);
+        }
     });
 }
 
-function showTab(tabName) {
-    const tabPanes = document.querySelectorAll('.tab-pane');
-    tabPanes.forEach(pane => {
+function showTab(tabName, updateHash = true) {
+    // ✅ FIX: Guard against unknown tab names
+    if (!TAB_NAMES.includes(tabName)) {
+        console.warn('[Profile] Unknown tab:', tabName);
+        return;
+    }
+
+    // Hide all panes
+    document.querySelectorAll('.tab-pane').forEach(pane => {
         pane.classList.remove('active');
         pane.classList.add('hidden');
+        pane.style.display = 'none'; // ✅ FIX: hard override to defeat any stale inline styles
     });
-    
-    const tabButtons = document.querySelectorAll('#tabNav .tab-button');
-    tabButtons.forEach(button => {
+
+    // Deactivate all tab buttons
+    document.querySelectorAll('#tabNav .tab-button').forEach(button => {
         button.classList.remove('active-tab');
-        button.style.borderColor = 'transparent';
+        button.style.borderBottomColor = 'transparent';
         button.style.color = 'var(--text-secondary)';
     });
-    
+
+    // Show selected pane
     const selectedPane = document.getElementById(tabName + 'Pane');
     if (selectedPane) {
         selectedPane.classList.remove('hidden');
         selectedPane.classList.add('active');
+        selectedPane.style.display = 'block';
+    } else {
+        console.error('[Profile] Pane not found for tab:', tabName);
     }
-    
+
+    // Activate selected tab button
     const selectedButton = document.querySelector(`#tabNav .tab-button[data-tab="${tabName}"]`);
     if (selectedButton) {
         selectedButton.classList.add('active-tab');
-        selectedButton.style.borderColor = 'var(--primary)';
+        selectedButton.style.borderBottomColor = 'var(--primary)';
         selectedButton.style.color = 'var(--primary)';
     }
-    
-    window.location.hash = tabName;
+
+    // ✅ FIX: Update URL hash without jumping (uses replaceState, not location.hash)
+    if (updateHash) {
+        history.replaceState(null, '', '#' + tabName);
+    }
+
+    // ✅ FIX: Scroll tab nav into view (mobile) and top of content
+    const tabNav = document.getElementById('tabNav');
+    if (tabNav) {
+        tabNav.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 }
 
 // Form Submission Handling
@@ -1320,6 +1376,7 @@ function submitForm(form) {
                 updateProfileCompletion(data.profile_completion);
             }
             if (data.reload) {
+                // ✅ FIX: Preserve current tab across reload (hash already set by showTab)
                 setTimeout(() => window.location.reload(), 1500);
             }
             if (data.user) {
