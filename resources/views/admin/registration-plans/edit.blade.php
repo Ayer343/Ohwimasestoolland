@@ -1277,6 +1277,9 @@
 </div>
 @endsection
 
+{{-- ============================================================ --}}
+{{-- SCRIPTS — unchanged; layout's @yield('scripts') handles it. --}}
+{{-- ============================================================ --}}
 @section('scripts')
 <script>
 // ==================== GLOBAL CHANNEL AVAILABILITY ====================
@@ -2013,7 +2016,14 @@ document.addEventListener('DOMContentLoaded', function() {
     updateInvitationChannelsUI();
 });
 </script>
+@endsection
 
+{{-- ============================================================ --}}
+{{-- STYLES — moved into @push('styles') so they render in <head> --}}
+{{-- and don't leak into the header/sidebar. The global `.hidden`  --}}
+{{-- rule is scoped to only the elements this page controls.       --}}
+{{-- ============================================================ --}}
+@push('styles')
 <style>
 /* Channel option styling */
 .invitation-channel-option {
@@ -2115,6 +2125,40 @@ code {
 
 #phone-validation { pointer-events: none; }
 
+/* ============================================================ */
+/* SCOPED .hidden OVERRIDE                                      */
+/* Previously a global `.hidden { display: none; }` was here,   */
+/* which leaked out of this view and forcibly hid the header's  */
+/* search bar (and any other .hidden-using component).          */
+/* Now scoped to only the elements this page controls.          */
+/* ============================================================ */
+#custom_pattern_container.hidden,
+#pattern-preview-container.hidden,
+#pattern-validation.hidden,
+#sequence_type_requirements.hidden,
+#sequence_examples.hidden,
+#multiple-agents-section.hidden,
+#multiple-agent-conditional-fields.hidden,
+#single-agent-section.hidden,
+#single-agent-conditional-fields.hidden,
+#invitation-method-section.hidden,
+#invitation-preview-container.hidden,
+#channel-requirements.hidden,
+#email-service-details.hidden,
+#email-delivery-info.hidden,
+#existing-agent-info.hidden,
+#phone-validation.hidden,
+#phone-formatted-info.hidden,
+#agent-phone-info.hidden,
+#agent-email-info.hidden,
+#agent-status-info.hidden,
+#agent-verification-info.hidden,
+#sequence-type-note.hidden,
+.new-agent-fields.hidden,
+.existing-agent-fields.hidden {
+    display: none !important;
+}
+
 @media (max-width: 768px) {
     .grid.grid-cols-1.md\:grid-cols-2 { grid-template-columns: 1fr; }
     .grid.grid-cols-1.md\:grid-cols-3 { grid-template-columns: 1fr; }
@@ -2122,7 +2166,10 @@ code {
     .agent-row .grid { grid-template-columns: 1fr; }
 }
 
-input:focus, select:focus, textarea:focus {
+/* Focus styles — scoped to this form so they don't affect the header */
+#registration-plan-form input:focus,
+#registration-plan-form select:focus,
+#registration-plan-form textarea:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);
@@ -2149,6 +2196,8 @@ input:focus, select:focus, textarea:focus {
     border-color: #374151 !important;
 }
 
-.hidden { display: none; }
+/* NOTE: the global `.hidden { display: none; }` rule that used to sit
+ * here has been replaced with the scoped list above. That global rule
+ * was leaking to the header and hiding the search bar. */
 </style>
-@endsection
+@endpush

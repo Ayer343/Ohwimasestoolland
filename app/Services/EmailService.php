@@ -830,11 +830,19 @@ class EmailService
 
     /**
      * Delegate to the model's safe accessor.
-     * The model owns password handling via the 'encrypted' cast.
+     *
+     * ✅ SAFE FALLBACK: if the model doesn't expose
+     * getDecryptedPassword(), we fall back to the raw encrypted_password
+     * attribute (in case the model still uses the old 'encrypted' cast).
      */
     private function getDecryptedPassword(UserEmailAccount $account): ?string
     {
-        return $account->getDecryptedPassword();
+        if (method_exists($account, 'getDecryptedPassword')) {
+            return $account->getDecryptedPassword();
+        }
+
+        // Fallback: the model attribute may already be decrypted by a cast
+        return $account->encrypted_password ?? null;
     }
 
     /**
@@ -888,6 +896,22 @@ class EmailService
     }
 
     /**
+     * ✅ Build a short preview string from an HTML or plain-text body.
+     * Used to populate `body_preview` (schema has no `text_body` column).
+     */
+    private function makePreview(?string $html, ?string $text, int $length = 200): ?string
+    {
+        $source = $text ?: strip_tags($html ?? '');
+        $source = trim(preg_replace('/\s+/', ' ', $source));
+
+        if ($source === '') {
+            return null;
+        }
+
+        return mb_substr($source, 0, $length);
+    }
+
+    /**
      * Create SMTP transport using factory with Dsn
      */
     private function createSmtpTransport(string $host, int $port, string $username, string $password, string $encryption): EsmtpTransport
@@ -926,6 +950,51 @@ class EmailService
         }
 
         return '<' . $uniqueId . '@' . $domain . '>';
+    }
+
+    /**
+     * ✅ Convert a comma-separated address string (or an array) into a
+     * JSON-encoded array of address strings suitable for a JSON column.
+     * Returns null if empty so the DB stores NULL, not '[]'.
+     */
+    private function addressesToJson($addresses): ?string
+    {
+        if (empty($addresses)) {
+            return null;
+        }
+
+        $list = [];
+
+        if (is_array($addresses)) {
+            $list = $addresses;
+        } elseif (is_string($addresses)) {
+            // Could be "a@x.com, b@y.com" or already JSON
+            $decoded = json_decode($addresses, true);
+            if (is_array($decoded)) {
+                $list = $decoded;
+            } else {
+                $list = array_map('trim', explode(',', $addresses));
+            }
+        }
+
+        $list = array_values(array_filter(array_map(function ($item) {
+            if (is_string($item)) {
+                return trim($item);
+            }
+            if (is_object($item) && isset($item->mail)) {
+                return $item->mail;
+            }
+            if (is_array($item) && isset($item['mail'])) {
+                return $item['mail'];
+            }
+            return null;
+        }, $list)));
+
+        if (empty($list)) {
+            return null;
+        }
+
+        return json_encode($list, JSON_UNESCAPED_UNICODE);
     }
 
     /**
@@ -1068,7 +1137,12 @@ class EmailService
     }
 
     /**
-     * Save sent email with unique message_id
+     * ✅ Save a sent email.
+     *
+     * - direction = 'outgoing' (matches the new enum)
+     * - status    = 'sent'     (valid enum value)
+     * - cc/bcc    = JSON arrays (the columns have json_valid() CHECKs)
+     * - body_preview populated from the plain-text view of the body
      */
     private function saveSentEmail(
         UserEmailAccount $account,
@@ -1079,29 +1153,34 @@ class EmailService
         ?string $bcc = null,
         array $attachments = []
     ): Email {
+        if (empty($account->id)) {
+            throw new \RuntimeException('Cannot save sent email without user_email_account_id');
+        }
+
         $messageId = $this->generateMessageId($account->email);
 
         return Email::create([
-            'user_email_account_id' => $account->id,
-            'message_id' => $messageId,
-            'folder' => 'SENT',
-            'direction' => 'outgoing',
-            'from_email' => $account->email,
-            'from_name' => $account->display_name ?? $account->email,
-            'to_email' => $to,
-            'to_name' => null,
-            'cc' => $cc,
-            'bcc' => $bcc,
-            'subject' => $subject,
-            'body' => $body,
-            'html_body' => $body,
-            'status' => 'sent',
-            'priority' => 'normal',
-            'has_attachments' => !empty($attachments),
-            'attachment_count' => count($attachments),
-            'is_read' => true,
-            'sent_at' => now(),
-            'received_at' => now(),
+            'user_email_account_id' => (int) $account->id,
+            'user_id'               => $account->user_id,
+            'message_id'            => $messageId,
+            'folder'                => 'SENT',
+            'direction'             => 'outgoing',       // ✅ matches enum
+            'from_email'            => $account->email,
+            'from_name'             => $account->display_name ?? $account->email,
+            'to_email'              => $to,
+            'to_name'               => null,
+            'cc'                    => $this->addressesToJson($cc),   // ✅ valid JSON
+            'bcc'                   => $this->addressesToJson($bcc),  // ✅ valid JSON
+            'subject'               => $subject,
+            'body'                  => strip_tags($body),             // plain text
+            'html_body'             => $body,                         // HTML
+            'body_preview'          => $this->makePreview($body, null), // ✅ NEW
+            'status'                => 'sent',                        // ✅ valid enum
+            'priority'              => 'normal',
+            'attachment_count'      => count($attachments),
+            'is_read'               => true,
+            'sent_at'               => now(),
+            'received_at'           => now(),
         ]);
     }
 
@@ -1234,21 +1313,6 @@ class EmailService
      * Sync emails from account using webklex/laravel-imap.
      *
      * ✅ HEADERS-ONLY + SMALL BATCH — fixes the timeout on large mailboxes.
-     *
-     * Two compounding issues on large mailboxes:
-     *
-     *   1. FULL BODY FETCH — calling ->get() with default options downloads
-     *      the entire MIME body of every message. On a 20k-message mailbox
-     *      even 30 messages can total 15+ MB and take minutes.
-     *      Fix: ->setFetchBody(false) requests only the header block.
-     *
-     *   2. PER-MESSAGE ROUND-TRIPS — webklex's ->get() issues one
-     *      `UID FETCH` per message UID instead of batching them. Each
-     *      round-trip to Gmail is ~2.5s, so 33 messages = ~82s.
-     *      Fix: ->limit(5) keeps the total under the timeout.
-     *
-     * The body is filled in lazily by fetchAndStoreMessageBody() when the
-     * user opens an email — that's a single-message fetch, so it's fast.
      */
     public function syncAccount(UserEmailAccount $account): array
     {
@@ -1256,13 +1320,16 @@ class EmailService
             'success' => true,
             'message' => 'Sync completed',
             'fetched' => 0,
-            'errors' => []
+            'saved'   => 0,
+            'skipped' => 0,
+            'failed'  => 0,
+            'errors'  => [],
         ];
 
         try {
             Log::info('Starting email sync for account', [
                 'account_id' => $account->id,
-                'email' => $account->email
+                'email'      => $account->email,
             ]);
 
             $client = $this->connectImap($account);
@@ -1274,36 +1341,21 @@ class EmailService
                 return $result;
             }
 
-            // ========================================== //
-            // 📥 HEADERS-ONLY, SMALL BATCH                //
-            // ========================================== //
-            // limit(5) is deliberate, not arbitrary:
-            //   - webklex does ONE round-trip per message UID
-            //   - Gmail round-trips are ~2.5s each over TLS
-            //   - 5 messages ≈ 12s worst case — comfortably under our
-            //     120s set_time_limit and matching our 15s socket timeout
-            //
-            // If you want to speed up the initial sync of a large mailbox,
-            // trigger sync repeatedly — each run picks up the next 5 messages
-            // in the date range.
             $fetchStart = microtime(true);
 
             $messages = $folder->query()
-                ->since(now()->subDays(3))    // tighter window → smaller UID set
-                ->leaveUnread()               // BODY.PEEK — don't mark as read
-                ->setFetchBody(false)         // ⭐ headers only — no bodies
-                ->limit(5)                    // ⭐ small batch — one round-trip each
+                ->since(now()->subDays(3))
+                ->leaveUnread()
+                ->setFetchBody(false)
+                ->limit(5)
                 ->get();
-
-            $fetchElapsed = round(microtime(true) - $fetchStart, 2);
 
             Log::info('📥 IMAP header fetch complete', [
                 'account_id'      => $account->id,
                 'message_count'   => $messages->count(),
-                'elapsed_seconds' => $fetchElapsed,
+                'elapsed_seconds' => round(microtime(true) - $fetchStart, 2),
             ]);
 
-            // Fallback: if the last 3 days had nothing, grab the newest 5 by UID
             if ($messages->count() === 0) {
                 Log::info('No messages in last 3 days — falling back to newest 5', [
                     'account_id' => $account->id,
@@ -1313,8 +1365,8 @@ class EmailService
                 $messages = $folder->query()
                     ->all()
                     ->leaveUnread()
-                    ->setFetchBody(false)     // ⭐ still headers only
-                    ->limit(5)                // ⭐ same small batch
+                    ->setFetchBody(false)
+                    ->limit(5)
                     ->get();
 
                 Log::info('📥 IMAP header fetch (fallback) complete', [
@@ -1324,37 +1376,57 @@ class EmailService
                 ]);
             }
 
-            $saved = 0;
             foreach ($messages as $message) {
                 try {
-                    if ($this->saveReceivedImapMessage($account, $message)) {
-                        $saved++;
+                    $saved = $this->saveReceivedImapMessage($account, $message);
+
+                    if ($saved) {
+                        $result['saved']++;
+                        $result['fetched']++;
+                    } else {
+                        $result['skipped']++;
                     }
                 } catch (Exception $e) {
+                    $result['failed']++;
                     $result['errors'][] = $e->getMessage();
+
                     Log::warning('Failed to save email', [
                         'account_id' => $account->id,
-                        'error' => $e->getMessage()
+                        'error'      => $e->getMessage(),
                     ]);
                 }
             }
 
             $client->disconnect();
 
-            $result['fetched'] = $saved;
-            $result['message'] = "Synced {$saved} new emails";
+            if ($result['failed'] > 0 && $result['saved'] === 0 && $result['skipped'] === 0) {
+                $result['success'] = false;
+                $result['message'] = sprintf(
+                    'Sync failed: all %d message(s) could not be saved.',
+                    $result['failed']
+                );
+            } else {
+                $result['message'] = sprintf(
+                    'Synced %d new, %d already present, %d failed.',
+                    $result['saved'],
+                    $result['skipped'],
+                    $result['failed']
+                );
+            }
 
             $account->update([
-                'last_sync_at' => now(),
-                'is_connected' => true,
-                'last_connected_at' => now(),
+                'last_sync_at'          => now(),
+                'is_connected'          => true,
+                'last_connected_at'     => now(),
                 'last_connection_error' => null,
-                'status' => 'verified'
+                'status'                => 'verified',
             ]);
 
             Log::info('Email sync completed', [
                 'account_id' => $account->id,
-                'fetched' => $saved
+                'saved'      => $result['saved'],
+                'skipped'    => $result['skipped'],
+                'failed'     => $result['failed'],
             ]);
 
         } catch (Exception $e) {
@@ -1363,15 +1435,15 @@ class EmailService
             $result['errors'][] = $e->getMessage();
 
             $account->update([
-                'is_connected' => false,
+                'is_connected'          => false,
                 'last_connection_error' => $e->getMessage(),
-                'status' => 'failed'
+                'status'                => 'failed',
             ]);
 
             Log::error('Email sync failed', [
                 'account_id' => $account->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'error'      => $e->getMessage(),
+                'trace'      => $e->getTraceAsString(),
             ]);
         }
 
@@ -1379,13 +1451,11 @@ class EmailService
     }
 
     /**
-     * ✅ LAZY BODY FETCH — called from the viewEmail action when the user
-     * opens an email whose body we haven't downloaded yet.
+     * ✅ LAZY BODY FETCH — called when the user opens an email.
      *
-     * This is the counterpart to the headers-only sync. It fetches exactly
-     * one message's full body (and attachment metadata) on demand. Because
-     * it's a single message, even a heavy HTML email completes in 1–5
-     * seconds instead of blocking a 50-message batch.
+     * Schema note: this app stores the plain-text body in `body`,
+     * the HTML in `html_body`, and a short snippet in `body_preview`.
+     * There is NO `text_body` column.
      */
     public function fetchAndStoreMessageBody(UserEmailAccount $account, Email $email): bool
     {
@@ -1412,10 +1482,9 @@ class EmailService
                 'message_id' => $email->message_id,
             ]);
 
-            // Fetch ONLY the one message we care about, WITH its body.
             $message = $folder->query()
                 ->whereMessageId($email->message_id)
-                ->setFetchBody(true)   // ⭐ we DO want the body for this one
+                ->setFetchBody(true)
                 ->limit(1)
                 ->get()
                 ->first();
@@ -1428,7 +1497,6 @@ class EmailService
                 return false;
             }
 
-            // Safe to fetch body/attachments now — it's one message, not 50.
             $htmlBody = null;
             $textBody = null;
             try { $htmlBody = $message->getHTMLBody(); } catch (Exception $e) {}
@@ -1442,10 +1510,12 @@ class EmailService
                 // no attachments
             }
 
+            // ✅ Plain text goes into `body`; HTML into `html_body`;
+            //    snippet into `body_preview`. There is no `text_body`.
             $email->update([
-                'body'             => $htmlBody ?: $textBody ?: '',
+                'body'             => $textBody ?: strip_tags($htmlBody ?? '') ?: '',
                 'html_body'        => $htmlBody,
-                'text_body'        => $textBody,
+                'body_preview'     => $this->makePreview($htmlBody, $textBody),
                 'has_attachments'  => $attachmentCount > 0,
                 'attachment_count' => $attachmentCount,
             ]);
@@ -1473,8 +1543,7 @@ class EmailService
     }
 
     /**
-     * ✅ Connect to IMAP server using the officially supported
-     * config()-based pattern for webklex/laravel-imap.
+     * Connect to IMAP server.
      */
     private function connectImap(UserEmailAccount $account): ImapClientInstance
     {
@@ -1557,50 +1626,62 @@ class EmailService
     }
 
     /**
-     * Persist an IMAP message fetched by webklex/laravel-imap.
-     * Returns true if a new row was created, false if it already existed.
+     * ✅ Persist an IMAP message.
      *
-     * ✅ HEADERS-ONLY — the body is intentionally left null here. It's
-     * filled in later by fetchAndStoreMessageBody() when the user opens
-     * the email.
+     * Schema alignment:
+     *   direction      → 'incoming'   (enum: incoming|outgoing)
+     *   status         → 'delivered'  (enum: draft|sent|failed|queued|delivered)
+     *   cc / bcc       → JSON arrays  (columns have json_valid() CHECKs)
+     *   body           → '' on sync; plain text filled lazily
+     *   html_body      → null on sync; HTML filled lazily
+     *   body_preview   → null on sync; snippet filled lazily
+     *
+     * NOTE: There is NO `text_body` column in this schema.
      */
     private function saveReceivedImapMessage(UserEmailAccount $account, ImapMessage $message): bool
     {
-        $messageId = $message->getMessageId() ? (string) $message->getMessageId() : null;
+        $messageId = $message->getMessageId()
+            ? (string) $message->getMessageId()
+            : null;
 
-        if ($messageId && Email::where('message_id', $messageId)
-                ->where('user_email_account_id', $account->id)
-                ->exists()) {
-            return false;
+        if (empty($account->id)) {
+            Log::error('❌ Cannot save email: account has no id', [
+                'account_email' => $account->email ?? null,
+            ]);
+            throw new \RuntimeException('Cannot save email without user_email_account_id');
         }
 
-        // ───── From ─────
+        // Dedupe
+        if ($messageId) {
+            $exists = Email::where('user_email_account_id', $account->id)
+                ->where('message_id', $messageId)
+                ->exists();
+
+            if ($exists) {
+                return false;
+            }
+        }
+
+        // From — normalized
         $fromEmail = null;
         $fromName  = null;
         try {
             $from = $message->getFrom();
             if ($from && $this->countImapAttribute($from) > 0) {
                 $first     = $this->firstImapAddress($from);
-                $fromEmail = $first['mail'] ?? null;
-                $fromName  = $first['personal'] ?? null;
+                $fromEmail = !empty($first['mail'])     ? trim($first['mail'])     : null;
+                $fromName  = !empty($first['personal']) ? trim($first['personal']) : null;
             }
         } catch (Exception $e) {
             // leave nulls
         }
 
-        // ───── To / CC / BCC ─────
-        $toEmail  = $this->extractImapAddresses($message->getTo());
-        $ccEmail  = $this->extractImapAddresses($message->getCc());
-        $bccEmail = $this->extractImapAddresses($message->getBcc());
+        // To / CC / BCC — raw comma-separated values
+        $toRaw  = $this->extractImapAddresses($message->getTo());
+        $ccRaw  = $this->extractImapAddresses($message->getCc());
+        $bccRaw = $this->extractImapAddresses($message->getBcc());
 
-        // ───── Body — INTENTIONALLY SKIPPED ─────
-        // We do NOT call getHTMLBody()/getTextBody() here. The body is
-        // fetched lazily from the viewEmail action on first view.
-        $htmlBody = null;
-        $textBody = null;
-        $body     = '';
-
-        // ───── Attachment count — from structure walk, no download ─────
+        // Attachment count from structure (no download)
         $attachmentCount = 0;
         try {
             $structure = $message->getStructure();
@@ -1611,7 +1692,7 @@ class EmailService
             $attachmentCount = 0;
         }
 
-        // ───── Read status ─────
+        // Read status
         $isRead = false;
         try {
             $flags = $message->getFlags();
@@ -1627,7 +1708,7 @@ class EmailService
             }
         } catch (Exception $e) { /* flags unavailable */ }
 
-        // ───── Date ─────
+        // Date
         $receivedAt = null;
         try {
             $date = $message->getDate();
@@ -1638,10 +1719,10 @@ class EmailService
             $receivedAt = null;
         }
 
-        // ───── Subject ─────
+        // Subject — normalized
         $subject = '';
         try {
-            $subject = (string) $message->getSubject();
+            $subject = trim((string) $message->getSubject());
         } catch (Exception $e) {
             $subject = '';
         }
@@ -1649,36 +1730,50 @@ class EmailService
             $subject = '(No Subject)';
         }
 
-        Email::create([
-            'user_email_account_id' => $account->id,
-            'message_id'       => $messageId,
-            'folder'           => 'INBOX',
-            'direction'        => 'incoming',
-            'from_email'       => $fromEmail,
-            'from_name'        => $fromName,
-            'to_email'         => $toEmail,
-            'to_name'          => null,
-            'cc'               => $ccEmail,
-            'bcc'              => $bccEmail,
-            'subject'          => $subject,
-            'body'             => $body,             // ← empty on purpose
-            'html_body'        => $htmlBody,         // ← null on purpose
-            'text_body'        => $textBody,         // ← null on purpose
-            'status'           => 'delivered',
-            'priority'         => 'normal',
-            'has_attachments'  => $attachmentCount > 0,
-            'attachment_count' => $attachmentCount,
-            'is_read'          => $isRead,
-            'read_at'          => $isRead ? now() : null,
-            'received_at'      => $receivedAt ?? now(),
-        ]);
+        // ── Build payload ────────────────────────────────────────
+        // NOTE: NO `text_body` key — this schema doesn't have that column.
+        //       Plain-text goes into `body` on lazy fetch.
+        $payload = [
+            'user_email_account_id' => (int) $account->id,
+            'user_id'               => $account->user_id,       // denormalized owner
+            'message_id'            => $messageId,
+            'folder'                => 'INBOX',
+            'direction'             => 'incoming',              // ✅ enum-aligned
+            'from_email'            => $fromEmail,
+            'from_name'             => $fromName,               // null, not ''
+            'to_email'              => $toRaw,
+            'to_name'               => null,
+            'cc'                    => $this->addressesToJson($ccRaw),   // ✅ valid JSON
+            'bcc'                   => $this->addressesToJson($bccRaw),  // ✅ valid JSON
+            'subject'               => $subject,
+            'body'                  => '',                      // filled lazily
+            'html_body'             => null,                    // filled lazily
+            'body_preview'          => null,                    // filled lazily
+            'status'                => 'delivered',             // ✅ enum-aligned
+            'priority'              => 'normal',
+            'attachment_count'      => $attachmentCount,
+            'is_read'               => $isRead,
+            'read_at'               => $isRead ? now() : null,
+            'received_at'           => $receivedAt ?? now(),
+        ];
+
+        try {
+            Email::create($payload);
+        } catch (\Illuminate\Database\QueryException $e) {
+            Log::error('❌ Email insert failed', [
+                'account_id' => $account->id,
+                'message_id' => $messageId,
+                'sql_error'  => $e->getMessage(),
+                'payload'    => $payload,
+            ]);
+            throw $e;
+        }
 
         return true;
     }
 
     /**
-     * ✅ Count attachment parts from a message structure WITHOUT downloading
-     * them. Walks only the top-level MIME metadata — no part bodies.
+     * Count attachment parts from a message structure WITHOUT downloading.
      */
     private function countAttachmentsFromStructure($structure): int
     {
@@ -1706,8 +1801,7 @@ class EmailService
     }
 
     /**
-     * ✅ Count webklex Attributes / collections / arrays safely.
-     * PHP 8+ throws TypeError when count() is called on a non-Countable object.
+     * Count webklex Attributes / collections / arrays safely.
      */
     private function countImapAttribute($value): int
     {
@@ -1746,8 +1840,7 @@ class EmailService
     }
 
     /**
-     * ✅ Get the first address from a webklex Attribute collection as an array
-     * with 'mail' and 'personal' keys.
+     * Get the first address from a webklex Attribute collection.
      */
     private function firstImapAddress($addresses): array
     {
@@ -1808,7 +1901,6 @@ class EmailService
 
     /**
      * Convert webklex address collection to a comma-separated string.
-     * ✅ Handles Attribute objects, arrays, and iterables uniformly.
      */
     private function extractImapAddresses($addresses): ?string
     {
@@ -1866,45 +1958,57 @@ class EmailService
             $email->to_email,
             $email->subject,
             $email->body,
-            $email->cc,
-            $email->bcc
+            is_array($email->cc)  ? implode(', ', $email->cc)  : $email->cc,
+            is_array($email->bcc) ? implode(', ', $email->bcc) : $email->bcc
         );
     }
 
     /**
-     * Copy email to draft
+     * ✅ Copy email to draft.
+     * status must be one of: draft|sent|failed|queued|delivered
      */
     public function copyToDraft(UserEmailAccount $account, Email $email): array
     {
         try {
+            if (empty($account->id)) {
+                throw new \RuntimeException('Cannot create draft without user_email_account_id');
+            }
+
             $draft = Email::create([
-                'user_email_account_id' => $account->id,
-                'folder' => 'DRAFTS',
-                'direction' => 'outgoing',
-                'from_email' => $account->email,
-                'from_name' => $account->display_name ?? $account->email,
-                'to_email' => $email->to_email,
-                'to_name' => $email->to_name,
-                'cc' => $email->cc,
-                'bcc' => $email->bcc,
-                'subject' => $email->subject,
-                'body' => $email->body,
-                'html_body' => $email->html_body,
-                'status' => 'pending',
-                'is_draft' => true,
-                'is_read' => true,
+                'user_email_account_id' => (int) $account->id,
+                'user_id'               => $account->user_id,
+                'message_id'            => $this->generateMessageId($account->email),
+                'folder'                => 'DRAFTS',
+                'direction'             => 'outgoing',
+                'from_email'            => $account->email,
+                'from_name'             => $account->display_name ?? $account->email,
+                'to_email'              => $email->to_email,
+                'to_name'               => $email->to_name,
+                'cc'                    => is_array($email->cc)
+                    ? json_encode($email->cc)
+                    : $this->addressesToJson($email->cc),
+                'bcc'                   => is_array($email->bcc)
+                    ? json_encode($email->bcc)
+                    : $this->addressesToJson($email->bcc),
+                'subject'               => $email->subject,
+                'body'                  => $email->body,
+                'html_body'             => $email->html_body,
+                'body_preview'          => $this->makePreview($email->html_body, $email->body),
+                'status'                => 'draft',         // ✅ valid enum value
+                'is_draft'              => true,
+                'is_read'               => true,
             ]);
 
             return [
-                'success' => true,
-                'message' => 'Email copied to drafts',
-                'draft_id' => $draft->id
+                'success'  => true,
+                'message'  => 'Email copied to drafts',
+                'draft_id' => $draft->id,
             ];
 
         } catch (Exception $e) {
             return [
                 'success' => false,
-                'message' => 'Failed to copy email: ' . $e->getMessage()
+                'message' => 'Failed to copy email: ' . $e->getMessage(),
             ];
         }
     }

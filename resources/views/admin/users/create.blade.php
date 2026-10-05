@@ -1283,9 +1283,11 @@
 </div>
 @endsection
 
-<!-- ============================================================ -->
-<!-- ========== JAVASCRIPT ========== -->
-<!-- ============================================================ -->
+{{-- ============================================================ --}}
+{{-- SCRIPTS — pushed to layout's @stack('scripts') so they render --}}
+{{-- AFTER the layout's own scripts, in the correct order. --}}
+{{-- ============================================================ --}}
+@push('scripts')
 <script>
 // Reset form function for "Create Another User" button
 function resetForm() {
@@ -1919,7 +1921,13 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('User creation form initialization complete (channel gating active)');
 });
 </script>
+@endpush
 
+{{-- ============================================================ --}}
+{{-- STYLES — pushed to layout's @stack('styles') so they render in --}}
+{{-- <head>, scoped, and don't leak into the header/sidebar. --}}
+{{-- ============================================================ --}}
+@push('styles')
 <style>
 /* ============================================================ */
 /* CHANNEL AVAILABILITY STYLING                                  */
@@ -2234,6 +2242,26 @@ document.addEventListener('DOMContentLoaded', function() {
     border-color: #374151 !important;
 }
 
+/* ========== SCOPED .hidden OVERRIDE ========== */
+/* Previously this was a global `.hidden { display: none !important; }`
+ * which leaked out of this view and forcibly hid the header's search bar.
+ * Now it's scoped to only the elements this page controls. */
+#invitation-method-container.hidden,
+#invitation-channels-section.hidden,
+#password-section.hidden,
+#password-notice.hidden,
+#invitation-preview-container.hidden,
+#fallback-delivery-info.hidden,
+#email-service-details.hidden,
+#security-supervisor-role-section.hidden,
+#sanitation-supervisor-role-section.hidden,
+#email-valid-icon.hidden,
+#email-invalid-icon.hidden,
+#phone-valid-icon.hidden,
+#phone-invalid-icon.hidden {
+    display: none !important;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
     .grid.grid-cols-1.md\:grid-cols-2 { grid-template-columns: 1fr; }
@@ -2256,16 +2284,16 @@ document.addEventListener('DOMContentLoaded', function() {
     .toggle-modern input:checked + .toggle-slider:before { transform: translateX(20px); }
 }
 
-/* Focus styles */
-input:focus, select:focus, textarea:focus {
+/* Focus styles — scoped so it doesn't affect header elements */
+#user-form input:focus,
+#user-form select:focus,
+#user-form textarea:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);
 }
 
 .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
-
-.hidden { display: none !important; }
 
 /* Loading state */
 #submit-button.loading { opacity: 0.7; cursor: not-allowed; }
@@ -2285,3 +2313,4 @@ input:focus, select:focus, textarea:focus {
     }
 }
 </style>
+@endpush

@@ -347,6 +347,107 @@ class AppServiceProvider extends ServiceProvider
         });
 
         // ================================================================
+        // ✅ ADMIN: PAYMENT MANAGEMENT GATE
+        // ================================================================
+        //
+        // Used by PaymentConfigController (togglePaymentGateway,
+        // syncPaymentProviders), PaymentProviderController (admin), and
+        // any future payment-admin surface.
+        //
+        // Policy:
+        //   - Super Admin and Admin → always allowed.
+        //   - Landlord → allowed only when
+        //       config('billing.allow_landlord_payment_management') is true.
+        //       Default is false, because gateway credentials are a
+        //       system-wide setting, not a per-landlord one.
+        //   - Everyone else → denied.
+        //
+        // This gate is independent from the `billing.restricted` /
+        // `billing.read-only` gates: those govern *writes while overdue*,
+        // this gate governs *who may touch payment config at all*.
+        // Both must pass for a payment-config write to be allowed.
+        //
+        Gate::define('manage-payments', function ($user = null) {
+            $user = $user ?: auth()->user();
+            if (!$user) return false;
+
+            if ($user->isSuperAdmin() || $user->isAdmin()) {
+                return true;
+            }
+
+            if (config('billing.allow_landlord_payment_management', false)
+                && ($user->isLandlord() || $user->hasRole('landlord'))) {
+                return true;
+            }
+
+            return false;
+        });
+
+        // Convenience alias for routes that specifically toggle gateways.
+        // Reads more naturally at the route level than `manage-payments`.
+        Gate::define('manage-payment-gateways', function ($user = null) {
+            return Gate::forUser($user ?: auth()->user())->allows('manage-payments');
+        });
+
+        // ================================================================
+        // ✅ NEW: DEVELOPER PAYMENT GATES
+        // ================================================================
+        //
+        // Two gates, deliberately separated:
+        //
+        //   manage-developer-payments  → may access the developer payment
+        //                                 controller at all (view + configure)
+        //
+        //   manage-developer-billing   → may call billAdmin (charge the
+        //                                 super admin). This is split out so
+        //                                 you can later allow developers to
+        //                                 *view* their config while billing
+        //                                 is frozen, without opening the
+        //                                 billAdmin endpoint.
+        //
+        // Policy for manage-developer-payments:
+        //   - Developer (role or type=5) → allowed.
+        //   - Super Admin → allowed (for audit / support). Flip the
+        //     `allow_super_admin_configure` config flag to `false` if
+        //     you want super admins to *view* only — though in that case
+        //     you'd also want a separate `view-developer-payments` gate.
+        //   - Everyone else → denied.
+        //
+        Gate::define('manage-developer-payments', function ($user = null) {
+            $user = $user ?: auth()->user();
+            if (!$user) return false;
+
+            if ($user->hasRole('developer') || $user->type == 5) {
+                return true;
+            }
+
+            if ($user->isSuperAdmin()) {
+                // Controlled by config so you can flip this off without
+                // editing the provider. Default: allow (audit-friendly).
+                return (bool) config(
+                    'developer_payments.allow_super_admin_configure',
+                    env('DEVELOPER_ALLOW_SA_CONFIGURE', true)
+                );
+            }
+
+            return false;
+        });
+
+        Gate::define('manage-developer-billing', function ($user = null) {
+    $user = $user ?: auth()->user();
+    if (!$user) return false;
+
+    // Billing is a developer-only action. Super admins can view the
+    // developer page (audit) but must never trigger a charge on their
+    // own behalf through this gate.
+    if (! ($user->hasRole('developer') || $user->type == 5)) {
+        return false;
+    }
+
+    return (bool) env('DEVELOPER_PAYMENT_CAN_BILL', true);
+});
+
+        // ================================================================
         // ✅ BILLING: Gates
         // ================================================================
 
@@ -520,19 +621,10 @@ class AppServiceProvider extends ServiceProvider
             }
 
             // (b) GUARD: never let status be wiped on an existing record.
-            //
-            // We look at the INCOMING value (what the caller is trying to
-            // save) — NOT the pre-save original. If the incoming value is
-            // empty but the DB currently has a non-empty value, restore
-            // the DB value and log the block.
             if ($record->exists && $record->isDirty('status')) {
                 $incoming = $record->getAttributes()['status'] ?? null;
 
                 if ($incoming === '' || $incoming === null) {
-                    // NOTE: use the fully-qualified class name here, NOT a
-                    // captured $model — the outer $model is not in scope
-                    // inside this closure and referencing it would throw
-                    // "Undefined variable $model".
                     $existing = \App\Models\AdminBillingRecord::query()
                         ->whereKey($record->getKey())
                         ->value('status');
@@ -553,11 +645,6 @@ class AppServiceProvider extends ServiceProvider
             }
 
             // (c) Auto-flip to overdue ONLY from a live status.
-            //
-            // Inspect the INCOMING status (what is being saved). This
-            // catches the case where a caller sets status=active on a
-            // record whose due_date is already past — the flip runs in
-            // the same save.
             if ($record->exists) {
                 $currentStatus = $record->getAttributes()['status'] ?? null;
 
@@ -567,7 +654,6 @@ class AppServiceProvider extends ServiceProvider
                 ], true)) {
                     $before = $currentStatus;
 
-                    // Pure attribute mutator — does NOT call save().
                     $record->updateStatusBasedOnDueDate();
 
                     $after = $record->getAttributes()['status'] ?? null;
@@ -640,12 +726,6 @@ class AppServiceProvider extends ServiceProvider
         // ------------------------------------------------------------------
         // 6) SAVED — invalidate DeveloperSetting caches
         // ------------------------------------------------------------------
-        // ✅ OPTIONAL FIX: the state machine (`billing_state`,
-        //    `primary_billing_agreement`, `DeveloperSetting::current()`)
-        //    is cached for up to 5 minutes. Before this hook, a change
-        //    to a billing record (payment recorded, agreement cancelled)
-        //    didn't clear those caches, so the restriction state lagged
-        //    behind the actual data. Now any save clears them.
         $model::saved(function ($record) {
             \App\Models\DeveloperSetting::forgetCurrent();
         });
@@ -653,9 +733,6 @@ class AppServiceProvider extends ServiceProvider
         // ------------------------------------------------------------------
         // 7) DELETED — invalidate DeveloperSetting caches (belt-and-braces)
         // ------------------------------------------------------------------
-        // ✅ OPTIONAL FIX: same reasoning as (6). If the primary agreement
-        //    is deleted, the state machine must re-evaluate. Without this,
-        //    deleting a record wouldn't clear the cached state.
         $model::deleted(function ($record) {
             \App\Models\DeveloperSetting::forgetCurrent();
         });
@@ -716,14 +793,9 @@ class AppServiceProvider extends ServiceProvider
 
     /**
      * ✅ BILLING: Share billing context once per request.
-     *
-     * Replaces the old View::composer('*') billing block. Runs after boot,
-     * after session + auth are ready, and only once per request — no
-     * per-view recomputation.
      */
     protected function shareBillingContext(): void
     {
-        // Never run during console commands
         if (app()->runningInConsole()) {
             return;
         }
@@ -764,7 +836,6 @@ class AppServiceProvider extends ServiceProvider
                 'error' => $e->getMessage(),
             ]);
 
-            // Fail open — never break a page because billing lookup failed
             view()->share('billingBanner', ['visible' => false]);
             view()->share('billingReadOnly', false);
             view()->share('systemBillingNotice', false);
@@ -1078,10 +1149,6 @@ class AppServiceProvider extends ServiceProvider
 
         // ========== ✅ BILLING: BLADE DIRECTIVES ==========
 
-        /**
-         * @billingstate
-         * Renders a badge showing the current system billing state.
-         */
         Blade::directive('billingstate', function () {
             return "<?php
                 \$__bs = \$billingBanner['state'] ?? null;
@@ -1098,10 +1165,6 @@ class AppServiceProvider extends ServiceProvider
             ?>";
         });
 
-        /**
-         * @billingduein
-         * Renders the number of days until the current billing invoice is due.
-         */
         Blade::directive('billingduein', function () {
             return "<?php
                 \$__days = \$billingBanner['days_until_due'] ?? null;
@@ -1117,10 +1180,6 @@ class AppServiceProvider extends ServiceProvider
             ?>";
         });
 
-        /**
-         * @billingreadonlynotice
-         * Renders an inline notice when the current admin is in read-only mode.
-         */
         Blade::directive('billingreadonlynotice', function () {
             return "<?php
                 if (!empty(\$billingReadOnly)) {
@@ -1133,18 +1192,10 @@ class AppServiceProvider extends ServiceProvider
             ?>";
         });
 
-        /**
-         * @billingwriteallowed
-         * ... @endbillingwriteallowed
-         */
         Blade::if('billingwriteallowed', function () {
             return app(BillingAccessService::class)->canPerformWrite();
         });
 
-        /**
-         * @billingprimarycontact
-         * ... @endbillingprimarycontact
-         */
         Blade::if('billingprimarycontact', function () {
             $user = auth()->user();
             if (!$user || $user->type !== User::TYPE_SUPER_ADMIN) return false;
@@ -1158,12 +1209,6 @@ class AppServiceProvider extends ServiceProvider
                 ->exists();
         });
 
-        /**
-         * @billingoverdue
-         * ... @endbillingoverdue
-         *
-         * Calls the service directly — no $GLOBALS dependency.
-         */
         Blade::if('billingoverdue', function () {
             try {
                 $state = app(BillingAccessService::class)->bannerPayload()['state'] ?? null;
@@ -1171,6 +1216,28 @@ class AppServiceProvider extends ServiceProvider
             } catch (\Throwable $e) {
                 return false;
             }
+        });
+
+        // ========== ✅ NEW: DEVELOPER BLADE DIRECTIVES ==========
+
+        /**
+         * @developeraccess
+         * ... @enddeveloperaccess
+         * Renders content only for users who may manage developer payments.
+         */
+        Blade::if('developeraccess', function () {
+            return auth()->check()
+                && auth()->user()->can('manage-developer-payments');
+        });
+
+        /**
+         * @developercanbill
+         * ... @enddevelopercanbill
+         * Renders content only for developers who may bill admins.
+         */
+        Blade::if('developercanbill', function () {
+            return auth()->check()
+                && auth()->user()->can('manage-developer-billing');
         });
     }
 
@@ -1304,15 +1371,6 @@ class AppServiceProvider extends ServiceProvider
             }
         });
 
-        /**
-         * ✅ BILLING FIX: login page billing state.
-         *
-         * Emits the CANONICAL array shape — matching what
-         * LoginController::showLoginForm() passes. Previously this was
-         * a raw string, which caused:
-         *   "Cannot access offset of type string on string"
-         * in login.blade.php.
-         */
         \View::composer('auth.login', function ($view) {
             $socialProviders = [];
             foreach (['google', 'microsoft'] as $provider) {
@@ -1689,6 +1747,22 @@ class AppServiceProvider extends ServiceProvider
             'billing_read_only' => true,
             'data'            => $data,
         ], 403));
+
+        // ========== ✅ NEW: DEVELOPER MACROS ==========
+
+        \Illuminate\Routing\ResponseFactory::macro('developerSuccess', fn ($data = null, $message = 'Developer payment configuration saved') => response()->json([
+            'success' => true,
+            'message' => $message,
+            'data'    => $data,
+            'developer_payment' => true,
+        ], 200));
+
+        \Illuminate\Routing\ResponseFactory::macro('developerError', fn ($message = 'Developer payment operation failed', $errors = null, $status = 422) => response()->json([
+            'success' => false,
+            'message' => $message,
+            'errors'  => $errors,
+            'developer_payment' => true,
+        ], $status));
     }
 
     /**
@@ -1830,6 +1904,37 @@ class AppServiceProvider extends ServiceProvider
             'default_hard_lock_landlords' => false,
             'online_providers' => ['paystack', 'expresspay', 'flutterwave', 'hubtel'],
             'exempt_roles' => ['developer'],
+
+            // ✅ NEW: Whether landlords are allowed to manage payment
+            //          provider credentials. Off by default because
+            //          gateway credentials are system-wide, not
+            //          per-landlord. Enable via .env if your deployment
+            //          gives each landlord their own gateway account.
+            'allow_landlord_payment_management' => env('BILLING_ALLOW_LANDLORD_PAYMENT_MGMT', false),
+        ]]);
+
+        // ========== ✅ NEW: DEVELOPER PAYMENT CONFIGURATION ==========
+        //
+        // Centralized flags for the developer payment controller. These
+        // are read by the `manage-developer-payments` gate and the
+        // developer blade, replacing scattered `env(...)` calls.
+        //
+        config(['developer_payments' => [
+            // Master switch — when false, the developer payment area
+            // becomes read-only (view still works, writes are blocked).
+            'access_enabled' => env('DEVELOPER_PAYMENT_ACCESS_ENABLED', true),
+
+            // Whether developers may call the billAdmin endpoint.
+            'can_bill' => env('DEVELOPER_PAYMENT_CAN_BILL', true),
+
+            // Whether super admins may also configure developer credentials.
+            // Default true so they can help debug a broken setup.
+            'allow_super_admin_configure' => env('DEVELOPER_ALLOW_SA_CONFIGURE', true),
+
+            // Storage backend for developer credentials. Today: 'env'.
+            // In the future: 'database' — the controller already supports
+            // both shapes at the read layer.
+            'storage' => env('DEVELOPER_PAYMENT_STORAGE', 'env'),
         ]]);
     }
 

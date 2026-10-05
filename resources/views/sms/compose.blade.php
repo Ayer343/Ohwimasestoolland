@@ -168,7 +168,7 @@
                         <i class="fas fa-clock mr-0.5"></i>
                         Last checked: {{ $smsStatus['last_checked'] ?? 'Never' }}
                     </span>
-                    <button onclick="refreshSmsStatus()"
+                    <button type="button" onclick="refreshSmsStatus(event)"
                             class="px-2 py-1 text-xs rounded transition hover:scale-105"
                             style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
                         <i class="fas fa-sync mr-0.5"></i> Refresh
@@ -221,14 +221,14 @@
     <!-- Compose Form -->
     <div class="card">
         <div class="p-6">
-            <form id="composeForm" method="POST" action="{{ route('sms.send') }}" enctype="multipart/form-data">
+            <form id="composeForm" method="POST" action="{{ route('sms.send') }}" enctype="multipart/form-data" novalidate>
                 @csrf
 
                 <!-- ========================================== -->
                 <!-- 👥 USER SELECTION (Admin/Super Admin/Landlord only) -->
                 <!-- ========================================== -->
                 @if($canSelectUsers)
-                <div class="mb-4 p-4 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.1);">
+                <div class="mb-4 p-4 rounded-lg user-selection-section" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.1);">
                     <div class="flex items-center gap-2 mb-3">
                         <i class="fas fa-users" style="color: var(--info);"></i>
                         <span class="text-sm font-semibold" style="color: var(--text-primary);">Select Recipients</span>
@@ -263,7 +263,8 @@
                                    placeholder="Search by name or phone..."
                                    class="w-full rounded-lg px-3 py-2 text-sm transition-all focus:ring-2 focus:outline-none"
                                    style="background-color: var(--input-bg); color: var(--text-primary); border: 1px solid var(--border-color);"
-                                   oninput="filterUsers()">
+                                   oninput="filterUsers()"
+                                   autocomplete="off">
                         </div>
 
                         <!-- Property Filter (for landlords) -->
@@ -638,13 +639,14 @@
                     <div class="flex flex-wrap gap-3">
                         <button type="submit"
                                 id="sendButton"
-                                class="inline-flex items-center px-6 py-2.5 rounded-lg text-sm font-medium text-white transition-all hover:scale-105"
+                                class="inline-flex items-center px-6 py-2.5 rounded-lg text-sm font-medium text-white transition-all hover:scale-105 disabled:opacity-60 disabled:cursor-not-allowed"
                                 style="background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);">
                             <i class="fas fa-paper-plane mr-2"></i>
                             <span id="sendButtonText">Send SMS</span>
                         </button>
 
-                        <button type="reset"
+                        <!-- ⚠️ type="button" (was "reset") — prevents native form reset flash -->
+                        <button type="button"
                                 onclick="resetForm()"
                                 class="inline-flex items-center px-4 py-2.5 rounded-lg text-sm font-medium transition-all hover:scale-105"
                                 style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--secondary); border: 1px solid rgba(var(--secondary-rgb), 0.3);">
@@ -679,14 +681,18 @@ let selectedUsers = [];
 let allUsers = [];
 let filteredUsers = [];
 let isLoadingUsers = false;
-let autoRefreshTimer = null;
+let hasLoadedOnce = false;              // ✅ FIX: track first load
+let searchDebounceTimer = null;         // ✅ FIX: debounce search
+let autoRefreshTimer = null;            // ✅ FIX: visibility-aware refresh
+let isSubmitting = false;               // ✅ FIX: guard double submit
 
 // Configuration
 const USER_LIST_URL = '{{ $userListUrl }}';
 const MAX_SMS_LENGTH = {{ $maxSmsLength }};
 const GSM7_LENGTH = {{ $gsm7Length }};
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '{{ csrf_token() }}';
 
-// ✅ FIX: Centralized type maps — single source of truth
+// ✅ Centralized type maps — single source of truth
 const USER_TYPE_BY_CODE = {
     0: 'super_admin',
     1: 'admin',
@@ -695,9 +701,9 @@ const USER_TYPE_BY_CODE = {
     4: 'field_agent',
     5: 'developer',
     6: 'security_personnel',
-    7: 'former_landlord',      // ✅ ADDED
-    8: 'contractor',           // ✅ ADDED
-    9: 'sanitation_personnel', // ✅ ADDED
+    7: 'former_landlord',
+    8: 'contractor',
+    9: 'sanitation_personnel',
 };
 
 const USER_TYPE_LABELS = {
@@ -705,82 +711,62 @@ const USER_TYPE_LABELS = {
     'admin':                'Admin',
     'developer':            'Developer',
     'landlord':             'Landlord',
-    'former_landlord':      'Former Landlord',      // ✅ ADDED
+    'former_landlord':      'Former Landlord',
     'tenant':               'Tenant',
     'field_agent':          'Field Agent',
     'security_personnel':   'Security Personnel',
-    'contractor':           'Contractor',           // ✅ ADDED
-    'sanitation_personnel': 'Sanitation Personnel', // ✅ ADDED
+    'contractor':           'Contractor',
+    'sanitation_personnel': 'Sanitation Personnel',
 };
 
 /**
- * ✅ FIX: Resolve user type slug.
- * Priority:
- *   1. Explicit role slug from backend (primary_role / role_slug / user_type)
- *   2. Numeric code lookup
- *   3. 'unknown' fallback
+ * ✅ Resolve user type slug.
  */
 function getUserTypeString(typeCode, roleSlug) {
-    // 1. Prefer an explicit slug if the backend provides one
     if (roleSlug && typeof roleSlug === 'string' && roleSlug.trim() !== '') {
         return roleSlug.trim().toLowerCase().replace(/-/g, '_');
     }
-
-    // 2. Numeric code lookup (handles both number and string keys)
     if (typeCode !== null && typeCode !== undefined && typeCode !== '') {
         const key = String(typeCode);
         if (USER_TYPE_BY_CODE[key]) {
             return USER_TYPE_BY_CODE[key];
         }
     }
-
-    // 3. Fallback
     return 'unknown';
 }
 
-/**
- * ✅ FIX: Format a user type slug for display.
- * Falls back to title-casing unknown slugs rather than showing "unknown".
- */
 function formatUserType(type) {
     if (!type) return 'Unknown';
-
-    if (USER_TYPE_LABELS[type]) {
-        return USER_TYPE_LABELS[type];
-    }
-
-    // Title-case any unrecognized slug: "some_new_role" -> "Some New Role"
-    return String(type)
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, c => c.toUpperCase());
+    if (USER_TYPE_LABELS[type]) return USER_TYPE_LABELS[type];
+    return String(type).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-/**
- * ✅ FIX: Extract the best slug for a user object.
- * Checks multiple possible backend field names.
- */
 function getUserRoleSlug(user) {
     if (!user) return null;
-    return user.primary_role
-        || user.role_slug
-        || user.user_type
-        || user.role
-        || null;
+    return user.primary_role || user.role_slug || user.user_type || user.role || null;
 }
 
 /**
- * Load users from the server
+ * Load users from the server.
+ *
+ * ⚠️ FIX: Only shows the "Loading..." spinner on the FIRST load.
+ * Subsequent refetches don't blank the list — they swap it silently
+ * once data arrives. This kills the "page refresh" feel.
  */
 function loadUsers() {
     if (isLoadingUsers) return;
     isLoadingUsers = true;
 
     const userList = document.getElementById('userList');
-    userList.innerHTML = `
-        <div class="text-center py-8 text-sm" style="color: var(--text-secondary);">
-            <i class="fas fa-spinner fa-spin mr-2"></i> Loading users...
-        </div>
-    `;
+
+    // Only show spinner on the very first load
+    if (!hasLoadedOnce) {
+        userList.innerHTML = `
+            <div class="text-center py-8 text-sm" style="color: var(--text-secondary);">
+                <i class="fas fa-spinner fa-spin mr-2"></i> Loading users...
+            </div>
+        `;
+    }
 
     // Build URL with filters
     let url = USER_LIST_URL + '?limit=200';
@@ -798,63 +784,42 @@ function loadUsers() {
         url += '&search=' + encodeURIComponent(searchTerm);
     }
 
-    console.log('📡 Fetching users from:', url);
-
     fetch(url, {
         headers: {
             'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest',
-            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            'X-CSRF-TOKEN': CSRF_TOKEN
         }
     })
     .then(response => {
-        console.log('📡 Response status:', response.status);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         return response.text();
     })
     .then(text => {
-        console.log('📡 Raw response length:', text.length);
-
         // Remove BOM if present
         if (text.charCodeAt(0) === 0xFEFF) {
             text = text.substring(1);
-            console.log('✅ Removed BOM from response');
         }
 
         const data = JSON.parse(text);
-        console.log('📡 Parsed data:', data);
-
         isLoadingUsers = false;
+        hasLoadedOnce = true;
 
         if (data.success) {
             allUsers = data.users || [];
 
-            // Filter out developer users (type 5)
+            // Filter out developer users
             allUsers = allUsers.filter(user => {
                 const slug = getUserTypeString(user.type, getUserRoleSlug(user));
                 return slug !== 'developer';
             });
 
-            // Also filter out users without phone numbers
-            allUsers = allUsers.filter(user => {
-                return user.phone && user.phone.trim() !== '';
-            });
-
-            // ✅ FIX: Debug log every loaded user's resolved type
-            console.log('📬 SMS users loaded:', allUsers.map(u => ({
-                id: u.id,
-                name: u.name,
-                type_code: u.type,
-                primary_role: u.primary_role,
-                role_slug: u.role_slug,
-                resolved_slug: getUserTypeString(u.type, getUserRoleSlug(u)),
-                resolved_label: formatUserType(getUserTypeString(u.type, getUserRoleSlug(u))),
-            })));
+            // Only users with phone numbers
+            allUsers = allUsers.filter(user => user.phone && user.phone.trim() !== '');
 
             renderUserList();
-            console.log(`✅ Loaded ${allUsers.length} users with phone numbers`);
 
             if (allUsers.length === 0) {
                 userList.innerHTML = `
@@ -871,12 +836,10 @@ function loadUsers() {
                     ${data.message || 'Failed to load users'}
                 </div>
             `;
-            console.error('Failed to load users:', data.message);
         }
     })
     .catch(error => {
         isLoadingUsers = false;
-        console.error('❌ Failed to load users:', error);
         userList.innerHTML = `
             <div class="text-center py-8 text-sm" style="color: var(--danger);">
                 <i class="fas fa-exclamation-circle mr-2"></i>
@@ -884,7 +847,7 @@ function loadUsers() {
                 <br>
                 <span class="text-xs">${error.message}</span>
                 <br>
-                <button onclick="loadUsers()" class="mt-2 px-3 py-1 text-xs rounded transition"
+                <button type="button" onclick="loadUsers()" class="mt-2 px-3 py-1 text-xs rounded transition"
                         style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
                     <i class="fas fa-sync mr-1"></i> Retry
                 </button>
@@ -903,15 +866,12 @@ function renderUserList() {
     const searchTerm = document.getElementById('userSearch')?.value.toLowerCase().trim() || '';
 
     filteredUsers = allUsers.filter(user => {
-        // ✅ FIX: Resolve using both numeric code AND role slug
         const userTypeString = getUserTypeString(user.type, getUserRoleSlug(user));
 
-        // Type filter
         if (typeFilter !== 'all' && userTypeString !== typeFilter) {
             return false;
         }
 
-        // Search filter
         if (searchTerm) {
             const name = (user.name || '').toLowerCase();
             const phone = (user.phone || '').toLowerCase();
@@ -934,6 +894,8 @@ function renderUserList() {
                 <i class="fas fa-user-slash mr-2"></i> No users found matching your criteria
             </div>
         `;
+        updateSelectedCount();
+        updateRecipientSummary();
         return;
     }
 
@@ -941,7 +903,6 @@ function renderUserList() {
     filteredUsers.forEach(user => {
         const isSelected = selectedUsers.some(u => u.id === user.id);
         const hasPhone = user.phone && user.phone.trim() !== '';
-        // ✅ FIX: Pass role slug as second arg
         const userTypeString = getUserTypeString(user.type, getUserRoleSlug(user));
         const userTypeLabel = formatUserType(userTypeString);
         const initials = getInitials(user.name || 'U');
@@ -998,7 +959,6 @@ function toggleUser(userId) {
         return;
     }
 
-    // Check if user has phone number
     if (!user.phone || user.phone.trim() === '') {
         showNotification('This user does not have a phone number', 'warning');
         return;
@@ -1018,9 +978,6 @@ function toggleUser(userId) {
     updateHiddenFields();
 }
 
-/**
- * Select all visible users
- */
 function selectAllUsers() {
     const usersWithPhone = filteredUsers.filter(u => u.phone && u.phone.trim() !== '');
     if (usersWithPhone.length === 0) {
@@ -1041,9 +998,6 @@ function selectAllUsers() {
     showNotification(`Selected ${usersWithPhone.length} users`, 'success');
 }
 
-/**
- * Deselect all users
- */
 function deselectAllUsers() {
     if (selectedUsers.length === 0) {
         showNotification('No users selected', 'info');
@@ -1058,9 +1012,6 @@ function deselectAllUsers() {
     showNotification('All users deselected', 'info');
 }
 
-/**
- * Select only users with phone numbers
- */
 function selectUsersWithPhone() {
     const usersWithPhone = filteredUsers.filter(u => u.phone && u.phone.trim() !== '');
     if (usersWithPhone.length === 0) {
@@ -1076,12 +1027,8 @@ function selectUsersWithPhone() {
     showNotification(`Selected ${usersWithPhone.length} users with phone numbers`, 'success');
 }
 
-/**
- * Add all users of a specific type
- */
 function addUserType(type) {
     const typeUsers = allUsers.filter(u => {
-        // ✅ FIX: Pass role slug as second arg
         const userTypeString = getUserTypeString(u.type, getUserRoleSlug(u));
         return userTypeString === type && u.phone && u.phone.trim() !== '';
     });
@@ -1105,20 +1052,24 @@ function addUserType(type) {
 }
 
 /**
- * Filter users by type and search
+ * ✅ FIX: filterUsers is now debounced.
+ *   - Re-renders locally (instant, no network)
+ *   - Only hits the server after user stops typing for 500ms
  */
 function filterUsers() {
+    // Always re-render locally first (instant feedback)
     renderUserList();
-    // Reload users if search term is long enough
+
+    // Debounce the server fetch
+    clearTimeout(searchDebounceTimer);
     const searchTerm = document.getElementById('userSearch')?.value || '';
     if (searchTerm.length > 2) {
-        loadUsers();
+        searchDebounceTimer = setTimeout(() => {
+            loadUsers();
+        }, 500);
     }
 }
 
-/**
- * Update selected users tags display
- */
 function updateSelectedUsersTags() {
     const container = document.getElementById('selectedUsersTags');
     if (!container) return;
@@ -1156,9 +1107,6 @@ function updateSelectedUsersTags() {
     container.innerHTML = html;
 }
 
-/**
- * Remove a user from selection
- */
 function removeUser(userId) {
     selectedUsers = selectedUsers.filter(u => u.id !== userId);
     renderUserList();
@@ -1169,9 +1117,6 @@ function removeUser(userId) {
     showNotification('User removed from selection', 'info');
 }
 
-/**
- * Update selected count display
- */
 function updateSelectedCount() {
     const countElement = document.getElementById('selectedCount');
     if (countElement) {
@@ -1179,16 +1124,12 @@ function updateSelectedCount() {
     }
 }
 
-/**
- * Update recipient summary
- */
 function updateRecipientSummary() {
     const countElement = document.getElementById('recipientCount');
     const phoneCountElement = document.getElementById('recipientPhoneCount');
     const partsElement = document.getElementById('estimatedParts');
     const costElement = document.getElementById('estimatedCost');
 
-    // Count users with phone numbers
     const withPhone = selectedUsers.filter(u => u.phone && u.phone.trim() !== '');
 
     if (countElement) {
@@ -1199,7 +1140,6 @@ function updateRecipientSummary() {
         phoneCountElement.textContent = withPhone.length;
     }
 
-    // Calculate estimated SMS parts
     const message = document.getElementById('messageInput')?.value || '';
     const messageLength = message.length;
     const isUnicode = /[^\x00-\x7F]/.test(message);
@@ -1212,14 +1152,11 @@ function updateRecipientSummary() {
     }
 
     if (costElement) {
-        const cost = totalParts * 0.05; // Assuming 0.05 GHS per part
+        const cost = totalParts * 0.05;
         costElement.textContent = cost.toFixed(2) + ' GHS';
     }
 }
 
-/**
- * Update send button text based on selection
- */
 function updateSendButtonText() {
     const button = document.getElementById('sendButtonText');
     if (!button) return;
@@ -1231,18 +1168,12 @@ function updateSendButtonText() {
     }
 }
 
-/**
- * Update hidden fields for form submission
- */
 function updateHiddenFields() {
     const ids = selectedUsers.map(u => u.id);
     document.getElementById('recipientIds').value = ids.join(',');
     document.getElementById('isBulk').value = selectedUsers.length > 0 ? '1' : '0';
 }
 
-/**
- * Get initials from name
- */
 function getInitials(name) {
     if (!name) return 'U';
     const parts = name.trim().split(' ');
@@ -1250,18 +1181,12 @@ function getInitials(name) {
     return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
 }
 
-/**
- * Get color for user avatar
- */
 function getColorForUser(user, lighter = false) {
     const colors = ['#4F46E5', '#7C3AED', '#EC4899', '#EF4444', '#F59E0B', '#10B981', '#3B82F6', '#8B5CF6'];
     const index = (user.id || 0) % colors.length;
     return colors[index];
 }
 
-/**
- * Escape HTML
- */
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -1273,9 +1198,6 @@ function escapeHtml(text) {
 // 📝 FORM HANDLING                           //
 // ========================================== //
 
-/**
- * Character counter and SMS segment calculator
- */
 function updateSmsStats() {
     const messageInput = document.getElementById('messageInput');
     const charCounter = document.getElementById('charCounter');
@@ -1293,41 +1215,24 @@ function updateSmsStats() {
     const smsParts = Math.max(1, Math.ceil(length / charsPerSegment));
     const remaining = Math.max(0, charsPerSegment - length % charsPerSegment);
 
-    if (charCounter) {
-        charCounter.textContent = length;
-    }
-
-    if (smsCounter) {
-        smsCounter.textContent = smsParts;
-    }
+    if (charCounter) charCounter.textContent = length;
+    if (smsCounter) smsCounter.textContent = smsParts;
 
     if (charRemaining) {
         charRemaining.textContent = remaining > 0 ? remaining : (isUnicode ? 70 : 160);
     }
 
     if (charWarning) {
-        if (length > charsPerSegment) {
-            charWarning.classList.remove('hidden');
-        } else {
-            charWarning.classList.add('hidden');
-        }
+        charWarning.classList.toggle('hidden', length <= charsPerSegment);
     }
 
     if (unicodeWarning) {
-        if (isUnicode) {
-            unicodeWarning.classList.remove('hidden');
-        } else {
-            unicodeWarning.classList.add('hidden');
-        }
+        unicodeWarning.classList.toggle('hidden', !isUnicode);
     }
 
-    // Update recipient summary
     updateRecipientSummary();
 }
 
-/**
- * Insert template into message
- */
 function insertTemplate(type) {
     const messageInput = document.getElementById('messageInput');
     if (!messageInput) return;
@@ -1352,9 +1257,6 @@ function insertTemplate(type) {
     }
 }
 
-/**
- * Toggle schedule fields
- */
 function toggleSchedule() {
     const scheduleCheck = document.getElementById('scheduleCheck');
     const scheduleFields = document.getElementById('scheduleFields');
@@ -1363,44 +1265,49 @@ function toggleSchedule() {
     if (scheduleCheck && scheduleFields) {
         if (scheduleCheck.checked) {
             scheduleFields.classList.remove('hidden');
-            if (scheduledAt) {
-                scheduledAt.required = true;
-            }
+            if (scheduledAt) scheduledAt.required = true;
         } else {
             scheduleFields.classList.add('hidden');
-            if (scheduledAt) {
-                scheduledAt.required = false;
-            }
+            if (scheduledAt) scheduledAt.required = false;
         }
     }
 }
 
 /**
- * Reset form
+ * ✅ FIX: Full JS reset (button is now type="button").
  */
 function resetForm() {
     if (!confirm('Are you sure you want to reset the form? All selections will be cleared.')) {
         return;
     }
 
-    document.getElementById('composeForm').reset();
-    document.getElementById('messageInput').value = '';
-    document.getElementById('messageInput').dispatchEvent(new Event('input'));
+    const form = document.getElementById('composeForm');
+    if (form) form.reset();
+
+    const msg = document.getElementById('messageInput');
+    if (msg) {
+        msg.value = '';
+        msg.dispatchEvent(new Event('input'));
+    }
+
     selectedUsers = [];
     renderUserList();
     updateSelectedUsersTags();
     updateRecipientSummary();
     updateSendButtonText();
     updateHiddenFields();
-    document.getElementById('scheduleFields').classList.add('hidden');
+
+    const scheduleFields = document.getElementById('scheduleFields');
+    if (scheduleFields) scheduleFields.classList.add('hidden');
+
     showNotification('Form reset', 'info');
 }
 
 /**
- * Refresh SMS status
+ * ✅ FIX: refreshSmsStatus accepts an optional event for the button state.
  */
-function refreshSmsStatus() {
-    const button = event?.target || document.querySelector('[onclick="refreshSmsStatus()"]');
+function refreshSmsStatus(event) {
+    const button = event?.target?.closest('button') || document.querySelector('[onclick="refreshSmsStatus(event)"]');
     if (button) {
         button.innerHTML = '<i class="fas fa-spinner fa-spin mr-0.5"></i> Refreshing...';
         button.disabled = true;
@@ -1410,7 +1317,7 @@ function refreshSmsStatus() {
         headers: {
             'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest',
-            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            'X-CSRF-TOKEN': CSRF_TOKEN
         }
     })
     .then(response => response.json())
@@ -1447,9 +1354,9 @@ function showNotification(message, type = 'success') {
 
     const colors = {
         success: { bg: '#22c55e', icon: 'fa-check-circle' },
-        error: { bg: '#ef4444', icon: 'fa-exclamation-circle' },
+        error:   { bg: '#ef4444', icon: 'fa-exclamation-circle' },
         warning: { bg: '#f59e0b', icon: 'fa-exclamation-triangle' },
-        info: { bg: '#3b82f6', icon: 'fa-info-circle' }
+        info:    { bg: '#3b82f6', icon: 'fa-info-circle' }
     };
     const color = colors[type] || colors.info;
 
@@ -1463,7 +1370,7 @@ function showNotification(message, type = 'success') {
         <div class="flex items-center">
             <i class="fas ${color.icon} mr-2 text-lg"></i>
             <span class="text-sm">${escapeHtml(message)}</span>
-            <button onclick="this.closest('.custom-notification').remove()" class="ml-3 text-white hover:text-gray-200">
+            <button type="button" onclick="this.closest('.custom-notification').remove()" class="ml-3 text-white hover:text-gray-200">
                 <i class="fas fa-times"></i>
             </button>
         </div>
@@ -1479,14 +1386,102 @@ function showNotification(message, type = 'success') {
 }
 
 // ========================================== //
+// 🛑 PREVENT PAGE RELOAD                     //
+// ========================================== //
+
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('composeForm');
+    if (!form) return;
+
+    // ✅ Block Enter-key submits from non-textarea fields
+    form.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        const el = e.target;
+        if (el.tagName === 'TEXTAREA') return;
+        e.preventDefault();
+    });
+
+    // ✅ AJAX submit — no page reload
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+
+        if (isSubmitting) return;
+
+        // Basic client-side validation
+        const message = document.getElementById('messageInput')?.value?.trim() || '';
+        const phone = document.getElementById('phoneNumberInput')?.value?.trim() || '';
+        const recipientIds = document.getElementById('recipientIds')?.value?.trim() || '';
+
+        if (!message) {
+            showNotification('Please enter a message.', 'error');
+            document.getElementById('messageInput')?.focus();
+            return;
+        }
+
+        if (!phone && !recipientIds) {
+            showNotification('Please enter a phone number or select at least one recipient.', 'error');
+            document.getElementById('phoneNumberInput')?.focus();
+            return;
+        }
+
+        isSubmitting = true;
+
+        const btn = document.getElementById('sendButton');
+        const btnText = document.getElementById('sendButtonText');
+        const originalText = btnText?.textContent || 'Send SMS';
+        if (btn) btn.disabled = true;
+        if (btnText) btnText.textContent = 'Sending...';
+
+        fetch(form.action, {
+            method: 'POST',
+            headers: {
+                'X-CSRF-TOKEN': CSRF_TOKEN,
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: new FormData(form)
+        })
+        .then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+
+            if (res.ok && data.success) {
+                showNotification(data.message || 'SMS sent successfully!', 'success');
+
+                // Clear just the message — keep selections so the user can send another
+                const msg = document.getElementById('messageInput');
+                if (msg) {
+                    msg.value = '';
+                    msg.dispatchEvent(new Event('input'));
+                }
+            } else {
+                const msg = data.message
+                    || (data.errors ? Object.values(data.errors).flat().join(' ') : 'Failed to send SMS.');
+                showNotification(msg, 'error');
+            }
+        })
+        .catch(err => {
+            console.error('Send error:', err);
+            showNotification('Network error — please try again.', 'error');
+        })
+        .finally(() => {
+            isSubmitting = false;
+            if (btn) btn.disabled = false;
+            if (btnText) btnText.textContent = originalText;
+        });
+    });
+});
+
+// ========================================== //
 // ⌨️ KEYBOARD SHORTCUTS                      //
 // ========================================== //
 
-document.addEventListener('keydown', function(e) {
-    // Ctrl+Enter to send
+document.addEventListener('keydown', function (e) {
+    // Ctrl+Enter to send (from anywhere in the form)
     if (e.ctrlKey && e.key === 'Enter') {
         e.preventDefault();
-        document.getElementById('composeForm')?.submit();
+        document.getElementById('composeForm')?.requestSubmit
+            ? document.getElementById('composeForm').requestSubmit()
+            : document.getElementById('composeForm')?.submit();
     }
 
     // Escape to close notifications
@@ -1539,7 +1534,7 @@ document.head.appendChild(style);
 // 🚀 INITIALIZATION                          //
 // ========================================== //
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     console.log('📱 SMS Compose Page Loading...');
 
     // Initialize message input handler
@@ -1561,11 +1556,39 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     @endif
 
-    // Auto-refresh status every 60 seconds
-    if (typeof refreshSmsStatus === 'function') {
+    // ✅ FIX: Visibility-aware auto-refresh — pauses when tab is hidden
+    function startAutoRefresh() {
+        if (autoRefreshTimer) return;
         autoRefreshTimer = setInterval(() => {
-            refreshSmsStatus();
+            // Silent refresh — no notification spam
+            fetch('/api/sms/status/refresh', {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': CSRF_TOKEN
+                }
+            }).catch(() => { /* silent */ });
         }, 60000);
+    }
+
+    function stopAutoRefresh() {
+        if (autoRefreshTimer) {
+            clearInterval(autoRefreshTimer);
+            autoRefreshTimer = null;
+        }
+    }
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+            stopAutoRefresh();
+        } else {
+            startAutoRefresh();
+        }
+    });
+
+    // Kick off auto-refresh on load (only if visible)
+    if (!document.hidden) {
+        startAutoRefresh();
     }
 
     // Update current time every minute
@@ -1582,10 +1605,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // Clean up on page unload
-window.addEventListener('beforeunload', function() {
-    if (autoRefreshTimer) {
-        clearInterval(autoRefreshTimer);
-    }
+window.addEventListener('beforeunload', function () {
+    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
 });
 
 console.log('✅ SMS Compose JavaScript Loaded');

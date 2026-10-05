@@ -694,7 +694,6 @@
                         </div>
 
                         @if($googleMapsKey)
-                            {{-- Hidden inputs that carry coordinates into the form --}}
                             <input type="hidden" name="latitude"  id="latitude"  value="{{ old('latitude',  '') }}">
                             <input type="hidden" name="longitude" id="longitude" value="{{ old('longitude', '') }}">
                             <input type="hidden" name="city"      id="city"      value="{{ old('city',      '') }}">
@@ -3181,7 +3180,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
+@endsection
 
+{{-- ============================================================ --}}
+{{-- STYLES — moved OUT of @section('scripts') into @push('styles') --}}
+{{-- so they render in <head> via the layout's @stack('styles'),    --}}
+{{-- and don't leak into the header/sidebar.                        --}}
+{{-- The global `.hidden` rule has been scoped to only the elements --}}
+{{-- this page controls, and transition rules are scoped to         --}}
+{{-- #property-form so they don't affect the header's search input. --}}
+{{-- ============================================================ --}}
+@push('styles')
 <style>
 /* Photo Upload Styles */
 .photo-upload-area { transition: all 0.3s ease; }
@@ -3373,6 +3382,56 @@ document.addEventListener('DOMContentLoaded', function() {
     #property-map { height: 220px !important; }
 }
 
-.hidden { display: none; }
+/* ==================== SCOPED .hidden OVERRIDE ==================== */
+/* The previous GLOBAL `.hidden { display: none; }` rule was leaking
+ * out of this view and hiding the header's search bar (and any other
+ * .hidden-using component). Now scoped to only the IDs this page
+ * controls. Tailwind's own .hidden still applies elsewhere. */
+
+#custom_property_type_container.hidden,
+#selected-property-type.hidden,
+#invitation-channels-container.hidden,
+#invitation-preview.hidden,
+#available-channels-info.hidden,
+#no-channels-warning.hidden,
+#tenant-invitation-container.hidden,
+#tenants-summary.hidden,
+#tenant-modal.hidden,
+#naming-preview-container.hidden,
+#plan-progress-container.hidden,
+#plan-status-alert.hidden,
+#global-sequence-info.hidden,
+#manual-location-container.hidden,
+#auto-filled-fields.hidden,
+#pattern-status.hidden,
+#pattern-validation.hidden,
+#pattern-error.hidden,
+#pattern-loading.hidden,
+#sequence-type-info.hidden,
+#next-pattern-preview.hidden,
+#global-sequence-badge.hidden,
+#refresh-pattern.hidden,
+#phone-formatted-info.hidden,
+#clear-coords-btn.hidden,
+#coordinate-status.hidden,
+#coordinate-readout.hidden,
+#photo-preview-grid.hidden,
+#sequence-continuation-info.hidden,
+.phone-number-group.hidden,
+.remove-phone-btn.hidden {
+    display: none !important;
+}
+
+/* Scoped transition rule so we don't affect the header's elements */
+#property-form input,
+#property-form select,
+#property-form textarea,
+#property-form button,
+#property-form a,
+.property-type-card,
+.modern-radio-option,
+.quick-plan-btn {
+    transition: all 0.2s ease-in-out;
+}
 </style>
-@endsection
+@endpush

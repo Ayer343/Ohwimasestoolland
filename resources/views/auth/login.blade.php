@@ -47,6 +47,81 @@
     }
 
     $billingBannerVisible = !empty($bs['overdue']) || !empty($bs['pending']);
+
+    /* ============================================================
+     | ✅ FAVICON + SETTINGS — resolved directly in the blade
+     | ------------------------------------------------------------
+     | This mirrors the forgot-password blade's pattern: resolve
+     | SystemSetting directly here so the favicon works regardless
+     | of whether the controller injected $systemSettings.
+     |
+     | Wrapped in try/catch + a short cache so a DB hiccup never
+     | breaks the login page.
+     ============================================================ */
+    try {
+        $systemSettings = $systemSettings
+            ?? \Illuminate\Support\Facades\Cache::remember(
+                'system_settings_login_blade',
+                now()->addMinutes(30),
+                fn () => \App\Models\SystemSetting::getSettings()
+            );
+    } catch (\Throwable $e) {
+        \Illuminate\Support\Facades\Log::debug('Login blade settings resolution failed: ' . $e->getMessage());
+        $systemSettings = null;
+    }
+
+    $faviconUrl     = null;
+    $faviconMime    = 'image/x-icon';
+    $faviconVersion = null;
+
+    try {
+        if ($systemSettings && method_exists($systemSettings, 'hasFavicon') && $systemSettings->hasFavicon()) {
+            // Primary: ask the model
+            $candidate = null;
+            if (method_exists($systemSettings, 'getFaviconUrl')) {
+                $candidate = $systemSettings->getFaviconUrl();
+            }
+
+            // Secondary: resolve from the public disk
+            if (empty($candidate) && !empty($systemSettings->system_favicon)) {
+                try {
+                    $candidate = \Illuminate\Support\Facades\Storage::disk('public')
+                        ->url($systemSettings->system_favicon);
+                } catch (\Throwable $e) { /* fall through */ }
+
+                if (!empty($candidate) && !preg_match('~^https?://~i', $candidate)) {
+                    $candidate = url($candidate);
+                }
+            }
+
+            // Tertiary: assume the storage symlink convention
+            if (empty($candidate) && !empty($systemSettings->system_favicon)) {
+                $candidate = asset('storage/' . ltrim($systemSettings->system_favicon, '/'));
+            }
+
+            if (!empty($candidate)) {
+                $faviconUrl = $candidate;
+
+                $ext = strtolower(pathinfo(parse_url($faviconUrl, PHP_URL_PATH) ?? '', PATHINFO_EXTENSION));
+                $faviconMime = match ($ext) {
+                    'png'  => 'image/png',
+                    'svg'  => 'image/svg+xml',
+                    'gif'  => 'image/gif',
+                    'jpg', 'jpeg' => 'image/jpeg',
+                    'webp' => 'image/webp',
+                    'ico'  => 'image/x-icon',
+                    default => 'image/x-icon',
+                };
+
+                $faviconVersion = $systemSettings->updated_at?->timestamp ?? time();
+            }
+        }
+    } catch (\Throwable $e) {
+        \Illuminate\Support\Facades\Log::debug('Login blade favicon resolution failed: ' . $e->getMessage());
+        $faviconUrl = null;
+    }
+
+    $faviconFallback = asset('favicon.ico');
 @endphp
 
 <!DOCTYPE html>
@@ -65,18 +140,40 @@
     <meta name="color-scheme" content="dark light">
     <title>Login | {{ $systemSettings->system_name ?? 'Community Portal' }}</title>
 
-    {{-- ============ FAVICON ============ --}}
-    @if(isset($systemSettings) && $systemSettings->hasFavicon())
-        <link rel="icon" href="{{ $systemSettings->getFaviconUrl() }}" type="image/x-icon">
-        <link rel="shortcut icon" href="{{ $systemSettings->getFaviconUrl() }}" type="image/x-icon">
-        <link rel="apple-touch-icon" href="{{ $systemSettings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="16x16" href="{{ $systemSettings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="32x32" href="{{ $systemSettings->getFaviconUrl() }}">
-        <link rel="icon" type="image/png" sizes="64x64" href="{{ $systemSettings->getFaviconUrl() }}">
+    {{-- ============ FAVICON (hardened) ============ --}}
+    @if($faviconUrl)
+        {{-- Primary dynamic favicon --}}
+        <link rel="icon" type="{{ $faviconMime }}" href="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+        <link rel="shortcut icon" type="{{ $faviconMime }}" href="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+
+        {{-- Multi-size variants --}}
+        <link rel="icon" type="{{ $faviconMime }}" sizes="16x16"   href="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+        <link rel="icon" type="{{ $faviconMime }}" sizes="32x32"   href="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+        <link rel="icon" type="{{ $faviconMime }}" sizes="64x64"   href="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+        <link rel="icon" type="{{ $faviconMime }}" sizes="192x192" href="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+
+        {{-- Apple touch icons --}}
+        <link rel="apple-touch-icon" href="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+        <link rel="apple-touch-icon" sizes="180x180" href="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+
+        {{-- Safari pinned tab --}}
+        @if($faviconMime === 'image/svg+xml')
+            <link rel="mask-icon" href="{{ $faviconUrl }}?v={{ $faviconVersion }}" color="#1e3a8a">
+        @endif
+
+        {{-- Microsoft Edge Tile --}}
+        <meta name="msapplication-TileImage" content="{{ $faviconUrl }}?v={{ $faviconVersion }}">
+        <meta name="msapplication-TileColor" content="#0f172a">
     @else
-        <link rel="icon" href="{{ asset('favicon.ico') }}" type="image/x-icon">
-        <link rel="shortcut icon" href="{{ asset('favicon.ico') }}" type="image/x-icon">
+        {{-- Static fallback chain --}}
+        <link rel="icon" type="image/x-icon" href="{{ $faviconFallback }}">
+        <link rel="shortcut icon" type="image/x-icon" href="{{ $faviconFallback }}">
+        <link rel="apple-touch-icon" href="{{ $faviconFallback }}">
+        <meta name="msapplication-TileColor" content="#0f172a">
     @endif
+
+    {{-- Absolute last-resort: root /favicon.ico --}}
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
 
     {{-- ===== FIX 419: Inline CSRF token for JavaScript ===== --}}
     <script>
@@ -930,19 +1027,6 @@
                                     @endif
                                 </span>
 
-                                {{--
-                                    ✅ FIX: Removed the @else branch that linked to `billing.pay-now`.
-                                    That route doesn't exist in routes/web.php, and rendering the
-                                    link on the login page (for unauthenticated users) crashed the
-                                    view with "Route [billing.pay-now] not defined".
-
-                                    Logged-out visitors have no billing relationship to act on, so
-                                    the banner is informational only in that case. Logged-in super
-                                    admins still get the billing dashboard link below.
-
-                                    The @if now also checks Route::has(...) so a future route rename
-                                    won't re-introduce this same crash.
-                                --}}
                                 @auth
                                     @if(
                                         auth()->user()->type === \App\Models\User::TYPE_SUPER_ADMIN

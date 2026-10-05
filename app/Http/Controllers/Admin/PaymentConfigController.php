@@ -3,344 +3,283 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\TogglePaymentGatewayRequest;
 use App\Models\SystemSetting;
-use App\Services\PaymentService;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Validator;
+use App\Services\PaymentConfigurationService;
+use App\Support\PaymentProviderRegistry;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Log;
 
 class PaymentConfigController extends Controller
 {
-    protected $paymentService;
-
-    public function __construct(PaymentService $paymentService)
-    {
-        $this->paymentService = $paymentService;
-    }
+    public function __construct(
+        protected PaymentConfigurationService $config
+    ) {}
 
     /**
-     * Get payment configuration for payment processing
+     * Aggregate payment configuration for the checkout page.
      */
-    public function getPaymentConfiguration()
+    public function getPaymentConfiguration(): JsonResponse
     {
         try {
             $settings = SystemSetting::getSettings();
-            $paymentConfiguration = $this->paymentService->checkPaymentMethodConfiguration();
-            
-            // Get enabled payment methods from system settings (Updated for new gateways)
-            $enabledMethods = [];
-            if ($settings->enable_expresspay) $enabledMethods[] = 'expresspay';
-            if ($settings->enable_hubtel) $enabledMethods[] = 'hubtel';
-            if ($settings->enable_paystack) $enabledMethods[] = 'paystack';
-            if ($settings->enable_flutterwave) $enabledMethods[] = 'flutterwave';
 
-            // Filter available providers based on system settings AND provider configuration
-            $availableProviders = array_filter($paymentConfiguration, function($status, $provider) use ($enabledMethods) {
-                return $status['enabled'] && $status['configured'] && in_array($provider, $enabledMethods);
-            }, ARRAY_FILTER_USE_BOTH);
-
-            $paymentInfo = [
-                'available_providers' => $availableProviders,
-                'enabled_gateways' => $settings->getEnabledGatewayNames(),
-                'gateway_count' => $settings->getEnabledPaymentProvidersCount(),
-            ];
-
-            return response()->json([
-                'success' => true,
-                'payment_configuration' => $paymentInfo,
-                'currency' => $settings->getCurrencyInfo(),
-                'bulk_payment_enabled' => $settings->enable_bulk_payments,
-                'max_bulk_months' => $settings->max_bulk_months,
-                'system_logo' => $settings->getLogoUrl(),
-                'system_short_name' => $settings->getSystemShortName(),
-                'payment_methods' => $settings->getPaymentMethodsForFrontend()
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error retrieving payment configuration: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get available payment methods for frontend (Updated for new gateways)
-     */
-    public function getAvailablePaymentMethods()
-    {
-        try {
-            $settings = SystemSetting::getSettings();
-            $paymentConfiguration = $this->paymentService->checkPaymentMethodConfiguration();
-            
-            $availableMethods = [];
-            
-            // Check each provider against system settings (Updated gateway list)
-            $providers = [
-                'expresspay' => 'enable_expresspay',
-                'hubtel' => 'enable_hubtel',
-                'paystack' => 'enable_paystack',
-                'flutterwave' => 'enable_flutterwave'
-            ];
-            
-            foreach ($providers as $provider => $enabledField) {
-                $providerConfig = $paymentConfiguration[$provider] ?? null;
-                $isEnabledInSettings = $settings->$enabledField ?? false;
-                
-                // Provider must be BOTH enabled in system settings AND properly configured
-                if ($providerConfig && $providerConfig['enabled'] && $providerConfig['configured'] && $isEnabledInSettings) {
-                    $availableMethods[$provider] = [
-                        'name' => $this->getProviderDisplayName($provider),
-                        'instructions' => $this->paymentService->getPaymentInstructions($provider),
-                        'icon' => $this->getProviderIcon($provider),
-                        'color' => $this->getProviderColor($provider),
-                        'description' => $this->getProviderDescription($provider)
-                    ];
-                }
-            }
-            
-            return response()->json([
-                'success' => true,
-                'available_methods' => $availableMethods,
-                'primary_provider' => $settings->primary_payment_provider ?? null,
-                'system_info' => [
-                    'name' => $settings->system_name,
-                    'short_name' => $settings->getSystemShortName(),
-                    'logo' => $settings->getLogoUrl()
+            return $this->ok([
+                'payment_configuration' => [
+                    'available_providers' => $this->config->availableProviders($settings),
+                    'enabled_gateways'    => $settings->getEnabledGatewayNames(),
+                    'gateway_count'       => $settings->getEnabledPaymentProvidersCount(),
                 ],
-                'currency' => $settings->getCurrencyInfo(),
-                'dues_amount' => $settings->getFormattedDuesAmount(),
-                'bulk_payment' => [
-                    'enabled' => $settings->enable_bulk_payments,
-                    'max_months' => $settings->max_bulk_months,
-                    'options' => $settings->getBulkPaymentOptions()
-                ]
+                'currency'              => $settings->getCurrencyInfo(),
+                'bulk_payment_enabled'  => $settings->enable_bulk_payments,
+                'max_bulk_months'       => $settings->max_bulk_months,
+                'system_logo'           => $settings->getLogoUrl(),
+                'system_short_name'     => $settings->getSystemShortName(),
+                'payment_methods'       => $settings->getPaymentMethodsForFrontend(),
             ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error retrieving available payment methods: ' . $e->getMessage()
-            ], 500);
+        } catch (\Throwable $e) {
+            return $this->fail('Error retrieving payment configuration', $e);
         }
     }
 
     /**
-     * Sync payment providers with system settings (Updated for new gateways)
+     * Rich payment-method list for the frontend.
      */
-    public function syncPaymentProviders()
+    public function getAvailablePaymentMethods(): JsonResponse
     {
         try {
             $settings = SystemSetting::getSettings();
-            $paymentConfiguration = $this->paymentService->checkPaymentMethodConfiguration();
-            
-            $updated = false;
-            
-            // Sync enabled status based on provider configuration (Updated gateway list)
-            $providers = ['expresspay', 'hubtel', 'paystack', 'flutterwave'];
-            
-            foreach ($providers as $provider) {
-                $status = $paymentConfiguration[$provider] ?? null;
-                $enabledField = 'enable_' . $provider;
-                
-                if ($status && property_exists($settings, $enabledField)) {
-                    // Only enable if provider is properly configured
-                    $newValue = $status['enabled'] && $status['configured'];
-                    
-                    if ($settings->$enabledField != $newValue) {
-                        $settings->$enabledField = $newValue;
-                        $updated = true;
-                    }
+            $envConfig = $this->config->envConfiguration();
+
+            $availableMethods = [];
+
+            foreach (PaymentProviderRegistry::keys() as $provider) {
+                if (! $this->config->isAvailable($provider, $settings)) {
+                    continue;
                 }
-            }
-            
-            if ($updated) {
-                $settings->save();
-                
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Payment providers synchronized successfully',
-                    'updated_settings' => [
-                        'enabled_gateways' => $settings->getEnabledGatewayNames(),
-                        'gateway_count' => $settings->getEnabledPaymentProvidersCount()
-                    ]
-                ]);
-            }
-            
-            return response()->json([
-                'success' => true,
-                'message' => 'Payment providers are already synchronized',
-                'current_gateways' => $settings->getEnabledGatewayNames(),
-                'gateway_count' => $settings->getEnabledPaymentProvidersCount()
-            ]);
 
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to sync payment providers: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Toggle a specific payment gateway (New endpoint)
-     */
-    public function togglePaymentGateway(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'gateway' => 'required|in:expresspay,hubtel,paystack,flutterwave',
-            'enabled' => 'required|boolean'
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        try {
-            $settings = SystemSetting::getSettings();
-            $gateway = $request->gateway;
-            $enabledField = 'enable_' . $gateway;
-            
-            // Check if gateway is properly configured before enabling
-            if ($request->enabled) {
-                $paymentConfiguration = $this->paymentService->checkPaymentMethodConfiguration();
-                $gatewayConfig = $paymentConfiguration[$gateway] ?? null;
-                
-                if (!$gatewayConfig || !$gatewayConfig['configured']) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => "Cannot enable {$gateway}. The gateway is not properly configured. Please configure it in the Payment Providers section first.",
-                        'gateway' => $gateway,
-                        'needs_configuration' => true
-                    ], 422);
-                }
-            }
-            
-            $settings->$enabledField = $request->enabled;
-            $settings->updated_by = auth()->id();
-            $settings->save();
-            
-            $status = $request->enabled ? 'enabled' : 'disabled';
-            
-            return response()->json([
-                'success' => true,
-                'message' => ucfirst($gateway) . " has been {$status} successfully",
-                'gateway' => $gateway,
-                'enabled' => $request->enabled,
-                'enabled_gateways' => $settings->getEnabledGatewayNames(),
-                'gateway_count' => $settings->getEnabledPaymentProvidersCount()
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error toggling payment gateway: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * Get payment gateway statuses (New endpoint)
-     */
-    public function getPaymentGatewayStatuses()
-    {
-        try {
-            $settings = SystemSetting::getSettings();
-            $paymentConfiguration = $this->paymentService->checkPaymentMethodConfiguration();
-            
-            $gateways = [];
-            $providers = ['expresspay', 'hubtel', 'paystack', 'flutterwave'];
-            
-            foreach ($providers as $provider) {
-                $providerConfig = $paymentConfiguration[$provider] ?? null;
-                $enabledField = 'enable_' . $provider;
-                
-                $gateways[$provider] = [
-                    'name' => $this->getProviderDisplayName($provider),
-                    'enabled' => $settings->$enabledField ?? false,
-                    'configured' => $providerConfig && $providerConfig['configured'],
-                    'available' => $providerConfig && $providerConfig['enabled'] && $providerConfig['configured'],
-                    'icon' => $this->getProviderIcon($provider),
-                    'color' => $this->getProviderColor($provider),
-                    'description' => $this->getProviderDescription($provider)
+                $availableMethods[$provider] = [
+                    'name'         => PaymentProviderRegistry::name($provider),
+                    'instructions' => $this->config->paymentService->getPaymentInstructions($provider),
+                    'icon'         => PaymentProviderRegistry::icon($provider),
+                    'color'        => PaymentProviderRegistry::color($provider),
+                    'description'  => PaymentProviderRegistry::description($provider),
+                    'environment'  => $envConfig[$provider]['environment'] ?? 'sandbox',
                 ];
             }
-            
-            return response()->json([
-                'success' => true,
-                'gateways' => $gateways,
-                'total_enabled' => $settings->getEnabledPaymentProvidersCount(),
-                'total_available' => count(array_filter($gateways, fn($g) => $g['available'])),
-                'has_enabled_gateways' => $settings->hasEnabledPaymentMethods()
-            ]);
 
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error retrieving gateway statuses: ' . $e->getMessage()
-            ], 500);
+            return $this->ok([
+                'available_methods' => $availableMethods,
+                'primary_provider'  => $settings->primary_payment_provider ?? null,
+                'system_info'       => [
+                    'name'       => $settings->system_name,
+                    'short_name' => $settings->getSystemShortName(),
+                    'logo'       => $settings->getLogoUrl(),
+                ],
+                'currency'     => $settings->getCurrencyInfo(),
+                'dues_amount'  => $settings->getFormattedDuesAmount(),
+                'bulk_payment' => [
+                    'enabled'    => $settings->enable_bulk_payments,
+                    'max_months' => $settings->max_bulk_months,
+                    'options'    => $settings->getBulkPaymentOptions(),
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            return $this->fail('Error retrieving available payment methods', $e);
         }
     }
 
     /**
-     * Helper method to get provider display name (Updated for new gateways)
+     * Reconcile SystemSetting flags with the actual env-level state.
+     * Only ever *reflects* env reality — never fabricates availability.
      */
-    protected function getProviderDisplayName($providerKey)
+    public function syncPaymentProviders(): JsonResponse
     {
-        $providers = [
-            'expresspay' => 'ExpressPay',
-            'hubtel' => 'Hubtel',
-            'paystack' => 'Paystack',
-            'flutterwave' => 'Flutterwave'
-        ];
+        try {
+            $settings = SystemSetting::getSettings();
+            $updated = false;
+            $changes = [];
 
-        return $providers[$providerKey] ?? ucfirst(str_replace('_', ' ', $providerKey));
+            foreach (PaymentProviderRegistry::keys() as $provider) {
+                $field = PaymentProviderRegistry::settingField($provider);
+
+                if (! $field || ! $settings->hasAttribute($field)) {
+                    continue;
+                }
+
+                $newValue = $this->config->isReady($provider);
+
+                if ((bool) $settings->{$field} !== $newValue) {
+                    $changes[$provider] = [
+                        'from' => (bool) $settings->{$field},
+                        'to'   => $newValue,
+                    ];
+                    $settings->{$field} = $newValue;
+                    $updated = true;
+                }
+            }
+
+            if ($updated) {
+                $settings->updated_by = auth()->id();
+                $settings->save();
+                $this->config->flush();
+
+                Log::info('Payment providers synchronized', [
+                    'user_id' => auth()->id(),
+                    'changes' => $changes,
+                ]);
+            }
+
+            return $this->ok([
+                'message'        => $updated
+                    ? 'Payment providers synchronized successfully'
+                    : 'Payment providers are already synchronized',
+                'updated'        => $updated,
+                'changes'        => $changes,
+                'enabled_gateways' => $settings->getEnabledGatewayNames(),
+                'gateway_count'    => $settings->getEnabledPaymentProvidersCount(),
+            ]);
+        } catch (\Throwable $e) {
+            return $this->fail('Failed to sync payment providers', $e);
+        }
     }
 
     /**
-     * Helper method to get provider icon (New helper)
+     * Toggle a single gateway on/off, guarding against enabling
+     * an unconfigured provider or disabling the last active one.
      */
-    protected function getProviderIcon($providerKey)
+    public function togglePaymentGateway(TogglePaymentGatewayRequest $request): JsonResponse
     {
-        $icons = [
-            'expresspay' => 'fa-credit-card',
-            'hubtel' => 'fa-phone-alt',
-            'paystack' => 'fa-credit-card',
-            'flutterwave' => 'fa-cloud-upload-alt'
-        ];
+        try {
+            $settings = SystemSetting::getSettings();
+            $gateway  = $request->string('gateway')->toString();
+            $enabled  = $request->boolean('enabled');
 
-        return $icons[$providerKey] ?? 'fa-credit-card';
+            $field = PaymentProviderRegistry::settingField($gateway);
+
+            if (! $field || ! $settings->hasAttribute($field)) {
+                return $this->badRequest("Unknown gateway: {$gateway}");
+            }
+
+            $previous = (bool) $settings->{$field};
+
+            // Guard 1: cannot enable an unconfigured gateway.
+            if ($enabled && ! $this->config->isReady($gateway)) {
+                return $this->unprocessable(
+                    "Cannot enable " . PaymentProviderRegistry::name($gateway)
+                    . ". The gateway is not properly configured. "
+                    . "Please configure it in the Payment Providers section first.",
+                    ['needs_configuration' => true, 'gateway' => $gateway]
+                );
+            }
+
+            // Guard 2: cannot disable the last enabled gateway.
+            if (! $enabled && $previous && $this->enabledCount($settings) <= 1) {
+                return $this->unprocessable(
+                    "Cannot disable " . PaymentProviderRegistry::name($gateway)
+                    . ". At least one payment gateway must remain enabled.",
+                    ['last_gateway' => true, 'gateway' => $gateway]
+                );
+            }
+
+            // No-op short circuit.
+            if ($previous === $enabled) {
+                return $this->ok([
+                    'message'          => PaymentProviderRegistry::name($gateway)
+                                          . ' is already ' . ($enabled ? 'enabled' : 'disabled'),
+                    'gateway'          => $gateway,
+                    'enabled'          => $enabled,
+                    'enabled_gateways' => $settings->getEnabledGatewayNames(),
+                    'gateway_count'    => $settings->getEnabledPaymentProvidersCount(),
+                ]);
+            }
+
+            $settings->{$field}   = $enabled;
+            $settings->updated_by = auth()->id();
+            $settings->save();
+            $this->config->flush();
+
+            Log::info('Payment gateway toggled', [
+                'user_id'  => auth()->id(),
+                'gateway'  => $gateway,
+                'from'     => $previous,
+                'to'       => $enabled,
+            ]);
+
+            return $this->ok([
+                'message'          => PaymentProviderRegistry::name($gateway)
+                                      . ' has been ' . ($enabled ? 'enabled' : 'disabled')
+                                      . ' successfully',
+                'gateway'          => $gateway,
+                'enabled'          => $enabled,
+                'enabled_gateways' => $settings->getEnabledGatewayNames(),
+                'gateway_count'    => $settings->getEnabledPaymentProvidersCount(),
+            ]);
+        } catch (\Throwable $e) {
+            return $this->fail('Error toggling payment gateway', $e);
+        }
     }
 
     /**
-     * Helper method to get provider color (New helper)
+     * Dashboard status for every gateway.
      */
-    protected function getProviderColor($providerKey)
+    public function getPaymentGatewayStatuses(): JsonResponse
     {
-        $colors = [
-            'expresspay' => '#0066CC',
-            'hubtel' => '#2563EB',
-            'paystack' => '#3B82F6',
-            'flutterwave' => '#F97316'
-        ];
+        try {
+            $settings = SystemSetting::getSettings();
+            $gateways = $this->config->allStatuses($settings);
 
-        return $colors[$providerKey] ?? '#6B7280';
+            return $this->ok([
+                'gateways'             => $gateways,
+                'total_enabled'        => $settings->getEnabledPaymentProvidersCount(),
+                'total_available'      => collect($gateways)->where('available', true)->count(),
+                'has_enabled_gateways' => $settings->hasEnabledPaymentMethods(),
+            ]);
+        } catch (\Throwable $e) {
+            return $this->fail('Error retrieving gateway statuses', $e);
+        }
     }
 
-    /**
-     * Helper method to get provider description (New helper)
-     */
-    protected function getProviderDescription($providerKey)
-    {
-        $descriptions = [
-            'expresspay' => 'Mobile money & online payments',
-            'hubtel' => 'Mobile money collections',
-            'paystack' => 'Cards, bank transfers & mobile money',
-            'flutterwave' => 'Pan-African payment gateway'
-        ];
+    // -----------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------
 
-        return $descriptions[$providerKey] ?? 'Payment gateway';
+    protected function enabledCount(SystemSetting $settings): int
+    {
+        return collect(PaymentProviderRegistry::keys())
+            ->filter(fn ($p) => $this->config->isEnabledInSettings($p, $settings))
+            ->count();
+    }
+
+    protected function ok(array $payload): JsonResponse
+    {
+        return response()->json(['success' => true] + $payload);
+    }
+
+    protected function badRequest(string $message): JsonResponse
+    {
+        return response()->json(['success' => false, 'message' => $message], 400);
+    }
+
+    protected function unprocessable(string $message, array $extra = []): JsonResponse
+    {
+        return response()->json(
+            ['success' => false, 'message' => $message] + $extra,
+            422
+        );
+    }
+
+    protected function fail(string $context, \Throwable $e): JsonResponse
+    {
+        Log::error("{$context}: " . $e->getMessage(), [
+            'user_id' => auth()->id(),
+            'trace'   => $e->getTraceAsString(),
+        ]);
+
+        $message = app()->isLocal()
+            ? "{$context}: " . $e->getMessage()
+            : $context . '.';
+
+        return response()->json(['success' => false, 'message' => $message], 500);
     }
 }

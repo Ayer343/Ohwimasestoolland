@@ -3016,7 +3016,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
+@endsection
 
+{{-- ============================================================ --}}
+{{-- STYLES — moved OUT of @section('scripts') into @push('styles') --}}
+{{-- so they render in <head> via the layout's @stack('styles'),    --}}
+{{-- and don't leak into the header/sidebar.                        --}}
+{{-- The global `.hidden` rule has been scoped to only the elements --}}
+{{-- this page controls, and focus/transition rules are scoped to   --}}
+{{-- #property-form so they don't affect the header's search input. --}}
+{{-- ============================================================ --}}
+@push('styles')
 <style>
 /* ==================== PHOTO UPLOAD STYLES ==================== */
 
@@ -3518,7 +3528,10 @@ h3 {
     outline-offset: 2px;
 }
 
-input:focus, select:focus, textarea:focus {
+/* Scoped to this form so it doesn't affect the header's search input */
+#property-form input:focus,
+#property-form select:focus,
+#property-form textarea:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
@@ -3574,11 +3587,48 @@ input:focus, select:focus, textarea:focus {
     }
 }
 
-/* ==================== UTILITY CLASSES ==================== */
+/* ==================== SCOPED .hidden OVERRIDE ==================== */
+/* The previous GLOBAL `.hidden { display: none; }` rule was leaking
+ * out of this view and hiding the header's search bar (and any other
+ * .hidden-using component). Now scoped to only the IDs this page
+ * controls. Tailwind's own .hidden still applies elsewhere. */
 
-.hidden {
-    display: none;
+#custom_property_type_container.hidden,
+#selected-property-type.hidden,
+#invitation-channels-container.hidden,
+#invitation-preview.hidden,
+#available-channels-info.hidden,
+#no-channels-warning.hidden,
+#tenant-invitation-container.hidden,
+#tenants-summary.hidden,
+#tenant-modal.hidden,
+#naming-preview-container.hidden,
+#plan-progress-container.hidden,
+#plan-status-alert.hidden,
+#global-sequence-info.hidden,
+#manual-location-container.hidden,
+#auto-filled-fields.hidden,
+#pattern-status.hidden,
+#pattern-validation.hidden,
+#pattern-error.hidden,
+#pattern-loading.hidden,
+#sequence-type-info.hidden,
+#next-pattern-preview.hidden,
+#delete-form.hidden,
+#global-sequence-row.hidden,
+#global-sequence-badge.hidden,
+#refresh-pattern.hidden,
+#remove-phone-btn.hidden,
+.remove-phone-btn.hidden,
+.phone-number-group.hidden,
+#photo-preview-grid.hidden,
+#existing-photos-grid.hidden,
+.existing-photo-item.hidden,
+.photo-preview-item.hidden {
+    display: none !important;
 }
+
+/* ==================== UTILITY CLASSES ==================== */
 
 .form-group {
     margin-bottom: 1rem;
@@ -3589,8 +3639,15 @@ input:focus, select:focus, textarea:focus {
     color: var(--danger);
 }
 
-input, select, textarea, button, a, .property-type-card, .modern-radio-option {
+/* Scoped transition rule so we don't affect the header's elements */
+#property-form input,
+#property-form select,
+#property-form textarea,
+#property-form button,
+#property-form a,
+.property-type-card,
+.modern-radio-option {
     transition: all 0.2s ease-in-out;
 }
 </style>
-@endsection
+@endpush

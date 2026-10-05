@@ -181,7 +181,7 @@
 @section('title', $pageTitle)
 
 @section('content')
-<div class="grid grid-cols-1 gap-6 mb-6">
+<div id="property-units-page" class="grid grid-cols-1 gap-6 mb-6">
     <!-- Header Card -->
     <div class="card">
         <div class="flex justify-between items-center p-6">
@@ -1821,7 +1821,17 @@ function exportUnits(format = 'csv') {
     window.location.href = url.toString();
 }
 </script>
+@endsection
 
+{{-- ============================================================ --}}
+{{-- STYLES — moved OUT of @section('scripts') into @push('styles') --}}
+{{-- so they render in <head> via the layout's @stack('styles'),    --}}
+{{-- and don't leak into the header/sidebar.                        --}}
+{{-- The global `.hidden` rule has been scoped to only the elements --}}
+{{-- this page controls, and focus/transition rules are scoped to   --}}
+{{-- #property-units-page so they don't affect the header's search. --}}
+{{-- ============================================================ --}}
+@push('styles')
 <style>
 /* Index-specific form control styles with dark mode support */
 .index-custom-dropdown {
@@ -1909,13 +1919,14 @@ function exportUnits(format = 'csv') {
     border-color: var(--primary);
 }
 
-table {
+/* Table styles scoped to this page to avoid affecting header tables (if any) */
+#property-units-page table {
     border-collapse: separate;
     border-spacing: 0;
     width: 100%;
 }
 
-table th {
+#property-units-page table th {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -1925,23 +1936,23 @@ table th {
     background-color: var(--bg-secondary) !important;
 }
 
-table td {
+#property-units-page table td {
     padding: 0.75rem;
     border-bottom: 1px solid var(--border-color);
     vertical-align: top;
     background-color: var(--card-bg) !important;
 }
 
-table tr:last-child td {
+#property-units-page table tr:last-child td {
     border-bottom: none;
 }
 
-table tr {
+#property-units-page table tr {
     background-color: var(--card-bg) !important;
 }
 
-table tr:hover td,
-table tr:hover {
+#property-units-page table tr:hover td,
+#property-units-page table tr:hover {
     background-color: var(--card-bg) !important;
 }
 
@@ -1989,51 +2000,66 @@ table tr:hover {
     border: 1px solid rgba(var(--primary-rgb), 0.3) !important;
 }
 
-.btn-primary {
+/* Scoped to this page so we don't override the header's buttons */
+#property-units-page .btn-primary,
+#vacateModal .btn-primary,
+#deleteModal .btn-primary {
     background-color: var(--primary) !important;
     color: white !important;
     border: 1px solid var(--primary) !important;
     transition: all 0.2s ease;
 }
 
-.btn-primary:hover {
+#property-units-page .btn-primary:hover,
+#vacateModal .btn-primary:hover,
+#deleteModal .btn-primary:hover {
     background-color: var(--secondary) !important;
     border-color: var(--secondary) !important;
     transform: translateY(-1px);
 }
 
-.btn-secondary {
+#property-units-page .btn-secondary,
+#vacateModal .btn-secondary,
+#deleteModal .btn-secondary {
     background-color: rgba(var(--secondary-rgb), 0.1) !important;
     color: var(--secondary) !important;
     border: 1px solid rgba(var(--secondary-rgb), 0.3) !important;
     transition: all 0.2s ease;
 }
 
-.btn-secondary:hover {
+#property-units-page .btn-secondary:hover,
+#vacateModal .btn-secondary:hover,
+#deleteModal .btn-secondary:hover {
     background-color: rgba(var(--secondary-rgb), 0.2) !important;
     transform: translateY(-1px);
 }
 
-.btn-danger {
+#property-units-page .btn-danger,
+#vacateModal .btn-danger,
+#deleteModal .btn-danger {
     background-color: var(--danger) !important;
     color: white !important;
     border: 1px solid var(--danger) !important;
     transition: all 0.2s ease;
 }
 
-.btn-danger:hover {
+#property-units-page .btn-danger:hover,
+#vacateModal .btn-danger:hover,
+#deleteModal .btn-danger:hover {
     background-color: #dc3545 !important;
     transform: translateY(-1px);
 }
 
-.btn-success {
+#property-units-page .btn-success,
+#vacateModal .btn-success {
     background: linear-gradient(to right, #10b981, #059669) !important;
     color: white !important;
     border: none !important;
     transition: all 0.2s ease;
 }
 
-.btn-success:hover {
+#property-units-page .btn-success:hover,
+#vacateModal .btn-success:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
 }
@@ -2193,15 +2219,15 @@ table tr:hover {
 }
 
 @media (max-width: 768px) {
-    .grid.grid-cols-1.lg\\:grid-cols-4 {
+    #property-units-page .grid.grid-cols-1.lg\:grid-cols-4 {
         grid-template-columns: 1fr;
     }
     
-    .lg\\:col-span-1 {
+    #property-units-page .lg\:col-span-1 {
         margin-bottom: 1.5rem;
     }
     
-    table {
+    #property-units-page table {
         display: block;
         overflow-x: auto;
         white-space: nowrap;
@@ -2231,10 +2257,6 @@ table tr:hover {
         left: 1rem;
         max-width: none !important;
     }
-}
-
-.hidden {
-    display: none !important;
 }
 
 @keyframes fadeIn {
@@ -2269,5 +2291,25 @@ table tr:hover {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: var(--primary);
 }
+
+/* ============================================================ */
+/* SCOPED .hidden OVERRIDE                                      */
+/* The previous GLOBAL `.hidden { display: none !important; }`  */
+/* was leaking into the header (and Alpine's x-show, etc.).     */
+/* Now scoped to the specific IDs this page controls.           */
+/* ============================================================ */
+
+#property-units-page #deleteModal.hidden,
+#property-units-page #vacateModal.hidden,
+#property-units-page #tableView.hidden,
+#property-units-page #cardView.hidden,
+#property-units-page #modalRefundContainer.hidden,
+#deleteModal.hidden,
+#vacateModal.hidden,
+#tableView.hidden,
+#cardView.hidden,
+#modalRefundContainer.hidden {
+    display: none !important;
+}
 </style>
-@endsection
+@endpush

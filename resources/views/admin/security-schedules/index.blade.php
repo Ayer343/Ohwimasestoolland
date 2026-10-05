@@ -91,7 +91,7 @@
 @endphp
 
 @section('content')
-<div class="grid grid-cols-1 gap-6 mb-6">
+<div id="security-schedules-page" class="grid grid-cols-1 gap-6 mb-6">
     <!-- Header Card -->
     <div class="card">
         <div class="flex justify-between items-center p-6">
@@ -1912,60 +1912,77 @@ document.addEventListener('click', e => {
     }
 });
 </script>
+@endsection
 
+{{-- ============================================================ --}}
+{{-- STYLES — moved OUT of @section('scripts') into @push('styles') --}}
+{{-- so they render in <head> via the layout's @stack('styles'),    --}}
+{{-- and don't leak into the header/sidebar.                        --}}
+{{-- The global `:root` block and `.hidden` rules have been scoped  --}}
+{{-- to only the elements this page controls, and .card/.btn/.form- --}}
+{{-- input/.modal rules are scoped to #security-schedules-page and  --}}
+{{-- the modal IDs so they don't override the header's styles.      --}}
+{{-- ============================================================ --}}
+@push('styles')
 <style>
-:root {
-    --primary: #3b82f6;
-    --primary-rgb: 59, 130, 246;
-    --secondary: #6b7280;
-    --secondary-rgb: 107, 114, 128;
-    --success: #10b981;
-    --success-rgb: 16, 185, 129;
-    --danger: #ef4444;
-    --danger-rgb: 239, 68, 68;
-    --warning: #f59e0b;
-    --warning-rgb: 245, 158, 11;
-    --info: #3b82f6;
-    --info-rgb: 59, 130, 246;
-    --text-primary: #1f2937;
-    --text-secondary: #6b7280;
-    --bg-secondary: #f9fafb;
-    --border-color: #e5e7eb;
-    --card-bg: #ffffff;
-}
+/* ============================================================ */
+/* Note: we no longer redeclare :root variables — the layout's   */
+/* theme system already provides --primary, --success, etc.      */
+/* Redeclaring them here was overriding the whole app.            */
+/* ============================================================ */
 
-.card {
+/* Card — scoped to this page so header cards aren't affected */
+#security-schedules-page .card {
     background-color: var(--card-bg) !important;
     border: 1px solid var(--border-color) !important;
     border-radius: 12px !important;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1) !important;
 }
 
-.btn-primary {
+/* Primary button — scoped */
+#security-schedules-page .btn-primary,
+#rotateModal .btn-primary,
+#swapModal .btn-primary,
+#deleteModal .btn-primary,
+#forceDeleteModal .btn-primary,
+#rotationHistoryModal .btn-primary {
     background-color: var(--primary) !important;
     color: white !important;
     border: 1px solid var(--primary) !important;
     transition: all 0.2s ease;
 }
 
-.btn-primary:hover {
+#security-schedules-page .btn-primary:hover,
+#rotateModal .btn-primary:hover,
+#swapModal .btn-primary:hover,
+#deleteModal .btn-primary:hover,
+#forceDeleteModal .btn-primary:hover,
+#rotationHistoryModal .btn-primary:hover {
     background-color: var(--secondary) !important;
     border-color: var(--secondary) !important;
     transform: translateY(-1px);
 }
 
-.btn-primary:disabled {
+#security-schedules-page .btn-primary:disabled,
+#rotateModal .btn-primary:disabled {
     opacity: 0.7;
     cursor: not-allowed;
 }
 
-.btn-secondary {
+/* Secondary button — scoped */
+#security-schedules-page .btn-secondary,
+#rotateModal .btn-secondary,
+#swapModal .btn-secondary,
+#deleteModal .btn-secondary,
+#forceDeleteModal .btn-secondary,
+#rotationHistoryModal .btn-secondary {
     background-color: rgba(var(--secondary-rgb), 0.1) !important;
     color: var(--secondary) !important;
     border: 1px solid rgba(var(--secondary-rgb), 0.3) !important;
 }
 
-.action-btn {
+/* Action button */
+#security-schedules-page .action-btn {
     width: 36px;
     height: 36px;
     border-radius: 6px;
@@ -1977,25 +1994,51 @@ document.addEventListener('click', e => {
     transition: all 0.2s ease;
 }
 
-.action-btn:hover {
+#security-schedules-page .action-btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0,0,0,0.1);
 }
 
-.form-input, select, textarea {
+/* Form inputs scoped to this page + modals (so we don't clobber header inputs) */
+#security-schedules-page .form-input,
+#security-schedules-page select,
+#security-schedules-page textarea,
+#rotateModal .form-input,
+#rotateModal select,
+#rotateModal textarea,
+#swapModal .form-input,
+#swapModal select,
+#swapModal textarea,
+#deleteModal .form-input,
+#deleteModal select,
+#deleteModal textarea,
+#forceDeleteModal .form-input,
+#forceDeleteModal select,
+#forceDeleteModal textarea,
+#rotationHistoryModal .form-input,
+#rotationHistoryModal select,
+#rotationHistoryModal textarea {
     background-color: var(--card-bg) !important;
     color: var(--text-primary) !important;
     border: 1px solid var(--border-color) !important;
     border-radius: 8px !important;
 }
 
-.form-input:focus, select:focus, textarea:focus {
+#security-schedules-page .form-input:focus,
+#security-schedules-page select:focus,
+#security-schedules-page textarea:focus,
+#rotateModal .form-input:focus,
+#swapModal .form-input:focus,
+#deleteModal .form-input:focus,
+#forceDeleteModal .form-input:focus,
+#rotationHistoryModal .form-input:focus {
     outline: none !important;
     border-color: var(--primary) !important;
     box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1) !important;
 }
 
-.avatar {
+/* Avatar */
+#security-schedules-page .avatar {
     width: 36px;
     height: 36px;
     border-radius: 8px;
@@ -2008,7 +2051,8 @@ document.addEventListener('click', e => {
     font-size: 0.875rem;
 }
 
-.bulk-checkbox {
+/* Bulk checkbox */
+#security-schedules-page .bulk-checkbox {
     width: 18px;
     height: 18px;
     border-radius: 4px;
@@ -2018,12 +2062,12 @@ document.addEventListener('click', e => {
     transition: all 0.2s ease;
 }
 
-.bulk-checkbox:checked {
+#security-schedules-page .bulk-checkbox:checked {
     background-color: var(--primary);
     border-color: var(--primary);
 }
 
-.bulk-checkbox:checked::after {
+#security-schedules-page .bulk-checkbox:checked::after {
     content: '✓';
     color: white;
     font-size: 12px;
@@ -2033,7 +2077,12 @@ document.addEventListener('click', e => {
     height: 100%;
 }
 
-.modal {
+/* Modal (only when it's inside this page's modal IDs) */
+#rotateModal.modal,
+#swapModal.modal,
+#deleteModal.modal,
+#forceDeleteModal.modal,
+#rotationHistoryModal.modal {
     position: fixed;
     top: 0;
     left: 0;
@@ -2042,7 +2091,11 @@ document.addEventListener('click', e => {
     z-index: 9999;
 }
 
-.modal-overlay {
+#rotateModal .modal-overlay,
+#swapModal .modal-overlay,
+#deleteModal .modal-overlay,
+#forceDeleteModal .modal-overlay,
+#rotationHistoryModal .modal-overlay {
     position: absolute;
     width: 100%;
     height: 100%;
@@ -2050,7 +2103,11 @@ document.addEventListener('click', e => {
     backdrop-filter: blur(5px);
 }
 
-.modal-container {
+#rotateModal .modal-container,
+#swapModal .modal-container,
+#deleteModal .modal-container,
+#forceDeleteModal .modal-container,
+#rotationHistoryModal .modal-container {
     position: relative;
     background-color: var(--card-bg);
     border-radius: 16px;
@@ -2074,7 +2131,11 @@ document.addEventListener('click', e => {
     }
 }
 
-.modal-header {
+#rotateModal .modal-header,
+#swapModal .modal-header,
+#deleteModal .modal-header,
+#forceDeleteModal .modal-header,
+#rotationHistoryModal .modal-header {
     padding: 1.5rem;
     border-bottom: 1px solid var(--border-color);
     display: flex;
@@ -2082,14 +2143,22 @@ document.addEventListener('click', e => {
     align-items: center;
 }
 
-.modal-title {
+#rotateModal .modal-title,
+#swapModal .modal-title,
+#deleteModal .modal-title,
+#forceDeleteModal .modal-title,
+#rotationHistoryModal .modal-title {
     font-size: 1.25rem;
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
 }
 
-.modal-close {
+#rotateModal .modal-close,
+#swapModal .modal-close,
+#deleteModal .modal-close,
+#forceDeleteModal .modal-close,
+#rotationHistoryModal .modal-close {
     background: none;
     border: none;
     color: var(--text-secondary);
@@ -2099,11 +2168,19 @@ document.addEventListener('click', e => {
     border-radius: 6px;
 }
 
-.modal-body {
+#rotateModal .modal-body,
+#swapModal .modal-body,
+#deleteModal .modal-body,
+#forceDeleteModal .modal-body,
+#rotationHistoryModal .modal-body {
     padding: 1.5rem;
 }
 
-.modal-footer {
+#rotateModal .modal-footer,
+#swapModal .modal-footer,
+#deleteModal .modal-footer,
+#forceDeleteModal .modal-footer,
+#rotationHistoryModal .modal-footer {
     padding: 1rem 1.5rem;
     border-top: 1px solid var(--border-color);
     display: flex;
@@ -2117,13 +2194,35 @@ document.addEventListener('click', e => {
     font-size: 0.625rem;
 }
 
-.hidden {
-    display: none !important;
+@media (max-width: 768px) {
+    #rotateModal .modal-container,
+    #swapModal .modal-container,
+    #deleteModal .modal-container,
+    #forceDeleteModal .modal-container,
+    #rotationHistoryModal .modal-container {
+        margin: 1rem;
+    }
+    #security-schedules-page .action-btn {
+        width: 32px;
+        height: 32px;
+    }
 }
 
-@media (max-width: 768px) {
-    .modal-container { margin: 1rem; }
-    .action-btn { width: 32px; height: 32px; }
+/* ============================================================ */
+/* SCOPED .hidden OVERRIDE                                      */
+/* The previous GLOBAL `.hidden { display: none !important; }`  */
+/* was leaking into the header (and Alpine's x-show, etc.).     */
+/* Now scoped to the specific modal IDs this page controls.      */
+/* ============================================================ */
+
+#rotateModal.hidden,
+#swapModal.hidden,
+#deleteModal.hidden,
+#forceDeleteModal.hidden,
+#rotationHistoryModal.hidden,
+#bulkActionStatus.hidden,
+#security-schedules-page .hidden {
+    display: none !important;
 }
 </style>
-@endsection
+@endpush

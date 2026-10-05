@@ -4130,167 +4130,203 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('admin')->name('admin.'
     Route::post('/sms-providers/validate-config', [SmsProviderController::class, 'validateProviderConfiguration'])->name('sms-providers.validate-config');
 });
 
+
 /*
 |--------------------------------------------------------------------------
-| ✅ ENHANCED: Payment Provider Configuration Routes (Super Admin Only) - UPDATED
+| ✅ ENHANCED: Payment Provider Configuration Routes
 |--------------------------------------------------------------------------
+|
 */
 
-Route::middleware(['auth', 'multi.auth.user:0'])->prefix('admin')->name('admin.')->group(function () {
-    // =============================================
-    // MAIN PAYMENT PROVIDER ROUTES
-    // =============================================
-    
-    // Payment Provider Dashboard
-    Route::get('/payment-providers', [PaymentProviderController::class, 'index'])->name('payment-providers.index');
-    
-    // Configuration Management
-    Route::post('/payment-providers/configure', [PaymentProviderController::class, 'configureProvider'])->name('payment-providers.configure');
-    Route::post('/payment-providers/reset', [PaymentProviderController::class, 'resetProvider'])->name('payment-providers.reset');
-    
-    // =============================================
-    // STATUS & MONITORING ROUTES (ENHANCED)
-    // =============================================
-    
-    // Enhanced Status Endpoints
-    Route::get('/payment-providers/status', [PaymentProviderController::class, 'getProviderStatus'])->name('payment-providers.status');
-    
-    // ✅ NEW: Immediate status endpoint for real-time polling
-    Route::post('/payment-providers/immediate-status', [PaymentProviderController::class, 'getImmediateProviderStatus'])->name('payment-providers.immediate-status');
-    
-    // ✅ NEW: Update status for AJAX polling
-    Route::get('/payment-providers/update-status', [PaymentProviderController::class, 'getUpdateStatus'])->name('payment-providers.update-status');
-    
-    // =============================================
-    // CONNECTION TESTING ROUTES
-    // =============================================
-    
-    // Connection Testing
-    Route::post('/payment-providers/test-connection', [PaymentProviderController::class, 'testConnection'])->name('payment-providers.test-connection');
-    
-    // ✅ NEW: Environment verification
-    Route::post('/payment-providers/verify-environment', [PaymentProviderController::class, 'verifyEnvironmentSwitch'])->name('payment-providers.verify-environment');
-    
-    // Backward compatibility
-    Route::post('/payment-providers/test', [PaymentProviderController::class, 'testConnection'])->name('payment-providers.test');
-    
-    // =============================================
-    // JOB & BACKGROUND PROCESSING ROUTES
-    // =============================================
-    
-    // ✅ NEW: Job status checking
-    Route::post('/payment-providers/check-job-status', [PaymentProviderController::class, 'checkJobStatus'])->name('payment-providers.check-job-status');
-    
-    // ✅ NEW: Manual retry for failed updates
-    Route::post('/payment-providers/retry-update', [PaymentProviderController::class, 'retryPaymentUpdate'])->name('payment-providers.retry-update');
-    
-    // ✅ NEW: Check pending updates (for session-based fallback)
-    Route::post('/payment-providers/check-pending-updates', [PaymentProviderController::class, 'checkPendingPaymentUpdates'])->name('payment-providers.check-pending-updates');
-    
-    // =============================================
-    // STATE MANAGEMENT ROUTES (Debug & Testing)
-    // =============================================
-    
-    // ✅ NEW: Clear provider states (for debugging/testing)
-    Route::post('/payment-providers/clear-states', [PaymentProviderController::class, 'clearProviderStates'])->name('payment-providers.clear-states');
-    
-    // =============================================
-    // CONFIGURATION & WEBHOOK ROUTES
-    // =============================================
-    
-    // Configuration endpoints
-    Route::get('/payment-providers/config', [PaymentProviderController::class, 'getProviderConfig'])->name('payment-providers.config');
-    Route::get('/payment-providers/webhook-urls', [PaymentProviderController::class, 'getWebhookUrls'])->name('payment-providers.webhook-urls');
-    
-    // =============================================
-    // MAINTENANCE & BACKUP ROUTES
-    // =============================================
-    
-    // Backup management
-    Route::post('/payment-providers/cleanup-backups', [PaymentProviderController::class, 'cleanupBackups'])->name('payment-providers.cleanup-backups');
-});
+Route::middleware(['auth', 'multi.auth.user:0', 'can:manage-payments'])
+    ->prefix('admin')
+    ->name('admin.')
+    ->group(function () {
+
+        // =================================================================
+        // READ-ONLY ROUTES
+        // =================================================================
+        //
+        // Safe to view even when the system's own billing is overdue.
+        //
+
+        // Payment Provider Dashboard
+        Route::get('/payment-providers', [PaymentProviderController::class, 'index'])
+            ->name('payment-providers.index');
+
+        // Status & monitoring
+        Route::get('/payment-providers/status', [PaymentProviderController::class, 'getProviderStatus'])
+            ->name('payment-providers.status');
+
+        Route::get('/payment-providers/update-status', [PaymentProviderController::class, 'getUpdateStatus'])
+            ->name('payment-providers.update-status');
+
+        // Configuration & webhooks (read-only introspection)
+        Route::get('/payment-providers/config', [PaymentProviderController::class, 'getProviderConfig'])
+            ->name('payment-providers.config');
+
+        Route::get('/payment-providers/webhook-urls', [PaymentProviderController::class, 'getWebhookUrls'])
+            ->name('payment-providers.webhook-urls');
+
+        // Environment verification — reads current env, does not write
+        Route::post('/payment-providers/verify-environment', [PaymentProviderController::class, 'verifyEnvironmentSwitch'])
+            ->name('payment-providers.verify-environment');
+
+        // =================================================================
+        // MUTATING ROUTES (billing-sensitive)
+        // =================================================================
+        //
+        // These write to .env or mutate cached provider state. They are
+        // gated by `perform-billing-sensitive-action` so that an overdue
+        // system billing freezes them until resolved.
+        //
+        Route::middleware(['can:perform-billing-sensitive-action'])->group(function () {
+
+            // Configuration management
+            Route::post('/payment-providers/configure', [PaymentProviderController::class, 'configureProvider'])
+                ->name('payment-providers.configure');
+
+            Route::post('/payment-providers/reset', [PaymentProviderController::class, 'resetProvider'])
+                ->name('payment-providers.reset');
+
+            // Connection testing
+            //
+            // Throttled because Paystack's test hits a live external API.
+            // 10 attempts/minute is generous for a human clicking the
+            // "Test" button, but blocks scripted hammering.
+            Route::post('/payment-providers/test-connection', [PaymentProviderController::class, 'testConnection'])
+                ->middleware('throttle:10,1')
+                ->name('payment-providers.test-connection');
+
+            // Backward-compat alias for old frontend code
+            Route::post('/payment-providers/test', [PaymentProviderController::class, 'testConnection'])
+                ->middleware('throttle:10,1')
+                ->name('payment-providers.test');
+
+            // Immediate status polling — mutating because it forces an
+            // env reload + cache flush, which is expensive.
+            Route::post('/payment-providers/immediate-status', [PaymentProviderController::class, 'getImmediateProviderStatus'])
+                ->name('payment-providers.immediate-status');
+
+            // Job & background processing
+            Route::post('/payment-providers/check-job-status', [PaymentProviderController::class, 'checkJobStatus'])
+                ->name('payment-providers.check-job-status');
+
+            Route::post('/payment-providers/retry-update', [PaymentProviderController::class, 'retryPaymentUpdate'])
+                ->name('payment-providers.retry-update');
+
+            Route::post('/payment-providers/check-pending-updates', [PaymentProviderController::class, 'checkPendingPaymentUpdates'])
+                ->name('payment-providers.check-pending-updates');
+
+            // State management (debug / testing)
+            Route::post('/payment-providers/clear-states', [PaymentProviderController::class, 'clearProviderStates'])
+                ->name('payment-providers.clear-states');
+
+            // Maintenance & backups
+            Route::post('/payment-providers/cleanup-backups', [PaymentProviderController::class, 'cleanupBackups'])
+                ->name('payment-providers.cleanup-backups');
+        });
+    });
 
 
 /*
 |--------------------------------------------------------------------------
 | ✅ ENHANCED: Payment Provider Configuration Routes (Developer)
 |--------------------------------------------------------------------------
+|
+| Access model (defence in depth):
+|   1. `auth`                     → user must be logged in
+|   2. `multi.auth.user:5`        → user must be a developer (type 5)
+|   3. `can:manage-developer-payments` → gate on the controller/route layer
+|
+| All routes are POST-safe and named consistently with the admin controller
+| so the shared blade/JS works without branching.
+|
 */
 
-Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('developer.')->group(function () {
-    
-    // =============================================
-    // MAIN VIEW ROUTES
-    // =============================================
-    
-    Route::get('/payment-providers', [DeveloperPaymentProviderController::class, 'index'])
-        ->name('payment-providers.index');
-    
-    Route::get('/payment-providers/{provider}', [DeveloperPaymentProviderController::class, 'show'])
-        ->name('payment-providers.show');
-    
-    // =============================================
-    // DEVELOPER CONFIGURATION ROUTES
-    // =============================================
-    
-    Route::post('/payment-providers/configure', [DeveloperPaymentProviderController::class, 'configureDeveloperProvider'])
-        ->name('payment-providers.configure');
-    
-    Route::post('/payment-providers/test-developer-connection', [DeveloperPaymentProviderController::class, 'testDeveloperConnection'])
-        ->name('payment-providers.test-developer-connection');
-    
-    Route::post('/payment-providers/bill-admin', [DeveloperPaymentProviderController::class, 'billAdmin'])
-        ->name('payment-providers.bill-admin');
-    
-    Route::get('/payment-providers/developer-config', [DeveloperPaymentProviderController::class, 'getDeveloperConfigJson'])
-        ->name('payment-providers.developer-config');
-    
-    // =============================================
-    // STATUS & MONITORING ROUTES
-    // =============================================
-    
-    Route::get('/payment-providers/status', [DeveloperPaymentProviderController::class, 'getProviderStatus'])
-        ->name('payment-providers.status');
-    
-    Route::post('/payment-providers/immediate-status', [DeveloperPaymentProviderController::class, 'getImmediateProviderStatus'])
-        ->name('payment-providers.immediate-status');
-    
-    Route::get('/payment-providers/config', [DeveloperPaymentProviderController::class, 'getConfig'])
-        ->name('payment-providers.config');
-    
-    Route::get('/payment-providers/webhook-urls', [DeveloperPaymentProviderController::class, 'getWebhookUrls'])
-        ->name('payment-providers.webhook-urls');
-    
-    // =============================================
-    // TESTING ROUTES
-    // =============================================
-    
-    Route::post('/payment-providers/test-connection', [DeveloperPaymentProviderController::class, 'testConnection'])
-        ->name('payment-providers.test-connection');
-    
-    // =============================================
-    // DEBUG & DEVELOPMENT ROUTES
-    // =============================================
-    
-    Route::get('/payment-providers/cache-status', [DeveloperPaymentProviderController::class, 'getCacheStatus'])
-        ->name('payment-providers.cache-status');
-    
-    Route::get('/payment-providers/environment', [DeveloperPaymentProviderController::class, 'getEnvironmentInfo'])
-        ->name('payment-providers.environment');
-    
-    Route::get('/payment-providers/performance', [DeveloperPaymentProviderController::class, 'getPerformanceMetrics'])
-        ->name('payment-providers.performance');
-    
-    Route::post('/payment-providers/clear-cache', [DeveloperPaymentProviderController::class, 'clearCache'])
-        ->name('payment-providers.clear-cache');
-    
-    // =============================================
-    // LOGGING ROUTES
-    // =============================================
-    
-    Route::get('/payment-providers/logs', [DeveloperPaymentProviderController::class, 'getLogs'])
-        ->name('payment-providers.logs');
-});
+Route::middleware(['auth', 'multi.auth.user:5', 'can:manage-developer-payments'])
+    ->prefix('developer')
+    ->name('developer.')
+    ->group(function () {
+
+        // =================================================================
+        // MAIN VIEWS
+        // =================================================================
+        Route::get('/payment-providers', [DeveloperPaymentProviderController::class, 'index'])
+            ->name('payment-providers.index');
+
+        // Optional per-provider deep link. Constrain {provider} to known keys.
+        Route::get('/payment-providers/{provider}', [DeveloperPaymentProviderController::class, 'show'])
+            ->whereIn('provider', ['paystack', 'expresspay', 'flutterwave', 'hubtel'])
+            ->name('payment-providers.show');
+
+        // =================================================================
+        // DEVELOPER CONFIGURATION
+        // =================================================================
+        Route::post('/payment-providers/configure', [DeveloperPaymentProviderController::class, 'configureDeveloperProvider'])
+            ->name('payment-providers.configure');
+
+        Route::post('/payment-providers/test-developer-connection', [DeveloperPaymentProviderController::class, 'testDeveloperConnection'])
+            ->name('payment-providers.test-developer-connection');
+
+        Route::post('/payment-providers/bill-admin', [DeveloperPaymentProviderController::class, 'billAdmin'])
+            ->name('payment-providers.bill-admin');
+
+        Route::get('/payment-providers/developer-config', [DeveloperPaymentProviderController::class, 'getDeveloperConfigJson'])
+            ->name('payment-providers.developer-config');
+
+        // =================================================================
+        // STATUS & MONITORING
+        // =================================================================
+        Route::get('/payment-providers/status', [DeveloperPaymentProviderController::class, 'getProviderStatus'])
+            ->name('payment-providers.status');
+
+        Route::post('/payment-providers/immediate-status', [DeveloperPaymentProviderController::class, 'getImmediateProviderStatus'])
+            ->name('payment-providers.immediate-status');
+
+        Route::get('/payment-providers/update-status', [DeveloperPaymentProviderController::class, 'getUpdateStatus'])
+            ->name('payment-providers.update-status');
+
+        Route::get('/payment-providers/config', [DeveloperPaymentProviderController::class, 'getConfig'])
+            ->name('payment-providers.config');
+
+        Route::get('/payment-providers/webhook-urls', [DeveloperPaymentProviderController::class, 'getWebhookUrls'])
+            ->name('payment-providers.webhook-urls');
+
+        Route::post('/payment-providers/verify-environment', [DeveloperPaymentProviderController::class, 'verifyEnvironmentSwitch'])
+            ->name('payment-providers.verify-environment');
+
+        Route::post('/payment-providers/clear-states', [DeveloperPaymentProviderController::class, 'clearProviderStates'])
+            ->name('payment-providers.clear-states');
+
+        // =================================================================
+        // TESTING
+        // =================================================================
+        Route::post('/payment-providers/test-connection', [DeveloperPaymentProviderController::class, 'testConnection'])
+            ->middleware('throttle:10,1') // ← external API calls
+            ->name('payment-providers.test-connection');
+
+        // =================================================================
+        // DEBUG & DEVELOPMENT
+        // =================================================================
+        Route::get('/payment-providers/cache-status', [DeveloperPaymentProviderController::class, 'getCacheStatus'])
+            ->name('payment-providers.cache-status');
+
+        Route::get('/payment-providers/environment', [DeveloperPaymentProviderController::class, 'getEnvironmentInfo'])
+            ->name('payment-providers.environment');
+
+        Route::get('/payment-providers/performance', [DeveloperPaymentProviderController::class, 'getPerformanceMetrics'])
+            ->name('payment-providers.performance');
+
+        Route::post('/payment-providers/clear-cache', [DeveloperPaymentProviderController::class, 'clearCache'])
+            ->name('payment-providers.clear-cache');
+
+        // =================================================================
+        // LOGGING
+        // =================================================================
+        Route::get('/payment-providers/logs', [DeveloperPaymentProviderController::class, 'getLogs'])
+            ->name('payment-providers.logs');
+    });
 
 /*
 |--------------------------------------------------------------------------

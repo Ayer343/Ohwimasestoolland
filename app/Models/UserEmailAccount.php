@@ -181,10 +181,10 @@ class UserEmailAccount extends Model
     /**
      * Get the emails associated with this account.
      */
-    public function emails(): HasMany
-    {
-        return $this->hasMany(Email::class);
-    }
+    public function emails()
+{
+    return $this->hasMany(Email::class, 'user_email_account_id');
+}
 
     /**
      * Get the email folders for this account.
