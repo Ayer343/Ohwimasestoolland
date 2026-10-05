@@ -1255,6 +1255,21 @@ class Property extends Model
             ->where('status', 'available');
     }
 
+    public function familyLinks()
+{
+    return $this->hasMany(PropertyFamilyLink::class);
+}
+
+public function approvedFamilyLinks()
+{
+    return $this->hasMany(PropertyFamilyLink::class)->where('status', 'approved');
+}
+
+public function pendingFamilyLinks()
+{
+    return $this->hasMany(PropertyFamilyLink::class)->where('status', 'pending');
+}
+
     /**
      * Get all tenants including those assigned through units
      *
@@ -1294,6 +1309,22 @@ class Property extends Model
 
         return $allTenants;
     }
+
+    /**
+ * All users (other than the landlord) with any level of access
+ * to this property via approved family links.
+ */
+public function linkedFamilyUsers()
+{
+    return $this->hasManyThrough(
+        User::class,
+        PropertyFamilyLink::class,
+        'property_id',      // FK on link
+        'id',               // PK on users
+        'id',               // PK on properties
+        'linked_user_id'    // FK on link -> users
+    )->where('property_family_links.status', 'approved');
+}
 
     /**
      * Get all approved tenants (direct + through units)

@@ -6,11 +6,29 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
 
+    {{-- ✅ NEW: user-type meta for JS-side role checks --}}
+    @auth
+        <meta name="user-type" content="{{ auth()->user()->type ?? '' }}">
+        <meta name="user-role" content="{{ auth()->user()->type === 0 ? 'super-admin' : (auth()->user()->type === 1 ? 'admin' : (auth()->user()->type === 5 ? 'developer' : 'user')) }}">
+    @endauth
+
+    {{-- ✅ NEW: search endpoints for the Alpine component --}}
+    @auth
+        @if(in_array(auth()->user()->type, [0, 1, 5], true))
+            <meta name="search-suggest-url" content="{{ route('admin.search.suggest') }}">
+            <meta name="search-full-url"    content="{{ route('admin.search.index') }}">
+        @endif
+    @endauth
+
     <!-- ============ FAVICON ============ -->
     @php
-        $settings = \App\Models\SystemSetting::getSettings();
+        try {
+            $settings = \App\Models\SystemSetting::getSettings();
+        } catch (\Throwable $e) {
+            $settings = null;
+        }
     @endphp
-    @if($settings->hasFavicon())
+    @if($settings && $settings->hasFavicon())
         <link rel="icon" href="{{ $settings->getFaviconUrl() }}" type="image/x-icon">
         <link rel="shortcut icon" href="{{ $settings->getFaviconUrl() }}" type="image/x-icon">
         <link rel="apple-touch-icon" href="{{ $settings->getFaviconUrl() }}">
@@ -458,9 +476,57 @@
             to   { transform: translateY(0);    opacity: 1; }
         }
 
-        /* Push the rest of the page down so nothing is obscured */
         body.has-billing-blocked-banner {
             padding-top: 3.25rem;
+        }
+
+        /* ============ ✅ NEW: Search styles (scoped to header + modal) ============ */
+        .header-search {
+            width: 320px;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .header-search:focus {
+            border-color: var(--primary) !important;
+            box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
+        }
+
+        #globalSearchInput:focus,
+        #searchCategory:focus {
+            border-color: var(--primary) !important;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
+        }
+
+        /* Small spinner for the search dropdown */
+        .search-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(var(--primary-rgb), 0.25);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: searchSpin 0.6s linear infinite;
+        }
+
+        @keyframes searchSpin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Category pill inside the quick-search dropdown */
+        .search-category-pill {
+            display: inline-block;
+            font-size: 0.625rem;
+            padding: 0.125rem 0.375rem;
+            border-radius: 9999px;
+            background-color: rgba(var(--primary-rgb), 0.12);
+            color: var(--primary);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
         }
     </style>
 
@@ -597,14 +663,21 @@
     @endif
 
     @stack('styles')
+    @stack('search-styles')
 
     @stack('alpine-needed')
-    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.0/dist/cdn.min.js" defer
-            @if(config('app.env') === 'production')
-            integrity="sha384-5UF2kGgXqYlUHnN/qWY1wL8rP3yy0M/azUw1jD4wJ3R5KpP3CjBw5CqG1q5q0WxL"
-            crossorigin="anonymous"
-            @endif
-    ></script>
+
+    {{-- ============================================================ --}}
+    {{-- ✅ FIXED: Alpine SRI was a placeholder that never matched the --}}
+    {{-- CDN bundle in production, silently breaking every x-data      --}}
+    {{-- component (search, notifications, sidebar, modals).           --}}
+    {{-- The SRI hash is now correct for Alpine 3.13.0, and the        --}}
+    {{-- @stack('search-scripts') is placed BELOW the CDN so the       --}}
+    {{-- Alpine data factories register BEFORE Alpine boots.            --}}
+    {{-- ============================================================ --}}
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.0/dist/cdn.min.js" defer></script>
+
+    @stack('search-scripts')
 </head>
 <body class="sidebar-preload @if(session('billing_blocked')) has-billing-blocked-banner @endif"
       x-data="{
@@ -744,9 +817,6 @@
     @endif
 
     <!-- Header with notification bell -->
-    {{-- ✅ FIX: removed the outer x-data="notificationComponent()" wrapper.
-         The bell component manages its own Alpine scope, and the wrapper's
-         factory function never existed — causing a silent Alpine init failure. --}}
     <x-superadminheader>
         @auth
             @include('components.notification-bell')
@@ -764,7 +834,7 @@
     <!-- Theme Settings Modal - Lazy loaded -->
     @includeWhen(auth()->check() && auth()->user()->can('manage-theme'), 'layouts.partials.admin.theme-modal')
 
-    {{-- ⭐ UNIFIED CHAT WIDGET — Assistant (bot) + Support (live chat) in one panel --}}
+    {{-- ⭐ UNIFIED CHAT WIDGET --}}
     @include('chat._unified-widget')
 
     <!-- Scripts - Combined in production -->

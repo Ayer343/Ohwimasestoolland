@@ -1,12 +1,8 @@
 {{-- ============ CRITICAL FIX: Ensure sidebarUnreadCount is always defined ============ --}}
 @php
-    // This fixes the "Undefined variable $sidebarUnreadCount" error when switching dashboards
-    // Initialize with default value 0 if not already set
     if (!isset($sidebarUnreadCount)) {
         $sidebarUnreadCount = 0;
     }
-
-    // Also ensure it's available as a fallback from the authenticated user
     if ($sidebarUnreadCount === 0 && auth()->check()) {
         try {
             $sidebarUnreadCount = auth()->user()->unreadNotifications()->count();
@@ -24,7 +20,6 @@
     <!-- Enhanced Professional Logo Section -->
     <div class="logo-section">
         @php
-            // Get system settings (with safety guard so a DB issue never breaks the sidebar)
             try {
                 $systemSettings = \App\Models\SystemSetting::getSettings();
             } catch (\Throwable $e) {
@@ -35,16 +30,11 @@
             $systemShortName = $systemSettings->system_short_name ?? config('app.short_name', 'Admin');
             $systemName      = $systemSettings->system_name ?? config('app.name', 'Laravel');
 
-            // ============ FIXED: Resolve logo URL from the SAME disk uploads use ============
-            // The `public` disk resolves to either storage/app/public (local) or
-            // DigitalOcean Spaces / S3 (production) via PUBLIC_FILESYSTEM_DRIVER.
-            // Using it here keeps local and production consistent.
             $systemLogoUrl = null;
             if ($systemLogo) {
                 try {
                     $systemLogoUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($systemLogo);
                 } catch (\Throwable $e) {
-                    // Last-resort fallback: treat as a path under /storage
                     try {
                         $systemLogoUrl = \Illuminate\Support\Facades\Storage::url($systemLogo);
                     } catch (\Throwable $e2) {
@@ -53,24 +43,22 @@
                 }
             }
 
-            // ============ FIXED: Role-Based Authorization with Developer Support ============
             $user = auth()->user();
             $currentUserType = $user->type ?? null;
 
-            // Check authorization using BOTH legacy type AND roles
             $hasSuperAdminAccess = ($currentUserType === 0) || $user->hasRole('super-admin');
             $hasAdminAccess      = ($currentUserType === 1) || $user->hasRole('admin');
             $hasDeveloperAccess  = ($currentUserType === 5) || $user->hasRole('developer');
 
-            // ✅ FIXED: User is authorized if they have super admin, admin, OR developer access
             $isAuthorized = $hasSuperAdminAccess || $hasAdminAccess || $hasDeveloperAccess;
 
-            // For individual menu items
             $isSuperAdmin = $hasSuperAdminAccess;
             $isAdmin      = $hasAdminAccess;
             $isDeveloper  = $hasDeveloperAccess;
 
-            // Get current role from session OR detect from current route for sidebar display
+            // ✅ Explicit flag for the search input's Alpine scope
+            $searchRole = $isSuperAdmin ? 'super-admin' : ($isAdmin ? 'admin' : ($isDeveloper ? 'developer' : 'guest'));
+
             $sidebarCurrentRole = session('selected_role');
             if (!$sidebarCurrentRole) {
                 $currentRoute = Route::currentRouteName();
@@ -89,11 +77,11 @@
                 } elseif (str_contains($currentRoute, 'tenant')) {
                     $sidebarCurrentRole = 'tenant';
                 } else {
-                    $sidebarCurrentRole = 'admin'; // fallback
+                    $sidebarCurrentRole = 'admin';
                 }
             }
 
-            // Defaults so downstream markup is always safe even if not authorized
+            // Defaults
             $smsProviderConfigured      = false;
             $whatsappProviderConfigured = false;
             $smsQuickStatus             = ['system_ready' => false, 'can_send_sms' => false];
@@ -118,17 +106,13 @@
             $isPrimary                  = false;
             $totalWhatsAppProviders     = 0;
 
-            // Only proceed if authorized
             if ($isAuthorized) {
-                // Get pending ownership transfers count
                 $pendingOwnershipTransfers = \App\Models\PropertyOwnershipTransfer::where('status', 'pending')->count();
 
-                // Get pending supervisor assignments needing attention
                 $pendingSupervisorAssignments = \App\Models\SecuritySupervisorAssignment::active()
                     ->where('end_date', '<=', now()->addDays(7))
                     ->count();
 
-                // ========== LANDLORD INVOICE STATS ==========
                 $landlordEligibleForArchive = \App\Models\Invoice::where('status', 'paid')
                     ->whereNull('year_end_archived_at')
                     ->whereYear('created_at', '<', now()->year)
@@ -143,7 +127,6 @@
                     ->whereNull('deleted_at')
                     ->count();
 
-                // ========== TENANT INVOICE STATS ==========
                 $tenantEligibleForArchive = \App\Models\TenantInvoice::where('status', 'paid')
                     ->whereNull('year_end_archived_at')
                     ->whereYear('created_at', '<', now()->year)
@@ -158,7 +141,6 @@
                     ->whereNull('deleted_at')
                     ->count();
 
-                // Super Admin specific counts (using role-based check)
                 $pendingAgreements = $isSuperAdmin ?
                     \App\Models\AdminBillingRecord::where('super_admin_id', auth()->id())
                         ->where('status', 'pending')->count() : 0;
@@ -187,13 +169,11 @@
                     ->where('status', 'completed')
                     ->count() : 0;
 
-                // Check if this super admin is primary
                 $isPrimary = $isSuperAdmin ?
                     \App\Models\AdminBillingRecord::where('super_admin_id', auth()->id())
                         ->where('is_primary_for_billing', true)
                         ->exists() : false;
 
-                // ========== SMS STATISTICS ==========
                 try {
                     $smsService = app(\App\Services\SmsService::class);
                     $smsSystemStatus = $smsService->getSystemStatus();
@@ -201,7 +181,6 @@
                     $smsProviders = $smsService->getAllProvidersWithStatus();
                     $smsUsageStats = $smsService->getUsageStatistics();
 
-                    // Determine whether at least one SMS provider is configured
                     $smsProviderConfigured = (bool) (
                         ($smsSystemStatus['configured_providers'] ?? 0) > 0
                         || ($smsSystemStatus['enabled_providers'] ?? 0) > 0
@@ -216,7 +195,6 @@
                     $smsProviderConfigured = false;
                 }
 
-                // ========== WHATSAPP STATISTICS ==========
                 try {
                     $whatsappService = app(\App\Services\WhatsAppService::class);
                     $whatsappSystemStatus = $whatsappService->getSystemStatus();
@@ -224,7 +202,6 @@
                     $whatsappProviders    = $whatsappService->getAllProvidersWithStatus();
                     $totalWhatsAppProviders = is_array($whatsappProviders) ? count($whatsappProviders) : 0;
 
-                    // Determine whether at least one WhatsApp provider is configured.
                     $whatsappProviderConfigured = (bool) (
                         ($whatsappSystemStatus['configured'] ?? false)
                         || ($whatsappSystemStatus['enabled'] ?? false)
@@ -318,12 +295,12 @@
             <i class="fas fa-home mr-4"></i>
             <span class="nav-text">Dashboard</span>
         </a>
-    @elseif($isLandlord)
+    @elseif(isset($isLandlord) && $isLandlord)
         <a href="{{ route('landlord.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('landlord.dashboard') ? 'active' : '' }}">
             <i class="fas fa-home mr-4"></i>
             <span class="nav-text">Dashboard</span>
         </a>
-    @elseif($isTenant)
+    @elseif(isset($isTenant) && $isTenant)
         <a href="{{ route('tenant.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('tenant.dashboard') ? 'active' : '' }}">
             <i class="fas fa-home mr-4"></i>
             <span class="nav-text">Dashboard</span>
@@ -331,7 +308,7 @@
     @endif
 
     {{-- ============================================ --}}
-    {{-- ⚙️ SYSTEM SETTINGS — moved up (Super Admin only) --}}
+    {{-- ⚙️ SYSTEM SETTINGS — Super Admin only --}}
     {{-- ============================================ --}}
     @if($isSuperAdmin)
         <div class="nav-divider mt-1">
@@ -345,7 +322,7 @@
     @endif
 
     {{-- ============================================ --}}
-    {{-- 💰 BILLING MANAGEMENT — moved up (Super Admin only) --}}
+    {{-- 💰 BILLING MANAGEMENT — Super Admin only --}}
     {{-- ============================================ --}}
     @if($isSuperAdmin)
         <div class="nav-divider mt-1">
@@ -366,7 +343,7 @@
     @endif
 
     {{-- ============================================ --}}
-    {{-- 📄 INVOICE MANAGEMENT — moved up --}}
+    {{-- 📄 INVOICE MANAGEMENT --}}
     {{-- ============================================ --}}
     <div class="nav-divider mt-1">
         <span class="menu-text">INVOICE MANAGEMENT</span>
@@ -391,15 +368,13 @@
     </button>
 
     {{-- ============================================ --}}
-    {{-- 💳 PAYMENT MANAGEMENT — NEW GROUPED SECTION --}}
-    {{-- Payment Providers + Payments combined --}}
+    {{-- 💳 PAYMENT MANAGEMENT --}}
     {{-- ============================================ --}}
     @if($isSuperAdmin || $isAdmin || $isDeveloper)
         <div class="nav-divider mt-1">
             <span class="menu-text">PAYMENT MANAGEMENT</span>
         </div>
 
-        {{-- Payment Providers — Super Admin OR Developer only --}}
         @if($isSuperAdmin || $isDeveloper)
             <a href="{{ route('admin.payment-providers.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.payment-providers.*') ? 'active' : '' }}">
                 <i class="fas fa-credit-card mr-4"></i>
@@ -407,7 +382,6 @@
             </a>
         @endif
 
-        {{-- Payments — Super Admin, Admin, Developer --}}
         <a href="{{ route('admin.payments.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.payments.*') ? 'active' : '' }}">
             <i class="fas fa-money-bill-wave mr-4"></i>
             <span class="nav-text">Payments</span>
@@ -415,7 +389,7 @@
     @endif
 
     {{-- ============================================ --}}
-    {{-- ⭐ CONSTRUCTION CONTRACTS --}}
+    {{-- ⭐ CONSTRUCTION MANAGEMENT --}}
     {{-- ============================================ --}}
     <div class="nav-divider mt-1">
         <span class="menu-text">CONSTRUCTION MANAGEMENT</span>
@@ -435,7 +409,6 @@
         @endif
     </a>
 
-    <!-- CONSTRUCTION REGISTRATIONS LINK -->
     <a href="{{ route('admin.construction-registrations.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.construction-registrations.*') ? 'active' : '' }}">
         <i class="fas fa-hard-hat mr-4"></i>
         <span class="nav-text">Construction Registrations</span>
@@ -450,19 +423,17 @@
     </a>
 
     {{-- ============================================ --}}
-    {{-- 💬 COMMUNICATION SECTION --}}
+    {{-- 💬 COMMUNICATION --}}
     {{-- ============================================ --}}
     <div class="nav-divider mt-1">
         <span class="menu-text">COMMUNICATION</span>
     </div>
 
-    <!-- ✅ Email Accounts Link - Admin uses Super Admin linked accounts ONLY -->
     <button id="emailManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('email-accounts.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
         <i class="fas fa-envelope mr-4"></i>
         <span class="nav-text flex-grow">Email Management</span>
         @php
-            // ✅ FIX: Get the Super Admin user (the one who linked the email accounts)
-            $superAdmin = \App\Models\User::where('type', 0)->first(); // type 0 = Super Admin
+            $superAdmin = \App\Models\User::where('type', 0)->first();
 
             if ($isSuperAdmin || $isAdmin) {
                 if ($isSuperAdmin) {
@@ -512,7 +483,6 @@
         @endif
     </button>
 
-    <!-- ✅ SMS Management Button — only shown when at least one SMS provider is configured -->
     @if($smsProviderConfigured)
     <button id="smsManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('sms.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
         <i class="fas fa-sms mr-4"></i>
@@ -531,7 +501,6 @@
     </button>
     @endif
 
-    <!-- ✅ WhatsApp Management Button — only shown when at least one WhatsApp provider is configured -->
     @if($whatsappProviderConfigured)
     <button id="whatsappManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('admin.whatsapp.*') || request()->routeIs('developer.whatsapp.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
         <i class="fab fa-whatsapp mr-4" style="color: #25D366;"></i>
@@ -547,50 +516,65 @@
     @endif
 
     {{-- ============================================ --}}
-    {{-- 🛠️ SYSTEM MANAGEMENT --}}
-    {{-- ============================================ --}}
-    <div class="nav-divider mt-1">
-        <span class="menu-text">SYSTEM MANAGEMENT</span>
-    </div>
+{{-- 🛠️ SYSTEM MANAGEMENT --}}
+{{-- ============================================ --}}
+<div class="nav-divider mt-1">
+    <span class="menu-text">SYSTEM MANAGEMENT</span>
+</div>
 
-    <a href="{{ route('admin.users.index')}}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.users.*') ? 'active' : '' }}">
-        <i class="fas fa-users mr-4"></i>
-        <span class="nav-text">Users</span>
-    </a>
+<a href="{{ route('admin.users.index')}}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.users.*') ? 'active' : '' }}">
+    <i class="fas fa-users mr-4"></i>
+    <span class="nav-text">Users</span>
+</a>
 
-    <a href="{{ route('registration-plans.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('registration-plans.*') ? 'active' : '' }}">
-        <i class="fas fa-map-marked-alt mr-4"></i>
-        <span class="nav-text">Registration Plans</span>
-    </a>
+<a href="{{ route('registration-plans.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('registration-plans.*') ? 'active' : '' }}">
+    <i class="fas fa-map-marked-alt mr-4"></i>
+    <span class="nav-text">Registration Plans</span>
+</a>
 
-    <a href="{{ route('properties.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('properties.*') ? 'active' : '' }}">
-        <i class="fas fa-building mr-4"></i>
-        <span class="nav-text">Properties</span>
-    </a>
+<a href="{{ route('properties.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('properties.*') ? 'active' : '' }}">
+    <i class="fas fa-building mr-4"></i>
+    <span class="nav-text">Properties</span>
+</a>
 
-    <a href="{{ route('property-units.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('property-units.*') ? 'active' : '' }}">
-        <i class="fas fa-door-closed mr-4"></i>
-        <span class="nav-text">Property Units</span>
-    </a>
+{{-- ✅ NEW: Family Links --}}
+<a href="{{ route('admin.family-links.index') }}"
+   class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.family-links.*') ? 'active' : '' }}">
+    <i class="fas fa-user-friends mr-4"></i>
+    <span class="nav-text">Family Links</span>
+    @php
+        $pendingFamilyLinksCount = \App\Models\PropertyFamilyLink::where('status', 'pending')->count();
+    @endphp
+    @if($pendingFamilyLinksCount > 0)
+        <span class="ml-auto bg-yellow-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+            {{ $pendingFamilyLinksCount > 9 ? '9+' : $pendingFamilyLinksCount }}
+        </span>
+    @endif
+</a>
 
-    <button id="administrativeToolsBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{
-        request()->routeIs('admin.security-posts.*') ||
-        request()->routeIs('admin.security-shifts.*') ||
-        request()->routeIs('admin.security-schedules.*') ||
-        request()->routeIs('admin.supervisor-assignments.*') ||
-        request()->routeIs('admin.security-reports.*') ||
-        request()->routeIs('admin.ownership-transfers.*') ? 'active' : ''
-    }}" style="color: var(--sidebar-text);">
-        <i class="fas fa-tools mr-4"></i>
-        <span class="nav-text flex-grow">Administrative Tools</span>
-        @if($pendingOwnershipTransfers > 0 || $pendingSupervisorAssignments > 0)
-            <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                {{ $pendingOwnershipTransfers + $pendingSupervisorAssignments }}
-            </span>
-        @else
-            <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
-        @endif
-    </button>
+<a href="{{ route('property-units.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('property-units.*') ? 'active' : '' }}">
+    <i class="fas fa-door-closed mr-4"></i>
+    <span class="nav-text">Property Units</span>
+</a>
+
+<button id="administrativeToolsBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{
+    request()->routeIs('admin.security-posts.*') ||
+    request()->routeIs('admin.security-shifts.*') ||
+    request()->routeIs('admin.security-schedules.*') ||
+    request()->routeIs('admin.supervisor-assignments.*') ||
+    request()->routeIs('admin.security-reports.*') ||
+    request()->routeIs('admin.ownership-transfers.*') ? 'active' : ''
+}}" style="color: var(--sidebar-text);">
+    <i class="fas fa-tools mr-4"></i>
+    <span class="nav-text flex-grow">Administrative Tools</span>
+    @if($pendingOwnershipTransfers > 0 || $pendingSupervisorAssignments > 0)
+        <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+            {{ $pendingOwnershipTransfers + $pendingSupervisorAssignments }}
+        </span>
+    @else
+        <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
+    @endif
+</button>
 
     {{-- ============================================ --}}
     {{-- 🧹 SANITATION MANAGEMENT --}}
@@ -600,7 +584,6 @@
         <span class="menu-text">SANITATION MANAGEMENT</span>
     </div>
 
-    <!-- Sanitation Personnel Link -->
     <a href="{{ route('sanitation.personnel.index') }}"
        class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('sanitation.personnel.*') ? 'active' : '' }}">
         <i class="fas fa-users mr-4" style="color: var(--primary);"></i>
@@ -648,6 +631,424 @@
     @endif
 </div>
 
+{{-- ============================================================ --}}
+{{-- ✅ GLOBAL SEARCH SCRIPT BLOCK                                 --}}
+{{-- ⚠️ CRITICAL: push to 'search-scripts' (matches the layout's  --}}
+{{-- @stack('search-scripts')). Do NOT change to 'scripts'.       --}}
+{{-- ============================================================ --}}
+@if($isAuthorized)
+@push('search-scripts')
+<script>
+    // ============================================================
+    // 1. Alpine factories — registered as early as possible.
+    // ============================================================
+    (function () {
+        function registerSearchFactories() {
+            if (typeof Alpine === 'undefined') {
+                return false;
+            }
+            if (Alpine.__searchFactoriesRegistered) {
+                return true;
+            }
+
+            // --------------------------------------------------------
+            // quickSearch — header inline autocomplete
+            // --------------------------------------------------------
+            Alpine.data('quickSearch', () => ({
+                query: '',
+                results: {},
+                loading: false,
+                open: false,
+                controller: null,
+                category: 'all',
+
+                // ✅ NEW: keyboard navigation
+                activeIndex: -1,
+                flatItems: [],
+
+                // ✅ NEW: client-side cache so re-typing a prefix is instant
+                _cache: new Map(),
+                _cacheTTL: 60000, // 60s
+
+                suggestUrl: @json(route('admin.search.suggest')),
+                fullUrl:    @json(route('admin.search.index')),
+
+                isEmpty() {
+                    return Object.values(this.results).every(arr => !arr || arr.length === 0);
+                },
+
+                // ✅ NEW: flatten results for keyboard navigation
+                rebuildFlat() {
+                    const flat = [];
+                    for (const cat of Object.keys(this.results)) {
+                        for (const item of (this.results[cat] || [])) {
+                            flat.push({ category: cat, ...item });
+                        }
+                    }
+                    this.flatItems = flat;
+                    if (this.activeIndex >= flat.length) {
+                        this.activeIndex = flat.length - 1;
+                    }
+                },
+
+                // ✅ NEW: build cache key
+                _key(q, c) {
+                    return (c || 'all') + '::' + (q || '').toLowerCase();
+                },
+
+                // ✅ NEW: try cache first, then network
+                async suggest() {
+                    const q = (this.query || '').trim();
+                    if (q.length < 2) {
+                        this.results = {};
+                        this.flatItems = [];
+                        this.activeIndex = -1;
+                        this.open = false;
+                        return;
+                    }
+
+                    const key = this._key(q, this.category);
+
+                    // Cache hit → instant
+                    const cached = this._cache.get(key);
+                    if (cached && (Date.now() - cached.t) < this._cacheTTL) {
+                        this.results = cached.data;
+                        this.rebuildFlat();
+                        this.open = true;
+                        return;
+                    }
+
+                    // Abort any in-flight request
+                    if (this.controller) this.controller.abort();
+                    this.controller = new AbortController();
+
+                    this.loading = true;
+                    this.open = true;
+
+                    try {
+                        const params = new URLSearchParams({
+                            q: q,
+                            category: this.category,
+                        });
+                        const res = await fetch(`${this.suggestUrl}?${params}`, {
+                            headers: {
+                                'Accept': 'application/json',
+                                'X-Requested-With': 'XMLHttpRequest'
+                            },
+                            credentials: 'same-origin',
+                            signal: this.controller.signal,
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.results = data.results || {};
+                            this.rebuildFlat();
+
+                            // Cache successful response
+                            this._cache.set(key, { t: Date.now(), data: this.results });
+
+                            // Keep cache bounded (max 40 entries)
+                            if (this._cache.size > 40) {
+                                const firstKey = this._cache.keys().next().value;
+                                this._cache.delete(firstKey);
+                            }
+                        }
+                    } catch (e) {
+                        if (e.name !== 'AbortError') {
+                            console.error('Search suggest error:', e);
+                        }
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                // ✅ NEW: keyboard handler
+                onKeydown(e) {
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        if (!this.open) { this.open = true; this.suggest(); return; }
+                        this.activeIndex = Math.min(this.activeIndex + 1, this.flatItems.length - 1);
+                        this._scrollActiveIntoView();
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        this.activeIndex = Math.max(this.activeIndex - 1, -1);
+                        this._scrollActiveIntoView();
+                    } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (this.activeIndex >= 0 && this.flatItems[this.activeIndex]) {
+                            const item = this.flatItems[this.activeIndex];
+                            this.saveRecent(this.query, this.category);
+                            window.location.assign(item.url);
+                        } else {
+                            this.goToFullResults();
+                        }
+                    } else if (e.key === 'Escape') {
+                        this.close();
+                    }
+                },
+
+                _scrollActiveIntoView() {
+                    this.$nextTick(() => {
+                        const el = document.querySelector('[data-search-active="true"]');
+                        if (el && el.scrollIntoView) {
+                            el.scrollIntoView({ block: 'nearest' });
+                        }
+                    });
+                },
+
+                goToFullResults() {
+                    if (this.query.length < 2) return;
+                    this.saveRecent(this.query, this.category);
+
+                    // ✅ FIX: close the advanced modal if it happens to be open
+                    if (typeof window.closeSearchModal === 'function') {
+                        window.closeSearchModal();
+                    }
+
+                    const params = new URLSearchParams({ q: this.query, category: this.category });
+                    window.location.assign(`${this.fullUrl}?${params}`);
+                },
+
+                close() {
+                    this.open = false;
+                    this.activeIndex = -1;
+                },
+
+                getStorageKey() {
+                    return 'admin_search_recent_' + @json($currentUserType);
+                },
+
+                saveRecent(term, category) {
+                    if (!term || term.length < 2) return;
+                    try {
+                        let list = JSON.parse(localStorage.getItem(this.getStorageKey()) || '[]');
+                        list = list.filter(item => !(item.q === term && item.c === category));
+                        list.unshift({ q: term, c: category, t: Date.now() });
+                        list = list.slice(0, 8);
+                        localStorage.setItem(this.getStorageKey(), JSON.stringify(list));
+                        document.dispatchEvent(new CustomEvent('search-saved'));
+                    } catch (e) {}
+                },
+
+                getRecent() {
+                    try {
+                        return JSON.parse(localStorage.getItem(this.getStorageKey()) || '[]');
+                    } catch (e) {
+                        return [];
+                    }
+                },
+
+                clearRecent() {
+                    localStorage.removeItem(this.getStorageKey());
+                }
+            }));
+
+            // --------------------------------------------------------
+            // recentSearches — chips in the advanced modal
+            // --------------------------------------------------------
+            Alpine.data('recentSearches', () => ({
+                items: [],
+
+                init() {
+                    this.load();
+                    window.addEventListener('storage', () => this.load());
+                    document.addEventListener('search-saved', () => this.load());
+                },
+
+                load() {
+                    const key = 'admin_search_recent_' + @json($currentUserType);
+                    try {
+                        this.items = JSON.parse(localStorage.getItem(key) || '[]');
+                    } catch (e) {
+                        this.items = [];
+                    }
+                },
+
+                clearAll() {
+                    const key = 'admin_search_recent_' + @json($currentUserType);
+                    localStorage.removeItem(key);
+                    this.items = [];
+                },
+
+                apply(item) {
+                    const input  = document.getElementById('globalSearchInput');
+                    const select = document.getElementById('searchCategory');
+                    if (input)  input.value  = item.q;
+                    if (select) select.value = item.c || 'all';
+
+                    // ✅ FIX: close the modal before navigating
+                    if (typeof window.closeSearchModal === 'function') {
+                        window.closeSearchModal();
+                    }
+
+                    setTimeout(() => {
+                        document.getElementById('performSearch')?.click();
+                    }, 10);
+                }
+            }));
+
+            Alpine.__searchFactoriesRegistered = true;
+            console.log('✅ Search factories registered');
+            return true;
+        }
+
+        if (!registerSearchFactories()) {
+            let attempts = 0;
+            const iv = setInterval(function () {
+                attempts++;
+                if (registerSearchFactories() || attempts > 50) {
+                    clearInterval(iv);
+                }
+            }, 50);
+        }
+
+        document.addEventListener('alpine:init', registerSearchFactories);
+    })();
+
+    // ============================================================
+    // 2. Advanced search modal wiring (non-Alpine)
+    // ============================================================
+    document.addEventListener('DOMContentLoaded', function () {
+        const performBtn = document.getElementById('performSearch');
+        const input      = document.getElementById('globalSearchInput');
+        const category   = document.getElementById('searchCategory');
+        const clearBtn   = document.getElementById('clearSearch');
+        const cancelBtn  = document.getElementById('cancelSearch');
+        const closeBtn   = document.getElementById('closeSearchModal');
+        const modal      = document.getElementById('searchModal');
+
+        // ✅ FIX: robust open/close helpers
+        function closeSearchModal() {
+            const m = document.getElementById('searchModal');
+            if (!m) return;
+            m.classList.add('hidden');
+            m.style.display = 'none';
+            m.setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+        }
+        window.closeSearchModal = closeSearchModal;
+
+        function openSearchModal() {
+            const m = document.getElementById('searchModal');
+            if (!m) return;
+            m.classList.remove('hidden');
+            m.style.display = 'flex';
+            m.setAttribute('aria-hidden', 'false');
+        }
+        window.openSearchModal = openSearchModal;
+
+        // ✅ FIX: close the modal FIRST, then navigate
+        function triggerSearch() {
+            const q = (input?.value || '').trim();
+            if (q.length < 2) { input?.focus(); return; }
+
+            try {
+                const key = 'admin_search_recent_' + @json($currentUserType);
+                let list = JSON.parse(localStorage.getItem(key) || '[]');
+                list = list.filter(i => !(i.q === q && i.c === (category?.value || 'all')));
+                list.unshift({ q: q, c: category?.value || 'all', t: Date.now() });
+                list = list.slice(0, 8);
+                localStorage.setItem(key, JSON.stringify(list));
+                document.dispatchEvent(new CustomEvent('search-saved'));
+            } catch (e) {}
+
+            closeSearchModal();
+
+            const url = @json(route('admin.search.index'))
+                + '?q=' + encodeURIComponent(q)
+                + '&category=' + encodeURIComponent(category?.value || 'all');
+
+            window.location.assign(url);
+        }
+
+        if (performBtn) {
+            performBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                triggerSearch();
+            });
+        }
+
+        if (input) {
+            input.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    triggerSearch();
+                }
+            });
+        }
+
+        if (clearBtn) {
+            clearBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                if (input) input.value = '';
+                if (category) category.value = 'all';
+                input?.focus();
+            });
+        }
+
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                closeSearchModal();
+            });
+        }
+
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                closeSearchModal();
+            });
+        }
+
+        const advancedBtn = document.getElementById('advancedSearchBtn');
+        if (advancedBtn && modal) {
+            advancedBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                openSearchModal();
+                setTimeout(() => input?.focus(), 50);
+            });
+        }
+
+        // ✅ NEW: Esc closes modal, "/" focuses quick search
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                const m = document.getElementById('searchModal');
+                if (m && !m.classList.contains('hidden')) {
+                    e.preventDefault();
+                    closeSearchModal();
+                    return;
+                }
+            }
+            if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
+                e.preventDefault();
+                document.getElementById('quickSearchInput')?.focus();
+            }
+        });
+
+        // ✅ NEW: backdrop click closes modal
+        if (modal) {
+            modal.addEventListener('click', function (e) {
+                if (e.target === modal) closeSearchModal();
+            });
+        }
+    });
+
+    // ============================================================
+    // 3. ✅ FIX: handle bfcache restore (Back button)
+    // ============================================================
+    window.addEventListener('pageshow', function (event) {
+        if (event.persisted) {
+            const m = document.getElementById('searchModal');
+            if (m) {
+                m.classList.add('hidden');
+                m.style.display = 'none';
+            }
+        }
+    });
+</script>
+@endpush
+@endif
+
+
 <!-- ============ BILLING MANAGEMENT MODAL (Super Admin only) ============ -->
 @if($isSuperAdmin)
 <div id="billingManagementModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 2rem; padding-bottom: 2rem;">
@@ -664,7 +1065,6 @@
                 border-radius: 16px;
                 overflow: hidden;">
 
-        <!-- Modal Header -->
         <div class="modal-header flex justify-between items-center p-6 border-b flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--card-bg);">
             <div>
@@ -683,10 +1083,8 @@
             </button>
         </div>
 
-        <!-- Modal Body -->
         <div class="modal-body p-6 overflow-y-auto" style="max-height: calc(100vh - 12rem); scroll-behavior: smooth;">
 
-            <!-- Stats Summary -->
             <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                 <div class="stat-card p-4 rounded-lg text-center" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                     <div class="text-2xl font-bold" style="color: var(--primary);">{{ $totalBillingRecords ?? 0 }}</div>
@@ -706,9 +1104,7 @@
                 </div>
             </div>
 
-            <!-- Main Billing Options Grid -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <!-- Dashboard -->
                 <a href="{{ route('superadmin.billing.dashboard') }}"
                    class="billing-option-card group block p-5 rounded-xl transition-all duration-300 hover:shadow-lg"
                    style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);"
@@ -738,7 +1134,6 @@
                     </div>
                 </a>
 
-                <!-- Agreements List -->
                 <a href="{{ route('superadmin.billing.agreements-list') }}"
                    class="billing-option-card group block p-5 rounded-xl transition-all duration-300 hover:shadow-lg"
                    style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);"
@@ -768,7 +1163,6 @@
                     </div>
                 </a>
 
-                <!-- Reports -->
                 <a href="{{ route('superadmin.billing.reports') }}"
                    class="billing-option-card group block p-5 rounded-xl transition-all duration-300 hover:shadow-lg"
                    style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);"
@@ -793,7 +1187,6 @@
                     </div>
                 </a>
 
-                <!-- Payment History -->
                 <a href="{{ route('superadmin.billing.payment-history') }}"
                    class="billing-option-card group block p-5 rounded-xl transition-all duration-300 hover:shadow-lg"
                    style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);"
@@ -823,7 +1216,6 @@
                     </div>
                 </a>
 
-                <!-- Shared Payment Status (Primary only) -->
                 @if($isPrimary)
                     <a href="{{ route('superadmin.billing.shared-payment-status') }}"
                        class="billing-option-card group block p-5 rounded-xl transition-all duration-300 hover:shadow-lg"
@@ -853,7 +1245,6 @@
                     </a>
                 @endif
 
-                <!-- View Statistics -->
                 <a href="{{ route('superadmin.billing.statistics') }}"
                    class="billing-option-card group block p-5 rounded-xl transition-all duration-300 hover:shadow-lg"
                    style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);"
@@ -878,7 +1269,6 @@
                     </div>
                 </a>
 
-                <!-- Export Data -->
                 <a href="{{ route('superadmin.billing.export') }}"
                    class="billing-option-card group block p-5 rounded-xl transition-all duration-300 hover:shadow-lg"
                    style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);"
@@ -904,7 +1294,6 @@
                 </a>
             </div>
 
-            <!-- Quick Actions -->
             <div class="mt-8 pt-6 border-t" style="border-color: var(--border-color);">
                 <h4 class="text-sm font-semibold mb-4" style="color: var(--text-primary);">
                     <i class="fas fa-bolt mr-2" style="color: var(--primary);"></i>Quick Actions
@@ -942,7 +1331,6 @@
             </div>
         </div>
 
-        <!-- Modal Footer -->
         <div class="modal-footer p-6 border-t flex justify-end flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <button id="cancelBillingModal"
@@ -955,7 +1343,7 @@
 </div>
 @endif
 
-<!-- ============ EMAIL ACCOUNT MANAGEMENT MODAL - FIXED ============ -->
+<!-- ============ EMAIL ACCOUNT MANAGEMENT MODAL ============ -->
 @if($isAuthorized)
 <div id="emailManagementModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 2rem; padding-bottom: 2rem;">
     <div class="email-modal relative mx-auto my-auto"
@@ -971,7 +1359,6 @@
                 border-radius: 16px;
                 overflow: hidden;">
 
-        <!-- Modal Header -->
         <div class="modal-header flex justify-between items-center p-6 border-b flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--card-bg);">
             <div>
@@ -996,10 +1383,8 @@
             </button>
         </div>
 
-        <!-- Modal Body -->
         <div class="modal-body p-6 overflow-y-auto" style="max-height: calc(100vh - 12rem); scroll-behavior: smooth;">
 
-            {{-- Email Account Stats Summary --}}
             @php
                 $superAdmin = \App\Models\User::where('type', 0)->first();
 
@@ -1037,12 +1422,11 @@
                         $totalEmails += $account->emails()->count();
                         $unreadEmails += $account->emails()->where('is_read', false)->where('folder', 'INBOX')->count();
                     } catch (\Exception $e) {
-                        // Skip if relationship fails
+                        // Skip
                     }
                 }
             @endphp
 
-            <!-- Stats Cards -->
             <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
                 <div class="stat-card p-3 rounded-lg text-center" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                     <div class="text-2xl font-bold" style="color: var(--primary);">{{ $totalAccounts }}</div>
@@ -1070,7 +1454,6 @@
                 </div>
             </div>
 
-            <!-- ⚠️ Admin Info: Cannot link own email -->
             @if($isAdmin)
                 <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6;">
                     <div class="flex items-start">
@@ -1093,7 +1476,6 @@
                 </div>
             @endif
 
-            <!-- Quick Actions -->
             <div class="mb-6">
                 <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
                     <i class="fas fa-bolt mr-2" style="color: var(--primary);"></i>Quick Actions
@@ -1177,7 +1559,6 @@
                 </div>
             </div>
 
-            <!-- Email Accounts List -->
             @if($totalAccounts > 0)
                 <div>
                     <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
@@ -1319,7 +1700,6 @@
             @endif
         </div>
 
-        <!-- Modal Footer -->
         <div class="modal-footer p-4 border-t flex justify-between flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <div>
@@ -1340,7 +1720,7 @@
 </div>
 @endif
 
-<!-- ============ SMS MANAGEMENT MODAL — only when a provider is configured ============ -->
+<!-- ============ SMS MANAGEMENT MODAL ============ -->
 @if($isAuthorized && $smsProviderConfigured)
 <div id="smsManagementModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 2rem; padding-bottom: 2rem;">
     <div class="sms-modal relative mx-auto my-auto"
@@ -1356,7 +1736,6 @@
                 border-radius: 16px;
                 overflow: hidden;">
 
-        <!-- Modal Header -->
         <div class="modal-header flex justify-between items-center p-6 border-b flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--card-bg);">
             <div>
@@ -1375,10 +1754,8 @@
             </button>
         </div>
 
-        <!-- Modal Body -->
         <div class="modal-body p-6 overflow-y-auto" style="max-height: calc(100vh - 12rem); scroll-behavior: smooth;">
 
-            <!-- System Status Alert -->
             @if($smsQuickStatus['system_ready'] ?? false)
                 <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(34, 197, 94, 0.1); border: 1px solid #22c55e;">
                     <div class="flex items-center">
@@ -1406,7 +1783,6 @@
                 </div>
             @endif
 
-            <!-- Stats Cards -->
             <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-6">
                 <div class="stat-card p-3 rounded-lg text-center" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                     <div class="text-2xl font-bold" style="color: var(--primary);">{{ $smsUsageStats['total_sent'] ?? 0 }}</div>
@@ -1434,7 +1810,6 @@
                 </div>
             </div>
 
-            <!-- Quick Actions -->
             <div class="mb-6">
                 <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
                     <i class="fas fa-bolt mr-2" style="color: var(--primary);"></i>Quick Actions
@@ -1490,7 +1865,6 @@
                 </div>
             </div>
 
-            <!-- Provider Status -->
             @if(!empty($smsProviders))
                 <div class="mb-6">
                     <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
@@ -1521,7 +1895,6 @@
                 </div>
             @endif
 
-            <!-- Recent SMS Activity -->
             @php
                 $recentSms = [];
                 try {
@@ -1569,7 +1942,6 @@
             @endif
         </div>
 
-        <!-- Modal Footer -->
         <div class="modal-footer p-4 border-t flex justify-between flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <div>
@@ -1588,7 +1960,7 @@
 </div>
 @endif
 
-<!-- ============ WHATSAPP MANAGEMENT MODAL — only when a provider is configured ============ -->
+<!-- ============ WHATSAPP MANAGEMENT MODAL ============ -->
 @if($isAuthorized && $whatsappProviderConfigured)
 <div id="whatsappManagementModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 2rem; padding-bottom: 2rem;">
     <div class="whatsapp-modal relative mx-auto my-auto"
@@ -1604,7 +1976,6 @@
                 border-radius: 16px;
                 overflow: hidden;">
 
-        <!-- Modal Header -->
         <div class="modal-header flex justify-between items-center p-6 border-b flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--card-bg);">
             <div>
@@ -1623,10 +1994,8 @@
             </button>
         </div>
 
-        <!-- Modal Body -->
         <div class="modal-body p-6 overflow-y-auto" style="max-height: calc(100vh - 12rem); scroll-behavior: smooth;">
 
-            <!-- System Status Alert -->
             @if($whatsappQuickStatus['system_ready'] ?? false)
                 <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(37, 211, 102, 0.1); border: 1px solid #25D366;">
                     <div class="flex items-center">
@@ -1654,7 +2023,6 @@
                 </div>
             @endif
 
-            <!-- Stats Cards -->
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
                 <div class="stat-card p-3 rounded-lg text-center" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                     <div class="text-2xl font-bold" style="color: #25D366;">{{ $totalWhatsAppProviders ?? 0 }}</div>
@@ -1674,7 +2042,6 @@
                 </div>
             </div>
 
-            <!-- Quick Actions -->
             <div class="mb-6">
                 <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
                     <i class="fas fa-bolt mr-2" style="color: var(--primary);"></i>Quick Actions
@@ -1742,7 +2109,6 @@
                 </div>
             </div>
 
-            <!-- Provider Status -->
             @if(!empty($whatsappProviders))
                 <div>
                     <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
@@ -1774,7 +2140,6 @@
             @endif
         </div>
 
-        <!-- Modal Footer -->
         <div class="modal-footer p-4 border-t flex justify-between flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <div>
@@ -1793,9 +2158,11 @@
 </div>
 @endif
 
-<!-- ============ SEARCH MODAL ============ -->
+{{-- ============================================ --}}
+{{-- ✅ SEARCH MODAL — Advanced search --}}
+{{-- ============================================ --}}
 @if($isAuthorized)
-<div id="searchModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 5rem; padding-bottom: 2rem;">
+<div id="searchModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 5rem; padding-bottom: 2rem;" aria-hidden="true">
     <div class="rounded-lg shadow-xl w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl search-modal-container relative mx-auto my-auto"
          style="background-color: var(--card-bg);
                 border: 1px solid var(--border-color);
@@ -1832,6 +2199,7 @@
 
         <!-- Modal Body -->
         <div class="flex-1 overflow-y-auto modal-scrollable-body p-6" style="max-height: calc(100vh - 14rem); scroll-behavior: smooth;">
+
             <!-- Info Message -->
             <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(var(--primary-rgb), 0.1); border: 1px solid var(--primary);">
                 <div class="flex items-start">
@@ -1839,8 +2207,8 @@
                     <div>
                         <p class="text-sm font-medium" style="color: var(--text-primary);">How to Search</p>
                         <p class="text-xs mt-1" style="color: var(--text-secondary);">
-                            Enter your search term and press Enter. You will be redirected to the search results page
-                            where you can filter results by category and fields.
+                            Type at least 2 characters. Press <kbd class="px-1.5 py-0.5 rounded text-xs" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">Enter</kbd>
+                            to see full results, or click the search button. The header quick-search shows results live as you type.
                         </p>
                     </div>
                 </div>
@@ -1851,12 +2219,14 @@
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                     Search Term
                 </label>
-                <input type="text" id="globalSearchInput" placeholder="Enter search term..."
+                <input type="text" id="globalSearchInput" placeholder="Enter search term (min 2 characters)..."
                        class="w-full px-4 py-3 rounded-lg transition-colors duration-200"
                        style="background-color: var(--bg-secondary);
                               border: 1px solid var(--border-color);
                               color: var(--text-primary);"
-                       data-role="{{ $currentUserType }}">
+                       data-role="{{ $searchRole }}"
+                       autocomplete="off"
+                       minlength="2">
             </div>
 
             <!-- Search Category -->
@@ -1878,10 +2248,12 @@
                     <option value="users">👥 Users</option>
                     <option value="registration-plans">🗺️ Registration Plans</option>
                     <option value="construction-registrations">🏗️ Construction Registrations</option>
+                    <option value="construction-contracts">📐 Construction Contracts</option>
                     <option value="properties">🏢 Properties</option>
                     <option value="property-units">🚪 Property Units</option>
                     <option value="payments">💳 Payments</option>
-                    <option value="invoices">📄 Invoices</option>
+                    <option value="invoices">📄 Landlord Invoices</option>
+                    <option value="tenant-invoices">🧾 Tenant Invoices</option>
                     <option value="security-posts">📍 Security Posts</option>
                     <option value="security-shifts">⏰ Security Shifts</option>
                     <option value="security-schedules">📅 Security Schedules</option>
@@ -1901,21 +2273,41 @@
                 </p>
             </div>
 
-            <!-- Recent Searches -->
-            <div id="recentSearches" class="mb-6">
+            {{-- ✅ Recent Searches — Alpine-powered --}}
+            <div id="recentSearches" class="mb-6" x-data="recentSearches()" x-init="init()">
                 <div class="flex justify-between items-center mb-2">
                     <label class="block text-sm font-medium" style="color: var(--text-primary);">
                         <i class="fas fa-history mr-1"></i> Recent Searches
                     </label>
-                    <button id="clearRecentSearchesBtn"
+                    <button type="button"
+                            @click="clearAll()"
                             class="text-xs px-2 py-1 rounded transition-colors duration-200"
-                            style="color: var(--danger); hover:opacity:80;"
+                            style="color: var(--danger);"
                             title="Clear all recent searches">
                         <i class="fas fa-trash-alt mr-1"></i>Clear All
                     </button>
                 </div>
-                <div id="recentSearchesList" class="flex flex-wrap gap-2">
-                    <!-- Recent searches will be populated here -->
+
+                <div class="flex flex-wrap gap-2">
+                    <template x-if="items.length === 0">
+                        <span class="text-xs" style="color: var(--text-secondary);">
+                            No recent searches yet.
+                        </span>
+                    </template>
+
+                    <template x-for="item in items" :key="item.q + '-' + item.c">
+                        <button type="button"
+                                @click="apply(item)"
+                                class="px-3 py-1.5 rounded-full text-xs transition-colors duration-200 flex items-center"
+                                style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
+                            <i class="fas fa-search mr-1 text-xs opacity-60"></i>
+                            <span x-text="item.q"></span>
+                            <span x-show="item.c && item.c !== 'all'"
+                                  class="ml-1 text-[10px] px-1.5 py-0.5 rounded-full"
+                                  style="background-color: rgba(var(--primary-rgb), 0.15); color: var(--primary);"
+                                  x-text="item.c"></span>
+                        </button>
+                    </template>
                 </div>
             </div>
         </div>
@@ -1933,20 +2325,23 @@
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <div class="flex space-x-2">
                 <button id="clearSearch"
+                        type="button"
                         class="px-3 py-2 text-xs font-medium transition-colors duration-200 rounded"
-                        style="color: var(--text-secondary); hover:background-color: var(--bg-primary);">
+                        style="color: var(--text-secondary);">
                     <i class="fas fa-eraser mr-1"></i>Clear
                 </button>
             </div>
             <div class="flex space-x-3">
                 <button id="cancelSearch"
+                        type="button"
                         class="px-4 py-2 text-sm font-medium transition-colors duration-200 rounded"
-                        style="color: var(--text-secondary); hover:background-color: var(--bg-primary);">
+                        style="color: var(--text-secondary);">
                     Cancel
                 </button>
                 <button id="performSearch"
+                        type="button"
                         class="px-4 py-2 text-sm font-medium rounded-lg transition-colors duration-200"
-                        style="background-color: var(--primary); color: white; hover:opacity:90;">
+                        style="background-color: var(--primary); color: white;">
                     <i class="fas fa-search mr-2"></i>Search
                 </button>
             </div>
@@ -1971,7 +2366,6 @@
                 border-radius: 16px;
                 overflow: hidden;">
 
-        <!-- Modal Header -->
         <div class="modal-header flex justify-between items-center p-6 border-b flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--card-bg);">
             <h3 class="text-xl font-semibold" style="color: var(--text-primary);">
@@ -1985,7 +2379,6 @@
             </button>
         </div>
 
-        <!-- Modal Body -->
         <div class="modal-body p-6 overflow-y-auto" style="max-height: calc(100vh - 12rem); scroll-behavior: smooth;">
             <div class="mb-8">
                 <div class="flex items-center justify-between mb-4">
@@ -2009,9 +2402,7 @@
                 </p>
             </div>
 
-            <!-- Split Layout -->
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- LANDLORD INVOICE SECTION -->
                 <div class="invoice-section landlord-section">
                     <div class="section-header flex items-center mb-4 pb-3 border-b" style="border-color: var(--border-color);">
                         <div class="w-1 h-6 bg-blue-500 rounded-full mr-3"></div>
@@ -2092,7 +2483,6 @@
                     </div>
                 </div>
 
-                <!-- TENANT INVOICE SECTION -->
                 <div class="invoice-section tenant-section">
                     <div class="section-header flex items-center mb-4 pb-3 border-b" style="border-color: var(--border-color);">
                         <div class="w-1 h-6 bg-green-500 rounded-full mr-3"></div>
@@ -2174,7 +2564,6 @@
                 </div>
             </div>
 
-            <!-- Quick Actions -->
             <div class="mt-8 pt-6 border-t" style="border-color: var(--border-color);">
                 <h4 class="text-sm font-semibold mb-4" style="color: var(--text-primary);">
                     <i class="fas fa-bolt mr-2"></i>Quick Actions
@@ -2199,7 +2588,6 @@
             </div>
         </div>
 
-        <!-- Modal Footer -->
         <div class="modal-footer p-6 border-t flex justify-end flex-shrink-0"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <button id="cancelInvoiceModal" class="px-4 py-2 text-sm font-medium rounded-lg"
@@ -2398,21 +2786,100 @@
 
         <div class="flex items-center space-x-4">
             @if($isAuthorized)
-            <div class="relative">
+            {{-- ============================================ --}}
+            {{-- ✅ Quick search — Alpine live dropdown (FAST) --}}
+            {{-- ============================================ --}}
+            <div class="relative" x-data="quickSearch()" @click.away="close()">
                 <div class="flex items-center space-x-2">
                     <div class="relative hidden md:block">
-                        <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2" style="color: var(--text-secondary);"></i>
-                        <input type="text" id="quickSearchInput" placeholder="Quick search... (Press /)"
+                        <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2"
+                           style="color: var(--text-secondary);"></i>
+
+                        <input type="text"
+                               id="quickSearchInput"
+                               x-model="query"
+                               @input.debounce.180ms="suggest()"
+                               @keydown="onKeydown($event)"
+                               @focus="query.length >= 2 ? (open = true, suggest()) : null"
+                               placeholder="Quick search... (Press /)"
                                class="header-search pl-10 pr-10 transition-colors duration-200"
                                style="color: var(--text-primary); background-color: var(--bg-secondary); border: 1px solid var(--border-color); outline: none;"
-                               data-role="{{ $currentUserType }}">
-                        <button id="advancedSearchBtn" class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 rounded"
+                               data-role="{{ $searchRole }}"
+                               autocomplete="off"
+                               aria-autocomplete="list"
+                               aria-expanded="false">
+
+                        <button id="advancedSearchBtn"
+                                type="button"
+                                class="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 rounded"
+                                title="Advanced search"
                                 style="color: var(--text-secondary);">
                             <i class="fas fa-sliders-h text-sm"></i>
                         </button>
+
+                        {{-- ✅ NEW: spinner shown while fetching (uses .search-spinner from layout) --}}
+                        <div x-show="loading" x-cloak
+                             class="absolute right-8 top-1/2 transform -translate-y-1/2">
+                            <span class="search-spinner"></span>
+                        </div>
+
+                        {{-- Live dropdown results --}}
+                        <div x-show="open" x-cloak
+                             x-transition:enter="transition ease-out duration-150"
+                             x-transition:enter-start="opacity-0 transform -translate-y-1"
+                             x-transition:enter-end="opacity-100 transform translate-y-0"
+                             class="absolute top-full mt-2 w-96 max-h-96 overflow-y-auto rounded-lg shadow-lg z-50"
+                             style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
+
+                            <template x-if="loading && isEmpty()">
+                                <div class="p-4 text-center text-sm" style="color: var(--text-secondary);">
+                                    <i class="fas fa-spinner fa-spin mr-2"></i>Searching…
+                                </div>
+                            </template>
+
+                            <template x-if="!loading && isEmpty()">
+                                <div class="p-4 text-center text-sm" style="color: var(--text-secondary);">
+                                    No results for "<span x-text="query" class="font-medium"></span>"
+                                </div>
+                            </template>
+
+                            <template x-for="(items, category) in results" :key="category">
+                                <div>
+                                    <div class="px-3 py-2 text-xs font-semibold uppercase tracking-wide flex items-center justify-between"
+                                         style="color: var(--text-secondary); background-color: var(--bg-secondary);">
+                                        <span x-text="category.replace(/_/g, ' ')"></span>
+                                        <span class="search-category-pill" x-text="items.length"></span>
+                                    </div>
+                                    <template x-for="item in items" :key="item.id">
+                                        <a :href="item.url"
+                                           :data-search-active="flatItems[activeIndex] && flatItems[activeIndex].id === item.id ? 'true' : 'false'"
+                                           class="flex items-center justify-between px-3 py-2 transition-colors duration-150"
+                                           :style="flatItems[activeIndex] && flatItems[activeIndex].id === item.id
+                                                    ? 'background-color: rgba(var(--primary-rgb),0.12); color: var(--text-primary);'
+                                                    : 'color: var(--text-primary);'">
+                                            <div class="min-w-0 flex-1">
+                                                <div class="text-sm font-medium truncate" x-text="item.label"></div>
+                                                <div class="text-xs truncate" style="color: var(--text-secondary);" x-text="item.sub"></div>
+                                            </div>
+                                            <i class="fas fa-arrow-right text-xs ml-2" style="color: var(--text-secondary);"></i>
+                                        </a>
+                                    </template>
+                                </div>
+                            </template>
+
+                            <template x-if="!loading && !isEmpty()">
+                                <a @click.prevent="goToFullResults()"
+                                   href="#"
+                                   class="block px-3 py-2 text-center text-sm border-t cursor-pointer"
+                                   style="color: var(--primary); border-color: var(--border-color);">
+                                    <i class="fas fa-list mr-1"></i>
+                                    View all results for "<span x-text="query"></span>"
+                                </a>
+                            </template>
+                        </div>
                     </div>
 
-                    <button id="mobileSearchBtn" class="md:hidden p-2 rounded-full"
+                    <button id="mobileSearchBtn" type="button" class="md:hidden p-2 rounded-full"
                             style="color: var(--text-secondary);">
                         <i class="fas fa-search"></i>
                     </button>
@@ -2426,7 +2893,6 @@
                             style="color: var(--text-secondary);">
                         <div class="relative">
                             <i class="fas fa-bell text-xl"></i>
-                            {{-- Use the SAFE sidebarUnreadCount variable --}}
                             @if($sidebarUnreadCount > 0)
                                 <span class="absolute -top-2 -right-2 rounded-full w-6 h-6 text-xs flex items-center justify-center"
                                       style="background-color: var(--danger); color: white;">
@@ -2467,35 +2933,43 @@
             </div>
 
             <div class="dropdown relative">
-    <button id="userMenuButton" class="flex items-center space-x-2">
-        <div class="avatar-minimal">
-            @if(Auth::user()->photo)
-                <img src="{{ Storage::disk('public')->url('users/photos/' . Auth::user()->photo) }}"
-                     alt="{{ Auth::user()->name }}"
-                     class="w-8 h-8 rounded-full object-cover"
-                     onerror="this.onerror=null;this.src='{{ asset('images/default-avatar.png') }}';">
-            @else
-                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-semibold">
-                    {{ substr(Auth::user()->name, 0, 2) }}
-                </div>
-            @endif
-        </div>
-        <i class="fas fa-chevron-down text-xs" style="color: var(--text-secondary);"></i>
-    </button>
+                <button id="userMenuButton" class="flex items-center space-x-2">
+                    <div class="avatar-minimal">
+                        @if(Auth::user()->photo)
+                            <img src="{{ Storage::disk('public')->url('users/photos/' . Auth::user()->photo) }}"
+                                 alt="{{ Auth::user()->name }}"
+                                 class="w-8 h-8 rounded-full object-cover"
+                                 onerror="this.onerror=null;this.src='{{ asset('images/default-avatar.png') }}';">
+                        @else
+                            <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-semibold">
+                                {{ substr(Auth::user()->name, 0, 2) }}
+                            </div>
+                        @endif
+                    </div>
+                    <i class="fas fa-chevron-down text-xs" style="color: var(--text-secondary);"></i>
+                </button>
 
                 <div id="userDropdown" class="dropdown-menu" style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-                    <a href="{{ route('admin.profile.edit') }}" class="dropdown-item">
-                        <i class="far fa-user mr-3"></i><span>My Profile</span>
-                    </a>
+                    @if($isDeveloper)
+                        <a href="{{ route('developer.profile.edit') }}" class="dropdown-item">
+                            <i class="far fa-user mr-3"></i><span>My Profile</span>
+                        </a>
+                    @else
+                        <a href="{{ route('admin.profile.edit') }}" class="dropdown-item">
+                            <i class="far fa-user mr-3"></i><span>My Profile</span>
+                        </a>
+                    @endif
+
                     <div class="border-t my-1" style="border-color: var(--border-color);"></div>
+
                     @if($isSuperAdmin)
                         <a href="{{ route('admin.system-settings.index') }}" class="dropdown-item">
                             <i class="fas fa-cog mr-3"></i><span>System Settings</span>
                         </a>
                     @endif
+
                     <a href="{{ route('notifications.index') }}" class="dropdown-item">
                         <i class="far fa-bell mr-3"></i><span>Notifications</span>
-                        {{-- Use the SAFE sidebarUnreadCount variable --}}
                         @if($sidebarUnreadCount > 0)
                             <span class="ml-auto text-xs px-2 py-1 rounded-full" style="background-color: var(--danger); color: white;">
                                 {{ $sidebarUnreadCount > 9 ? '9+' : $sidebarUnreadCount }}
@@ -2503,13 +2977,11 @@
                         @endif
                     </a>
 
-                    {{-- Payment Providers Link - Super Admin OR Developer --}}
                     @if($isSuperAdmin || $isDeveloper)
                         <a href="{{ route('admin.payment-providers.index') }}" class="dropdown-item">
                             <i class="fas fa-credit-card mr-3"></i><span>Payment Providers</span>
                         </a>
                     @endif
-
 
                     <div class="border-t my-1" style="border-color: var(--border-color);"></div>
                     <form method="POST" action="{{ route('logout') }}">

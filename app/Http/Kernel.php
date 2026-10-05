@@ -188,6 +188,7 @@ class Kernel extends HttpKernel
             // IP allowlisting on top).
             'auth',
             'developer',
+        'family.link.active' => \App\Http\Middleware\VerifyFamilyLinkStillActive::class,
         ],
     ];
 

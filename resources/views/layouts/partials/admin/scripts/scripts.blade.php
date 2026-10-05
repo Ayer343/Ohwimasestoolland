@@ -2409,7 +2409,7 @@ document.addEventListener('DOMContentLoaded', function() {
     window.openWhatsAppCompose = openWhatsAppCompose;
     window.testWhatsAppConnection = testWhatsAppConnection;
     window.refreshWhatsAppStatus = refreshWhatsAppStatus;
-    // window.loadNotifications removed — Alpine bell handles it
+    // window.loadNotifications removed ï¿½ Alpine bell handles it
     // window.markNotificationRead removed
     // window.markAllAsRead removed
     window.performFullSearch = performFullSearch;
@@ -2419,7 +2419,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // ============ INITIAL LOAD ============
     updateNotificationCount();
-    // loadNotifications() removed — Alpine bell loads on demand
+    // loadNotifications() removed ï¿½ Alpine bell loads on demand
     // Listen for theme changes
     document.addEventListener('theme-changed', function() {
         const currentTheme = getCurrentTheme();

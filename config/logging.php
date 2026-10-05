@@ -127,6 +127,78 @@ return [
             'path' => storage_path('logs/laravel.log'),
         ],
 
+        /*
+        |------------------------------------------------------------------
+        | Audit Log
+        |------------------------------------------------------------------
+        |
+        | Dedicated channel for security-sensitive business events:
+        |
+        |   - Property family link lifecycle
+        |       proposed / approved / rejected / revoked
+        |   - Family link access denials (middleware)
+        |   - User permanent deletion (PII scrub)
+        |   - Role changes on landlord accounts
+        |   - Ownership transfers
+        |
+        | Kept on its own daily file with a long retention window so it
+        | can be retained for compliance without bloating the main
+        | laravel.log. Set LOG_AUDIT_DAYS in .env to override.
+        |
+        */
+        'audit' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/audit.log'),
+            'level' => env('LOG_AUDIT_LEVEL', 'info'),
+            'days' => env('LOG_AUDIT_DAYS', 365),
+            'replace_placeholders' => true,
+        ],
+
+        /*
+        |------------------------------------------------------------------
+        | Security Log
+        |------------------------------------------------------------------
+        |
+        | Captures authentication and authorization events that warrant
+        | monitoring: failed logins, 403 denials on protected routes,
+        | suspicious rate-limit hits, and family-link access denials.
+        |
+        | Kept separate from `audit` because the volume and consumers
+        | are different — this channel is designed to be piped to a SIEM
+        | or security dashboard rather than read by humans.
+        |
+        */
+        'security' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/security.log'),
+            'level' => env('LOG_SECURITY_LEVEL', 'notice'),
+            'days' => env('LOG_SECURITY_DAYS', 180),
+            'replace_placeholders' => true,
+        ],
+
+        /*
+        |------------------------------------------------------------------
+        | Notifications Log
+        |------------------------------------------------------------------
+        |
+        | Records outbound notification deliveries (email / SMS /
+        | WhatsApp) for the family-link workflow and the wider
+        | multi-channel invitation system.
+        |
+        | Useful when debugging "the admin never received the email"
+        | or "the linked user didn't get the welcome SMS" support
+        | tickets. Each entry includes channel, provider, and message
+        | ID when available.
+        |
+        */
+        'notifications' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/notifications.log'),
+            'level' => env('LOG_NOTIFICATIONS_LEVEL', 'info'),
+            'days' => env('LOG_NOTIFICATIONS_DAYS', 90),
+            'replace_placeholders' => true,
+        ],
+
     ],
 
 ];

@@ -7,6 +7,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class WhatsAppTemplate extends Model
 {
+    /**
+     * ✅ FIX: Laravel's snake-caser would derive `whats_app_templates`
+     *    from `WhatsAppTemplate`, but the migration created `whatsapp_templates`.
+     *    Setting the table name explicitly removes the mismatch and
+     *    prevents SQLSTATE[42S02] "Table doesn't exist" errors.
+     */
+    protected $table = 'whatsapp_templates';
+
     protected $fillable = [
         'name',
         'description',
@@ -19,13 +27,13 @@ class WhatsAppTemplate extends Model
         'last_synced_at',
         'sync_status',
         'created_by',
-        'updated_by'
+        'updated_by',
     ];
 
     protected $casts = [
-        'variables' => 'array',
-        'is_default' => 'boolean',
-        'last_synced_at' => 'datetime'
+        'variables'      => 'array',
+        'is_default'     => 'boolean',
+        'last_synced_at' => 'datetime',
     ];
 
     protected $with = ['creator', 'updater'];
@@ -76,11 +84,11 @@ class WhatsAppTemplate extends Model
     public function render(array $data): string
     {
         $content = $this->content;
-        
+
         foreach ($data as $key => $value) {
             $content = str_replace('{{' . $key . '}}', $value, $content);
         }
-        
+
         return $content;
     }
 }

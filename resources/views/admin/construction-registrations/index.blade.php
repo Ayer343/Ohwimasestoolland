@@ -3,7 +3,7 @@
 @section('title', 'Construction & Property Registrations')
 
 @section('content')
-<div class="grid grid-cols-1 gap-6 mb-6">
+<div id="construction-registrations-page" class="grid grid-cols-1 gap-6 mb-6">
     <!-- Header Card -->
     <div class="card">
         <div class="flex justify-between items-center p-6">
@@ -2691,10 +2691,20 @@ document.addEventListener('keydown', function(e) {
 
 console.log('Admin Construction Registrations loaded successfully');
 </script>
+@endsection
 
+{{-- ============================================================ --}}
+{{-- STYLES — moved OUT of @section('scripts') into @push('styles') --}}
+{{-- so they render in <head> via the layout's @stack('styles'),    --}}
+{{-- and don't leak into the header/sidebar.                        --}}
+{{-- The global `.hidden`, `.card`, `.btn-primary`, `.form-input`,  --}}
+{{-- `.modal*` rules have been scoped to the page wrapper and the   --}}
+{{-- specific modal IDs so they don't override the header's styles. --}}
+{{-- ============================================================ --}}
+@push('styles')
 <style>
-/* Bulk selection styles */
-.bulk-checkbox {
+/* Bulk checkbox — scoped to page + modals */
+#construction-registrations-page .bulk-checkbox {
     width: 18px;
     height: 18px;
     border-radius: 4px;
@@ -2704,12 +2714,12 @@ console.log('Admin Construction Registrations loaded successfully');
     transition: all 0.2s ease;
 }
 
-.bulk-checkbox:checked {
+#construction-registrations-page .bulk-checkbox:checked {
     background-color: var(--primary);
     border-color: var(--primary);
 }
 
-.bulk-checkbox:checked::after {
+#construction-registrations-page .bulk-checkbox:checked::after {
     content: '✓';
     color: white;
     font-size: 12px;
@@ -2719,36 +2729,54 @@ console.log('Admin Construction Registrations loaded successfully');
     height: 100%;
 }
 
-/* Card styles */
-.card {
+/* Card — scoped to page + modal containers to avoid touching the header */
+#construction-registrations-page .card {
     background-color: var(--card-bg) !important;
     border: 1px solid var(--border-color) !important;
     border-radius: 12px !important;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
 }
 
-/* Button styles */
-.btn-primary {
+/* Primary button — scoped */
+#construction-registrations-page .btn-primary,
+#quickAssignModal .btn-primary,
+#quickRejectModal .btn-primary,
+#exportModal .btn-primary,
+#singleArchiveModal .btn-primary {
     background-color: var(--primary) !important;
     color: white !important;
     border: 1px solid var(--primary) !important;
     transition: all 0.2s ease;
 }
 
-.btn-primary:hover {
+#construction-registrations-page .btn-primary:hover,
+#quickAssignModal .btn-primary:hover,
+#quickRejectModal .btn-primary:hover,
+#exportModal .btn-primary:hover,
+#singleArchiveModal .btn-primary:hover {
     background-color: var(--secondary) !important;
     border-color: var(--secondary) !important;
     transform: translateY(-1px);
 }
 
-.btn-primary:disabled {
+#construction-registrations-page .btn-primary:disabled,
+#quickAssignModal .btn-primary:disabled {
     opacity: 0.7;
     cursor: not-allowed;
     transform: none;
 }
 
-/* Form elements */
-.form-input, .form-select {
+/* Form elements — scoped to page + modals */
+#construction-registrations-page .form-input,
+#construction-registrations-page .form-select,
+#quickAssignModal .form-input,
+#quickAssignModal .form-select,
+#quickRejectModal .form-input,
+#quickRejectModal .form-select,
+#exportModal .form-input,
+#exportModal .form-select,
+#singleArchiveModal .form-input,
+#singleArchiveModal .form-select {
     background-color: var(--card-bg) !important;
     color: var(--text-primary) !important;
     border: 1px solid var(--border-color) !important;
@@ -2756,13 +2784,23 @@ console.log('Admin Construction Registrations loaded successfully');
     transition: all 0.2s ease !important;
 }
 
-.form-input:focus, .form-select:focus {
+#construction-registrations-page .form-input:focus,
+#construction-registrations-page .form-select:focus,
+#quickAssignModal .form-input:focus,
+#quickAssignModal .form-select:focus,
+#quickRejectModal .form-input:focus,
+#quickRejectModal .form-select:focus,
+#exportModal .form-input:focus,
+#exportModal .form-select:focus,
+#singleArchiveModal .form-input:focus,
+#singleArchiveModal .form-select:focus {
     outline: none !important;
     border-color: var(--primary) !important;
     box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1) !important;
 }
 
-.form-input:disabled {
+#construction-registrations-page .form-input:disabled,
+#quickRejectModal .form-input:disabled {
     opacity: 0.6;
     cursor: not-allowed;
 }
@@ -2789,14 +2827,14 @@ console.log('Admin Construction Registrations loaded successfully');
     cursor: not-allowed;
 }
 
-/* Duplicate row highlighting */
-.duplicate-row {
+/* Duplicate row highlighting — scoped so only rows in this page are affected */
+#construction-registrations-page .duplicate-row {
     border-left: 4px solid var(--warning) !important;
     background-color: rgba(var(--warning-rgb), 0.02) !important;
     position: relative;
 }
 
-.duplicate-row:hover {
+#construction-registrations-page .duplicate-row:hover {
     background-color: rgba(var(--warning-rgb), 0.05) !important;
 }
 
@@ -2818,8 +2856,8 @@ console.log('Admin Construction Registrations loaded successfully');
     display: none;
 }
 
-/* Loading overlay */
-.loading-overlay {
+/* Loading overlay — fixed, so global rule is fine, but scoped tightly */
+#loadingOverlay.loading-overlay {
     position: fixed;
     top: 0;
     left: 0;
@@ -2832,22 +2870,25 @@ console.log('Admin Construction Registrations loaded successfully');
     z-index: 9999;
 }
 
-.loading-overlay.hidden {
+#loadingOverlay.loading-overlay.hidden {
     display: none;
 }
 
-.loading-overlay .animate-spin {
-    animation: spin 1s linear infinite;
+#loadingOverlay .animate-spin {
+    animation: crSpin 1s linear infinite;
     border-top-color: transparent;
 }
 
-@keyframes spin {
+@keyframes crSpin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
 }
 
-/* Modal styles */
-.modal {
+/* Modal — scoped to specific modal IDs so header modals aren't affected */
+#quickAssignModal.modal,
+#quickRejectModal.modal,
+#exportModal.modal,
+#singleArchiveModal.modal {
     position: fixed;
     top: 0;
     left: 0;
@@ -2856,11 +2897,17 @@ console.log('Admin Construction Registrations loaded successfully');
     z-index: 9999;
 }
 
-.modal.hidden {
+#quickAssignModal.modal.hidden,
+#quickRejectModal.modal.hidden,
+#exportModal.modal.hidden,
+#singleArchiveModal.modal.hidden {
     display: none;
 }
 
-.modal-overlay {
+#quickAssignModal .modal-overlay,
+#quickRejectModal .modal-overlay,
+#exportModal .modal-overlay,
+#singleArchiveModal .modal-overlay {
     position: absolute;
     top: 0;
     left: 0;
@@ -2870,7 +2917,10 @@ console.log('Admin Construction Registrations loaded successfully');
     backdrop-filter: blur(5px);
 }
 
-.modal-container {
+#quickAssignModal .modal-container,
+#quickRejectModal .modal-container,
+#exportModal .modal-container,
+#singleArchiveModal .modal-container {
     position: relative;
     background-color: var(--card-bg);
     border-radius: 16px;
@@ -2880,10 +2930,13 @@ console.log('Admin Construction Registrations loaded successfully');
     overflow-y: auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
     border: 1px solid var(--border-color);
-    animation: modalFadeIn 0.3s ease-out;
+    animation: crModalFadeIn 0.3s ease-out;
 }
 
-.modal-header {
+#quickAssignModal .modal-header,
+#quickRejectModal .modal-header,
+#exportModal .modal-header,
+#singleArchiveModal .modal-header {
     padding: 1.5rem 1.5rem 1rem 1.5rem;
     border-bottom: 1px solid var(--border-color);
     display: flex;
@@ -2891,14 +2944,20 @@ console.log('Admin Construction Registrations loaded successfully');
     align-items: center;
 }
 
-.modal-title {
+#quickAssignModal .modal-title,
+#quickRejectModal .modal-title,
+#exportModal .modal-title,
+#singleArchiveModal .modal-title {
     font-size: 1.25rem;
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
 }
 
-.modal-close {
+#quickAssignModal .modal-close,
+#quickRejectModal .modal-close,
+#exportModal .modal-close,
+#singleArchiveModal .modal-close {
     background: none;
     border: none;
     color: var(--text-secondary);
@@ -2909,16 +2968,25 @@ console.log('Admin Construction Registrations loaded successfully');
     transition: all 0.2s ease;
 }
 
-.modal-close:hover {
+#quickAssignModal .modal-close:hover,
+#quickRejectModal .modal-close:hover,
+#exportModal .modal-close:hover,
+#singleArchiveModal .modal-close:hover {
     background-color: rgba(var(--primary-rgb), 0.1);
     color: var(--text-primary);
 }
 
-.modal-body {
+#quickAssignModal .modal-body,
+#quickRejectModal .modal-body,
+#exportModal .modal-body,
+#singleArchiveModal .modal-body {
     padding: 1.5rem;
 }
 
-.modal-footer {
+#quickAssignModal .modal-footer,
+#quickRejectModal .modal-footer,
+#exportModal .modal-footer,
+#singleArchiveModal .modal-footer {
     padding: 1rem 1.5rem;
     border-top: 1px solid var(--border-color);
     display: flex;
@@ -2928,7 +2996,7 @@ console.log('Admin Construction Registrations loaded successfully');
     border-radius: 0 0 16px 16px;
 }
 
-@keyframes modalFadeIn {
+@keyframes crModalFadeIn {
     from {
         opacity: 0;
         transform: scale(0.9) translateY(-20px);
@@ -2939,8 +3007,8 @@ console.log('Admin Construction Registrations loaded successfully');
     }
 }
 
-/* Action button styles */
-.action-btn {
+/* Action button styles — scoped to page + modals (modals don't use them, but kept for future) */
+#construction-registrations-page .action-btn {
     width: 32px;
     height: 32px;
     border-radius: 6px;
@@ -2953,7 +3021,7 @@ console.log('Admin Construction Registrations loaded successfully');
     text-decoration: none;
 }
 
-.action-btn:hover {
+#construction-registrations-page .action-btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
@@ -2969,23 +3037,18 @@ console.log('Admin Construction Registrations loaded successfully');
     border-color: var(--primary) !important;
 }
 
-/* Applicant icon */
-.applicant-icon {
+/* Applicant icon — scoped to page rows */
+#construction-registrations-page .applicant-icon {
     transition: all 0.2s ease;
 }
 
-tr:hover .applicant-icon {
+#construction-registrations-page tbody tr:hover .applicant-icon {
     transform: scale(1.1);
 }
 
-/* Table hover effects */
-tbody tr:hover {
+/* Table hover effects — scoped to page */
+#construction-registrations-page tbody tr:hover {
     background-color: rgba(var(--primary-rgb), 0.02) !important;
-}
-
-/* Stats cards grid */
-.grid.grid-cols-1.md\:grid-cols-7 {
-    grid-template-columns: repeat(7, 1fr);
 }
 
 /* Bulk merge container styles */
@@ -3004,65 +3067,77 @@ tbody tr:hover {
     box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1) !important;
 }
 
-/* Responsive adjustments */
+/* Responsive adjustments — scoped to page + modals */
 @media (max-width: 768px) {
-    .grid.grid-cols-1.md\:grid-cols-7 {
-        grid-template-columns: repeat(3, 1fr);
-    }
-    
-    .grid.grid-cols-1.md\:grid-cols-4 {
+    #construction-registrations-page .grid.grid-cols-1.md\:grid-cols-4 {
         grid-template-columns: 1fr;
     }
     
-    table th, table td {
+    #construction-registrations-page table th,
+    #construction-registrations-page table td {
         padding: 0.5rem;
         font-size: 0.875rem;
     }
     
-    .modal-container {
+    #quickAssignModal .modal-container,
+    #quickRejectModal .modal-container,
+    #exportModal .modal-container,
+    #singleArchiveModal .modal-container {
         margin: 1rem;
     }
 }
 
 @media (max-width: 640px) {
-    .grid.grid-cols-1.md\:grid-cols-7 {
-        grid-template-columns: repeat(2, 1fr);
-    }
-    
-    .p-6 {
+    #construction-registrations-page .p-6 {
         padding: 1rem !important;
     }
     
-    .text-xl {
+    #construction-registrations-page .text-xl {
         font-size: 1.25rem !important;
     }
     
-    .text-2xl {
+    #construction-registrations-page .text-2xl {
         font-size: 1.5rem !important;
     }
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
+/* Scrollbar styling — scoped so only this page's scrollable areas pick it up */
+#construction-registrations-page ::-webkit-scrollbar,
+#quickAssignModal ::-webkit-scrollbar,
+#quickRejectModal ::-webkit-scrollbar,
+#exportModal ::-webkit-scrollbar,
+#singleArchiveModal ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
-::-webkit-scrollbar-track {
+#construction-registrations-page ::-webkit-scrollbar-track,
+#quickAssignModal ::-webkit-scrollbar-track,
+#quickRejectModal ::-webkit-scrollbar-track,
+#exportModal ::-webkit-scrollbar-track,
+#singleArchiveModal ::-webkit-scrollbar-track {
     background: rgba(var(--primary-rgb), 0.05);
     border-radius: 4px;
 }
 
-::-webkit-scrollbar-thumb {
+#construction-registrations-page ::-webkit-scrollbar-thumb,
+#quickAssignModal ::-webkit-scrollbar-thumb,
+#quickRejectModal ::-webkit-scrollbar-thumb,
+#exportModal ::-webkit-scrollbar-thumb,
+#singleArchiveModal ::-webkit-scrollbar-thumb {
     background: rgba(var(--primary-rgb), 0.2);
     border-radius: 4px;
 }
 
-::-webkit-scrollbar-thumb:hover {
+#construction-registrations-page ::-webkit-scrollbar-thumb:hover,
+#quickAssignModal ::-webkit-scrollbar-thumb:hover,
+#quickRejectModal ::-webkit-scrollbar-thumb:hover,
+#exportModal ::-webkit-scrollbar-thumb:hover,
+#singleArchiveModal ::-webkit-scrollbar-thumb:hover {
     background: rgba(var(--primary-rgb), 0.3);
 }
 
-/* Spinner */
+/* Spinner — used inside page buttons + modals */
 .spinner {
     display: inline-block;
     width: 16px;
@@ -3070,7 +3145,7 @@ tbody tr:hover {
     border: 2px solid rgba(255, 255, 255, 0.3);
     border-radius: 50%;
     border-top-color: white;
-    animation: spin 0.6s linear infinite;
+    animation: crSpin 0.6s linear infinite;
     margin-right: 8px;
 }
 
@@ -3079,11 +3154,6 @@ tbody tr:hover {
     content: '*';
     color: var(--danger);
     margin-left: 4px;
-}
-
-/* Hide element class */
-.hidden {
-    display: none !important;
 }
 
 /* Notification channels container transition */
@@ -3111,14 +3181,14 @@ tbody tr:hover {
 
 /* Plan availability warning styles */
 #planAvailabilityWarning {
-    animation: fadeIn 0.3s ease;
+    animation: crFadeIn 0.3s ease;
 }
 
 #planAvailabilitySuccess {
-    animation: fadeIn 0.3s ease;
+    animation: crFadeIn 0.3s ease;
 }
 
-@keyframes fadeIn {
+@keyframes crFadeIn {
     from { opacity: 0; transform: translateY(-5px); }
     to { opacity: 1; transform: translateY(0); }
 }
@@ -3143,5 +3213,38 @@ tbody tr:hover {
 #bulkSelectedSummary .text-success { color: var(--success); }
 #bulkSelectedSummary .text-warning { color: var(--warning); }
 #bulkSelectedSummary .text-danger { color: var(--danger); }
+
+/* ============================================================ */
+/* SCOPED .hidden OVERRIDE                                      */
+/* The previous GLOBAL `.hidden { display: none !important; }`  */
+/* was leaking into the header (search bar, dropdowns, Alpine   */
+/* x-show, etc.). Now scoped to only the modal IDs and specific */
+/* containers this page controls.                               */
+/* ============================================================ */
+
+#quickAssignModal.hidden,
+#quickRejectModal.hidden,
+#exportModal.hidden,
+#singleArchiveModal.hidden,
+#construction-registrations-page .hidden,
+#bulkAssignContainer.hidden,
+#bulkMergeContainer.hidden,
+#bulkArchiveContainer.hidden,
+#bulkApprovalContainer.hidden,
+#bulkRejectContainer.hidden,
+#bulkNeedsInfoContainer.hidden,
+#bulkActionStatus.hidden,
+#channelWarning.hidden,
+#notificationChannelsContainer.hidden,
+#singleArchiveChannels.hidden,
+#planAvailabilityWarning.hidden,
+#planAvailabilitySuccess.hidden,
+#bulkApprovalProgress.hidden,
+#customMessageContainer.hidden,
+#bulkCustomPropertyField.hidden,
+#bulkInvitationChannels.hidden,
+#bulkTenantInvitationChannels.hidden {
+    display: none !important;
+}
 </style>
-@endsection
+@endpush

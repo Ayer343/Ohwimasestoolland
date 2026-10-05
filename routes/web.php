@@ -11,7 +11,7 @@ use App\Http\Controllers\HomeController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\UserInvitationController; 
 use App\Http\Controllers\PropertyController;
-use App\Http\Controllers\field\FieldAgentPropertyController;
+use App\Http\Controllers\Field\FieldAgentPropertyController;
 use App\Http\Controllers\PropertyTrashController;
 use App\Http\Controllers\PropertyInvitationController;
 use App\Http\Controllers\PropertyUnitController;
@@ -129,6 +129,9 @@ use App\Http\Controllers\ThemePreviewController;
 use App\Http\Controllers\Landlord\WasteCollectionController;
 use App\Http\Middleware\EnsureRootSanitationAccess;
 use App\Http\Controllers\LiveChatController;
+use App\Http\Controllers\SearchController;
+use App\Http\Controllers\Landlord\PropertyFamilyLinkController;
+use App\Http\Controllers\Admin\FamilyLinkApprovalController;
 use Illuminate\Support\Facades\Storage;
 
 use Illuminate\Support\Facades\Auth;
@@ -5576,21 +5579,92 @@ Route::get('api/users/check-exists', [UserManagementController::class, 'checkUse
 Route::get('api/users/{user}/public-profile', [UserManagementController::class, 'getPublicProfile'])->name('api.users.public-profile')->middleware('throttle:60,1');
 Route::get('referral/{code}', [UserManagementController::class, 'trackReferral'])->name('referral.track')->middleware('throttle:30,1');
 
+
 /*
 |--------------------------------------------------------------------------
-| Property Management Routes 
+| Property Management Routes
 |--------------------------------------------------------------------------
 */
 
-// =============================================
-// ADMIN-ONLY PROPERTY MANAGEMENT ROUTES
-// =============================================
+/* =========================================================================
+   PUBLIC — LANDLORD REGISTRATION COMPLETION  (NO AUTH)
+   =========================================================================
 
+   These routes are intentionally placed OUTSIDE every auth middleware
+   group. A landlord who has been invited to register receives a link
+   with a signed one-time token via email/SMS. The token IS the
+   credential — requiring them to log in first defeats the entire
+   purpose of the invite flow (they don't have an account yet).
+
+   The controller validates:
+     - the token signature
+     - the token hasn't expired
+     - the token hasn't already been consumed
+     - the associated invitation is still in a "pending" state
+
+   Throttle limits are applied to block token enumeration and abuse
+   on this unauthenticated surface.
+   ========================================================================= */
+Route::prefix('landlord')->name('landlord.')->group(function () {
+
+    Route::get(
+        '/complete-registration/{token}',
+        [PropertyController::class, 'showLandlordRegistrationForm']
+    )
+        ->middleware('throttle:20,1')   // 20 views/min/IP
+        ->name('registration.complete');
+
+    Route::post(
+        '/complete-registration/{token}',
+        [PropertyController::class, 'completeLandlordRegistration']
+    )
+        ->middleware('throttle:5,1')    // 5 submissions/min/IP
+        ->name('registration.complete.submit');
+});
+
+/* =========================================================================
+   ADMIN + SUPER ADMIN PROPERTY MANAGEMENT ROUTES  (user type 0, 1)
+   =========================================================================
+
+   Super admins (0) and admins (1) share this group. Family-link review
+   endpoints live at the top so literal paths ("bulk-review") are
+   registered before any wildcard ("{link}") — otherwise Laravel would
+   bind the literal string as a model ID and 404.
+*/
 Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
-    
-    // =============================================
-    // MAIN PROPERTY CRUD ROUTES
-    // =============================================
+
+    /* -----------------------------------------------------------------
+       PROPERTY FAMILY LINK — ADMIN REVIEW QUEUE
+       -----------------------------------------------------------------
+       Admins review, approve, reject, revoke, and bulk-process family
+       link proposals submitted by landlords.
+    */
+    Route::prefix('admin/family-links')->name('admin.family-links.')->group(function () {
+
+        // List / filter pending and historical proposals
+        Route::get('/', [FamilyLinkApprovalController::class, 'index'])
+            ->name('index');
+
+        // Bulk approve/reject — MUST be before {link}
+        Route::post('/bulk-review', [FamilyLinkApprovalController::class, 'bulkReview'])
+            ->name('bulk-review');
+
+        // Inspect one proposal
+        Route::get('/{link}', [FamilyLinkApprovalController::class, 'show'])
+            ->name('show');
+
+        // Approve or reject
+        Route::post('/{link}/review', [FamilyLinkApprovalController::class, 'review'])
+            ->name('review');
+
+        // Revoke a previously approved link
+        Route::post('/{link}/revoke', [FamilyLinkApprovalController::class, 'revoke'])
+            ->name('revoke');
+    });
+
+    /* -----------------------------------------------------------------
+       MAIN PROPERTY CRUD ROUTES
+       ----------------------------------------------------------------- */
     Route::get('properties', [PropertyController::class, 'index'])->name('properties.index');
     Route::get('properties/create', [PropertyController::class, 'create'])->name('properties.create');
     Route::post('properties', [PropertyController::class, 'store'])->name('properties.store');
@@ -5598,20 +5672,20 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
     Route::put('properties/{property}', [PropertyController::class, 'update'])->name('properties.update');
     Route::delete('properties/{property}', [PropertyController::class, 'destroy'])->name('properties.destroy');
     Route::put('/{property}/coordinates', [PropertyController::class, 'updateCoordinates'])
-            ->name('coordinates.update');
+        ->name('coordinates.update');
     Route::get('/properties/geocode', [PropertyController::class, 'geocodeDigitalAddress'])
-    ->name('properties.geocode');
-    
-    // =============================================
-    // PROPERTY EXPORT & STATISTICS
-    // =============================================
+        ->name('properties.geocode');
+
+    /* -----------------------------------------------------------------
+       PROPERTY EXPORT & STATISTICS
+       ----------------------------------------------------------------- */
     Route::get('properties/export', [PropertyController::class, 'export'])->name('properties.export');
     Route::get('properties/type-stats', [PropertyController::class, 'getPropertyTypeStats'])->name('properties.type-stats');
     Route::get('properties/global-sequence-stats', [PropertyController::class, 'globalSequenceStats'])->name('properties.global-sequence-stats');
-    
-    // =============================================
-    // PROPERTY FILTERING ROUTES
-    // =============================================
+
+    /* -----------------------------------------------------------------
+       PROPERTY FILTERING ROUTES
+       ----------------------------------------------------------------- */
     Route::get('properties/street/{streetName}', [PropertyController::class, 'getByStreet'])->name('properties.by-street');
     Route::get('properties/landlord/{landlordId}', [PropertyController::class, 'getByLandlord'])->name('properties.by-landlord');
     Route::get('properties/digital-address/{digitalAddress}', [PropertyController::class, 'getByDigitalAddress'])->name('properties.by-digital-address');
@@ -5620,10 +5694,10 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
     Route::get('properties/with-digital-address', [PropertyController::class, 'getWithDigitalAddress'])->name('properties.with-digital-address');
     Route::get('properties/without-digital-address', [PropertyController::class, 'getWithoutDigitalAddress'])->name('properties.without-digital-address');
     Route::get('properties/type/{typeSlug}', [PropertyController::class, 'getByPropertyType'])->name('properties.by-type');
-    
-    // =============================================
-    // PROPERTY TENANT MANAGEMENT
-    // =============================================
+
+    /* -----------------------------------------------------------------
+       PROPERTY TENANT MANAGEMENT
+       ----------------------------------------------------------------- */
     Route::prefix('properties/{property}/tenants')->name('properties.tenants.')->group(function () {
         Route::get('/', [PropertyController::class, 'getPropertyTenants'])->name('index');
         Route::post('/', [PropertyController::class, 'addTenant'])->name('store');
@@ -5632,22 +5706,147 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
         Route::post('/{tenant}/resend-invitation', [PropertyController::class, 'resendTenantInvitation'])->name('resend-invitation');
     });
 
-    // =============================================
-    // DUPLICATE PREVENTION ROUTES
-    // =============================================
+    /* -----------------------------------------------------------------
+       DUPLICATE PREVENTION ROUTES
+       ----------------------------------------------------------------- */
     Route::post('properties/check-duplicate', [PropertyController::class, 'checkDuplicate'])
         ->name('properties.check-duplicate');
-    
+
     Route::post('properties/suggest-similar', [PropertyController::class, 'suggestSimilarProperties'])
         ->name('properties.suggest-similar');
-    
-    // =============================================
-    // PROPERTY PATTERN CHECK ROUTES (AJAX/API)
-    // =============================================
+
+    /* -----------------------------------------------------------------
+       PROPERTY PATTERN CHECK ROUTES (AJAX/API)
+       ----------------------------------------------------------------- */
     Route::prefix('properties')->name('properties.')->group(function () {
         Route::get('/check-pattern/{pattern}', [PropertyController::class, 'checkPattern'])->name('check-pattern');
         Route::post('/check-pattern', [PropertyController::class, 'checkPatternPost'])->name('check-pattern.post');
     });
+});
+
+/* =========================================================================
+   LANDLORD ROUTES  (user type 2)
+   =========================================================================
+
+   Landlords access properties they own PLUS properties they have been
+   linked to via an approved family link. The `family.link.active`
+   middleware enforces that boundary at the HTTP layer so revoked links
+   are bounced instantly — even mid-session.
+
+   Route ordering rule: literal paths before wildcards, always.
+*/
+Route::middleware(['auth', 'multi.auth.user:2'])->group(function () {
+
+    /* -----------------------------------------------------------------
+       PROPERTY FAMILY LINK — LANDLORD VIEW
+       ----------------------------------------------------------------- */
+    Route::prefix('landlord/family-links')->name('landlord.family-links.')->group(function () {
+
+        // Dashboard: all links across all properties
+        Route::get('/', [PropertyFamilyLinkController::class, 'index'])
+            ->name('index');
+
+        // Submit a new proposal
+        Route::post('/', [PropertyFamilyLinkController::class, 'store'])
+            ->name('store');
+
+        // Cancel a pending proposal
+        Route::delete('/{link}', [PropertyFamilyLinkController::class, 'cancel'])
+            ->name('cancel');
+
+        // Revoke an approved link
+        Route::post('/{link}/revoke', [PropertyFamilyLinkController::class, 'revoke'])
+            ->name('revoke');
+    });
+
+    // Family links for one specific property
+    Route::get(
+        'landlord/properties/{property}/family-links',
+        [PropertyFamilyLinkController::class, 'forProperty']
+    )->name('landlord.properties.family-links');
+
+    Route::post(
+    'landlord/family-links/{link}/confirm',
+    [PropertyFamilyLinkController::class, 'confirm']
+    )->name('landlord.family-links.confirm');
+
+    /* -----------------------------------------------------------------
+       PROPERTY VIEWING ROUTES (READ ONLY)
+       ----------------------------------------------------------------- */
+    Route::get('my-properties', [PropertyController::class, 'myProperties'])
+        ->name('properties.my-properties');
+
+    Route::get('landlord/properties', [PropertyController::class, 'myProperties'])
+        ->name('landlord.properties.index');
+
+    /*
+    |------------------------------------------------------------------
+    | Family-link-guarded landlord property routes.
+    |
+    | Any route that resolves `{property}` and grants access to
+    | property-scoped data runs through `family.link.active` so that:
+    |   - Owners pass (ownership check inside the middleware)
+    |   - Linked members pass with the appropriate permission
+    |   - Revoked / rejected links get a 403 immediately
+    |------------------------------------------------------------------
+    */
+    Route::middleware(['family.link.active'])->group(function () {
+
+        // View a property
+        Route::get('landlord/properties/{property}', [PropertyController::class, 'show'])
+            ->name('landlord.properties.show');
+
+        // Update construction details for a specific property
+        Route::put(
+            'landlord/properties/{property}/construction',
+            [PropertyController::class, 'updateConstructionWithProperty']
+        )->name('properties.update-construction-with-property');
+
+        // Photo management
+        Route::prefix('landlord/properties')->name('landlord.properties.')->group(function () {
+
+            Route::post('{property}/upload-photos', [PropertyController::class, 'landlordUploadPhotos'])
+                ->name('upload-photos');
+
+            Route::delete('{property}/delete-photo/{photo}', [PropertyController::class, 'landlordDeletePhoto'])
+                ->name('delete-photo');
+
+            Route::put('{property}/set-primary-photo/{photo}', [PropertyController::class, 'landlordSetPrimaryPhoto'])
+                ->name('set-primary-photo');
+
+            Route::get('{property}/photo-gallery', [PropertyController::class, 'landlordGetPhotoGallery'])
+                ->name('photo-gallery');
+
+            Route::get('{property}/download-all-photos', [PropertyController::class, 'landlordDownloadAllPhotos'])
+                ->name('download-all-photos');
+        });
+    });
+
+    /* -----------------------------------------------------------------
+       LANDLORD CONSTRUCTION DETAILS — PROPERTY ID IN BODY
+       -----------------------------------------------------------------
+       This endpoint accepts `property_id` in the POST body rather than
+       in the URL, so the family-link middleware can't resolve the model
+       from the route. The controller's own `canUpdateProperty` check
+       handles authorization for this case.
+       ----------------------------------------------------------------- */
+    Route::post(
+        'landlord/properties/update-construction',
+        [PropertyController::class, 'updateConstruction']
+    )->name('properties.update-construction');
+
+    // Mark a construction-complete property as active
+    Route::post('properties/mark-active', [PropertyController::class, 'markActive'])
+        ->name('properties.mark-active');
+
+    /* -----------------------------------------------------------------
+       LANDLORD INVITATION MANAGEMENT ROUTES
+       ----------------------------------------------------------------- */
+    Route::prefix('properties/{property}')->name('properties.')->group(function () {
+        Route::get('/sms-invitation-stats', [PropertyInvitationController::class, 'getSmsInvitationStats'])
+            ->name('sms-invitation-stats');
+    });
+});
 
     // =============================================
     // ✅ PROPERTY TRASH MANAGEMENT ROUTES
@@ -5667,71 +5866,9 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
         ->name('properties.trash.force-delete');
     Route::delete('properties/trash/empty', [PropertyTrashController::class, 'emptyTrash'])
         ->name('properties.trash.empty');
-});
 
-/*
-|--------------------------------------------------------------------------
-| Public Landlord Registration Completion Routes
-|--------------------------------------------------------------------------
-*/
 
-Route::prefix('landlord')->name('landlord.')->group(function () {
-    Route::get('/complete-registration/{token}', [PropertyController::class, 'showLandlordRegistrationForm'])
-        ->name('registration.complete');
-    
-    Route::post('/complete-registration/{token}', [PropertyController::class, 'completeLandlordRegistration'])
-        ->name('registration.complete.submit');
-});
 
-/*
-|--------------------------------------------------------------------------
-| Landlord-specific Routes (MUST BE BEFORE SHARED ROUTES)
-|--------------------------------------------------------------------------
-*/
-
-Route::middleware(['auth', 'multi.auth.user:2'])->group(function () {
-    
-    // =============================================
-    // PROPERTY VIEWING ROUTES (READ ONLY)
-    // =============================================
-    Route::get('my-properties', [PropertyController::class, 'myProperties'])->name('properties.my-properties');
-    Route::get('landlord/properties', [PropertyController::class, 'myProperties'])->name('landlord.properties.index');
-    Route::get('landlord/properties/{property}', [PropertyController::class, 'show'])->name('landlord.properties.show');
-    
-    // =============================================
-    // LANDLORD CONSTRUCTION DETAILS UPDATE ROUTE
-    // =============================================
-    Route::post('landlord/properties/update-construction', [PropertyController::class, 'updateConstruction'])
-        ->name('properties.update-construction');
-    Route::put('landlord/properties/{property}/construction', [PropertyController::class, 'updateConstructionWithProperty'])
-        ->name('properties.update-construction-with-property');
-    
-    // =============================================
-    // LANDLORD PHOTO MANAGEMENT ROUTES
-    // =============================================
-    Route::prefix('landlord/properties')->name('landlord.properties.')->group(function () {
-        Route::post('{property}/upload-photos', [PropertyController::class, 'landlordUploadPhotos'])
-            ->name('upload-photos');
-        Route::delete('{property}/delete-photo/{photo}', [PropertyController::class, 'landlordDeletePhoto'])
-            ->name('delete-photo');
-        Route::put('{property}/set-primary-photo/{photo}', [PropertyController::class, 'landlordSetPrimaryPhoto'])
-            ->name('set-primary-photo');
-        Route::get('{property}/photo-gallery', [PropertyController::class, 'landlordGetPhotoGallery'])
-            ->name('photo-gallery');
-        Route::get('{property}/download-all-photos', [PropertyController::class, 'landlordDownloadAllPhotos'])
-            ->name('download-all-photos');
-    });
-
-    Route::post('/properties/mark-active', [PropertyController::class, 'markActive'])->name('properties.mark-active');
-    
-    // =============================================
-    // LANDLORD INVITATION MANAGEMENT ROUTES
-    // =============================================
-    Route::prefix('properties/{property}')->name('properties.')->group(function () {
-        Route::get('/sms-invitation-stats', [PropertyInvitationController::class, 'getSmsInvitationStats'])
-            ->name('sms-invitation-stats');
-    });
-});
 
 /*
 |--------------------------------------------------------------------------
@@ -15246,6 +15383,25 @@ Route::get('/files/{path}', function (string $path) {
     ->where('path', '.*')          // allow slashes in the path (nested folders)
     ->name('files.serve');         // named for route('files.serve', ...) usage
 
+/*
+|--------------------------------------------------------------------------
+| SEARCH ROUTES — Role-aware (Super Admin + Admin + Developer)
+|--------------------------------------------------------------------------
+*/
+Route::middleware(['auth', 'multi.auth.user:0,1'])
+    ->prefix('admin')
+    ->name('admin.')
+    ->group(function () {
+        // Fast AJAX suggest — top 5 per category, 30s cache
+        Route::get('/search/suggest', [SearchController::class, 'suggest'])
+            ->name('search.suggest')
+            ->middleware('throttle:60,1');
+
+        // Full paginated results page
+        Route::get('/search', [SearchController::class, 'index'])
+            ->name('search.index')
+            ->middleware('throttle:30,1');
+    });
 
 
 Route::middleware('auth')->get('/{any}', function () {

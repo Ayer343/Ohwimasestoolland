@@ -110,41 +110,61 @@
 
     <div class="logo-separator"></div>
 
-    <!-- Compact navigation with minimal gap -->
-    <nav class="mt-2">
-        <div class="nav-divider">
-            <span class="menu-text">MAIN NAVIGATION</span>
-        </div>
+<!-- Compact navigation with minimal gap -->
+<nav class="mt-2">
+    <div class="nav-divider">
+        <span class="menu-text">MAIN NAVIGATION</span>
+    </div>
 
-        <!-- Dashboard -->
-        <a href="{{ route('landlord.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('landlord.dashboard') ? 'active' : '' }}">
-            <i class="fas fa-home mr-4"></i>
-            <span class="nav-text">Dashboard</span>
-        </a>
+    <!-- Dashboard -->
+    <a href="{{ route('landlord.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('landlord.dashboard') ? 'active' : '' }}">
+        <i class="fas fa-home mr-4"></i>
+        <span class="nav-text">Dashboard</span>
+    </a>
 
-        <!-- My Property -->
-        <a href="{{ route('properties.my-properties') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('properties.my-properties') ? 'active' : '' }}">
-            <i class="fas fa-building mr-4"></i>
-            <span class="nav-text">My Property</span>
-        </a>
+    <!-- My Property -->
+    <a href="{{ route('properties.my-properties') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('properties.my-properties') ? 'active' : '' }}">
+        <i class="fas fa-building mr-4"></i>
+        <span class="nav-text">My Property</span>
+    </a>
 
-        <!-- Property Units -->
-        <a href="{{ route('property-units.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('property-units.*') && !request()->routeIs('property-units.pending-approvals') ? 'active' : '' }}">
-            <i class="fas fa-door-open mr-4"></i>
-            <span class="nav-text">Property Units</span>
-        </a>
+    <!-- ✅ NEW: Family Links -->
+    <a href="{{ route('landlord.family-links.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('landlord.family-links.*') ? 'active' : '' }}">
+        <i class="fas fa-user-friends mr-4"></i>
+        <span class="nav-text">Family Links</span>
+        @php
+            $pendingFamilyLinksCount = \Illuminate\Support\Facades\Schema::hasTable('property_family_links')
+                ? \App\Models\PropertyFamilyLink::where('landlord_id', auth()->id())
+                    ->where('status', 'pending')
+                    ->count()
+                : 0;
+        @endphp
+        @if($pendingFamilyLinksCount > 0)
+            <span class="ml-auto bg-yellow-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {{ $pendingFamilyLinksCount > 9 ? '9+' : $pendingFamilyLinksCount }}
+            </span>
+        @endif
+    </a>
 
-        <!-- My Tenants -->
-        <a href="{{ route('landlord.tenants.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('landlord.tenants.*') ? 'active' : '' }}">
-            <i class="fas fa-users mr-4"></i>
-            <span class="nav-text">My Tenants</span>
-        </a>
+    <!-- Property Units -->
+    <a href="{{ route('property-units.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('property-units.*') && !request()->routeIs('property-units.pending-approvals') ? 'active' : '' }}">
+        <i class="fas fa-door-open mr-4"></i>
+        <span class="nav-text">Property Units</span>
+    </a>
 
-        <!-- Pending Approvals (Unit Approvals) -->
-        <a href="{{ route('property-units.pending-approvals') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('property-units.pending-approvals') ? 'active' : '' }}">
-            <i class="fas fa-user-clock mr-4"></i>
-            <span class="nav-text">Unit Approvals</span>
-        </a>
+    <!-- My Tenants -->
+    <a href="{{ route('landlord.tenants.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('landlord.tenants.*') ? 'active' : '' }}">
+        <i class="fas fa-users mr-4"></i>
+        <span class="nav-text">My Tenants</span>
+    </a>
+
+    <!-- Pending Approvals (Unit Approvals) -->
+    <a href="{{ route('property-units.pending-approvals') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('property-units.pending-approvals') ? 'active' : '' }}">
+        <i class="fas fa-user-clock mr-4"></i>
+        <span class="nav-text">Unit Approvals</span>
+    </a>
+
 
         <!-- ============================================ -->
         <!-- 💬 COMMUNICATION SECTION -->

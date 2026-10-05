@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\field;
+namespace App\Http\Controllers\Field;
 
 use App\Models\Property;
 use App\Models\PropertyType;
