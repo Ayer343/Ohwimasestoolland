@@ -3,48 +3,56 @@
 @section('title', 'Emergency Mode Details')
 
 @section('content')
+@php
+    use App\Models\EmergencyMode;
+    use App\Models\User;
+
+    $severityColor = match ($emergencyMode->severity_level) {
+        'critical' => ['danger',  'var(--danger)'],
+        'high'     => ['warning', 'var(--warning)'],
+        'medium'   => ['warning', 'var(--warning)'],
+        default    => ['success', 'var(--success)'],
+    };
+
+    $statusColor = $emergencyMode->is_active
+        ? ['danger',  'var(--danger)']
+        : match ($emergencyMode->status) {
+            EmergencyMode::STATUS_ACTIVATING,
+            EmergencyMode::STATUS_DEACTIVATING,
+            EmergencyMode::STATUS_RECOVERING => ['warning', 'var(--warning)'],
+            default                          => ['success', 'var(--success)'],
+        };
+
+    $userTypeLabels = User::getUserTypes();
+    $recoveryChecks = $emergencyMode->recovery_checks ?? [];
+@endphp
+
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-    <!-- Left Column: Emergency Details -->
+
+    {{-- ============================================================
+         | LEFT COLUMN
+         * ============================================================ --}}
     <div class="lg:col-span-2 space-y-6">
-        <!-- Header Card -->
-        <div class="card">
+
+        {{-- Header Card --}}
+        <div class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
             <div class="p-6 border-b" style="border-color: var(--border-color);">
-                <div class="flex flex-col md:flex-row md:items-center justify-between">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
                     <div>
-                        <div class="flex items-center mb-2">
-                            <h2 class="text-xl font-semibold mr-4" style="color: var(--text-primary);">
+                        <div class="flex items-center mb-2 flex-wrap gap-2">
+                            <h2 class="text-xl font-semibold mr-2" style="color: var(--text-primary);">
                                 {{ $emergencyMode->name }}
                             </h2>
-                            <div class="flex items-center space-x-2">
-                                <span class="px-3 py-1 rounded-full text-xs font-medium capitalize"
-                                    style="background-color: {{ $emergencyMode->is_active ? 'rgba(var(--danger-rgb), 0.1)' : 
-                                                             ($emergencyMode->status === 'scheduled' ? 'rgba(var(--info-rgb), 0.1)' : 
-                                                             'rgba(var(--success-rgb), 0.1)') }};
-                                           color: {{ $emergencyMode->is_active ? 'var(--danger)' : 
-                                                   ($emergencyMode->status === 'scheduled' ? 'var(--info)' : 'var(--success)') }};
-                                           border: 1px solid {{ $emergencyMode->is_active ? 'rgba(var(--danger-rgb), 0.3)' : 
-                                                             ($emergencyMode->status === 'scheduled' ? 'rgba(var(--info-rgb), 0.3)' : 
-                                                             'rgba(var(--success-rgb), 0.3)') }};">
-                                    {{ str_replace('_', ' ', $emergencyMode->status) }}
-                                </span>
-                                
-                                <span class="px-3 py-1 rounded-full text-xs font-medium capitalize"
-                                    style="background-color: {{ $emergencyMode->severity_level === 'critical' ? 'rgba(var(--danger-rgb), 0.1)' : 
-                                                             ($emergencyMode->severity_level === 'high' ? 'rgba(var(--warning-rgb), 0.1)' : 
-                                                             ($emergencyMode->severity_level === 'medium' ? 'rgba(var(--warning-rgb), 0.05)' : 
-                                                             'rgba(var(--success-rgb), 0.1)')) }};
-                                           color: {{ $emergencyMode->severity_level === 'critical' ? 'var(--danger)' : 
-                                                   ($emergencyMode->severity_level === 'high' ? 'var(--warning)' : 
-                                                   ($emergencyMode->severity_level === 'medium' ? 'var(--warning)' : 'var(--success)')) }};
-                                           border: 1px solid {{ $emergencyMode->severity_level === 'critical' ? 'rgba(var(--danger-rgb), 0.3)' : 
-                                                             ($emergencyMode->severity_level === 'high' ? 'rgba(var(--warning-rgb), 0.3)' : 
-                                                             ($emergencyMode->severity_level === 'medium' ? 'rgba(var(--warning-rgb), 0.2)' : 
-                                                             'rgba(var(--success-rgb), 0.3)')) }};">
-                                    {{ $emergencyMode->severity_level }}
-                                </span>
-                            </div>
+                            <span class="badge"
+                                  style="background-color: rgba(var(--{{ $statusColor[0] }}-rgb), 0.15); color: {{ $statusColor[1] }}; border: 1px solid rgba(var(--{{ $statusColor[0] }}-rgb), 0.3);">
+                                {{ str_replace('_', ' ', $emergencyMode->status) }}
+                            </span>
+                            <span class="badge"
+                                  style="background-color: rgba(var(--{{ $severityColor[0] }}-rgb), 0.15); color: {{ $severityColor[1] }}; border: 1px solid rgba(var(--{{ $severityColor[0] }}-rgb), 0.3);">
+                                {{ ucfirst($emergencyMode->severity_level) }}
+                            </span>
                         </div>
-                        <div class="flex items-center space-x-4 text-sm" style="color: var(--text-secondary);">
+                        <div class="flex items-center flex-wrap gap-4 text-sm" style="color: var(--text-secondary);">
                             <div class="flex items-center">
                                 <i class="fas fa-hashtag mr-2"></i>
                                 <span class="font-mono">{{ $emergencyMode->reference_id }}</span>
@@ -55,110 +63,105 @@
                             </div>
                         </div>
                     </div>
-                    
-                    <div class="mt-4 md:mt-0 flex space-x-2">
-                        <a href="{{ route('developer.emergency.index') }}" class="btn-secondary flex items-center">
+
+                    <div class="flex flex-wrap gap-2">
+                        <a href="{{ route('developer.emergency.index') }}"
+                           class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                           style="background-color: var(--bg-secondary); color: var(--text-secondary);">
                             <i class="fas fa-arrow-left mr-2"></i> Back
                         </a>
-                        
-                        @if(!$emergencyMode->is_active && $emergencyMode->status === 'inactive')
-                        <form action="{{ route('developer.emergency.activate', $emergencyMode->id) }}" method="POST" class="inline">
-                            @csrf
-                            <button type="submit" 
-                                    onclick="return confirm('Activate this emergency mode?')"
-                                    class="btn-warning flex items-center">
-                                <i class="fas fa-power-off mr-2"></i> Activate Now
+
+                        @if(!$emergencyMode->is_active && $emergencyMode->status === EmergencyMode::STATUS_INACTIVE)
+                            <form action="{{ route('developer.emergency.activate', $emergencyMode->id) }}" method="POST" class="inline">
+                                @csrf
+                                <button type="submit"
+                                        onclick="return confirm('Activate this emergency mode?')"
+                                        class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                                        style="background-color: var(--warning); color: white;">
+                                    <i class="fas fa-power-off mr-2"></i> Activate Now
+                                </button>
+                            </form>
+                        @endif
+
+                        @if($emergencyMode->is_active)
+                            <button type="button" onclick="EmergencyShow.openDeactivation()"
+                                    class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                                    style="background-color: var(--danger); color: white;">
+                                <i class="fas fa-stop-circle mr-2"></i> Deactivate
                             </button>
-                        </form>
+                            <button type="button" onclick="EmergencyShow.openExtension()"
+                                    class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                                    style="background-color: var(--primary); color: white;">
+                                <i class="fas fa-clock mr-2"></i> Extend
+                            </button>
                         @endif
-                        
-                        @if($emergencyMode->is_active)
-                        <button onclick="showDeactivationModal()" 
-                                class="btn-danger flex items-center">
-                            <i class="fas fa-stop-circle mr-2"></i>
-                            Deactivate
-                        </button>
-                        @endif
-                        
-                        @if($emergencyMode->is_active)
-                        <button onclick="showExtensionModal()" 
-                                class="btn-primary flex items-center">
-                            <i class="fas fa-clock mr-2"></i>
-                            Extend
-                        </button>
-                        @endif
-                        
+
                         @if($emergencyMode->isScheduled())
-                        <form action="{{ route('developer.emergency.cancel', $emergencyMode->id) }}" method="POST" class="inline">
-                            @csrf
-                            <button type="submit" 
-                                    onclick="return confirm('Cancel this scheduled emergency mode?')"
-                                    class="btn-danger flex items-center">
-                                <i class="fas fa-times mr-2"></i>
-                                Cancel
+                            <button type="button" onclick="EmergencyShow.openCancel()"
+                                    class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                                    style="background-color: var(--danger); color: white;">
+                                <i class="fas fa-times mr-2"></i> Cancel
                             </button>
-                        </form>
                         @endif
                     </div>
                 </div>
             </div>
-            
+
             @if($emergencyMode->is_active)
-            <div class="p-6" style="background-color: rgba(var(--danger-rgb), 0.03);">
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
-                        <div class="text-sm" style="color: var(--text-secondary);">Duration</div>
-                        <div class="text-2xl font-semibold" style="color: var(--text-primary);">
-                            {{ $emergencyMode->current_duration }} minutes
+                <div class="p-6" style="background-color: rgba(var(--danger-rgb), 0.03);">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                            <div class="text-sm" style="color: var(--text-secondary);">Duration</div>
+                            <div class="text-2xl font-semibold" style="color: var(--text-primary);">
+                                {{ $emergencyMode->current_duration }} min
+                            </div>
+                            <div class="text-sm mt-1" style="color: var(--text-secondary);">
+                                @if($emergencyMode->activated_at)
+                                    Started: {{ $emergencyMode->activated_at->format('M d, H:i') }}
+                                @endif
+                            </div>
                         </div>
-                        <div class="text-sm mt-1" style="color: var(--text-secondary);">
-                            @if($emergencyMode->activated_at)
-                            Started: {{ $emergencyMode->activated_at->format('M d, H:i') }}
-                            @endif
+
+                        <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                            <div class="text-sm" style="color: var(--text-secondary);">Affected Users</div>
+                            <div class="text-2xl font-semibold" style="color: var(--text-primary);">
+                                {{ number_format((int) ($emergencyMode->affected_users_count ?? 0)) }}
+                            </div>
+                            <div class="text-sm mt-1" style="color: var(--text-secondary);">
+                                <a href="#affected-users" class="hover:underline">View affected users →</a>
+                            </div>
                         </div>
-                    </div>
-                    
-                    <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
-                        <div class="text-sm" style="color: var(--text-secondary);">Affected Users</div>
-                        <div class="text-2xl font-semibold" style="color: var(--text-primary);">
-                            {{ $emergencyMode->affected_users_count ?? 0 }}
-                        </div>
-                        <div class="text-sm mt-1" style="color: var(--text-secondary);">
-                            <a href="#affected-users" class="hover:underline">View affected users →</a>
-                        </div>
-                    </div>
-                    
-                    <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
-                        <div class="text-sm" style="color: var(--text-secondary);">Status</div>
-                        <div class="text-2xl font-semibold flex items-center" style="color: var(--danger);">
-                            @if($emergencyMode->is_active)
-                            <i class="fas fa-exclamation-triangle mr-2 animate-pulse"></i>
-                            ACTIVE
-                            @else
-                            <i class="fas fa-check-circle mr-2"></i>
-                            INACTIVE
-                            @endif
-                        </div>
-                        <div class="text-sm mt-1" style="color: var(--text-secondary);">
-                            @if($emergencyMode->last_extended_at)
-                            Last extended: {{ $emergencyMode->last_extended_at->format('M d, H:i') }}
-                            @endif
+
+                        <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                            <div class="text-sm" style="color: var(--text-secondary);">Status</div>
+                            <div class="text-xl font-semibold flex items-center" style="color: {{ $statusColor[1] }};">
+                                @if($emergencyMode->is_active)
+                                    <i class="fas fa-exclamation-triangle mr-2 animate-pulse"></i> ACTIVE
+                                @else
+                                    <i class="fas fa-check-circle mr-2"></i> INACTIVE
+                                @endif
+                            </div>
+                            <div class="text-sm mt-1" style="color: var(--text-secondary);">
+                                @if($emergencyMode->last_extended_at)
+                                    Last extended: {{ $emergencyMode->last_extended_at->format('M d, H:i') }}
+                                @endif
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
             @endif
         </div>
 
-        <!-- Emergency Details Card -->
-        <div class="card">
+        {{-- Emergency Details Card --}}
+        <div class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
             <div class="p-6 border-b" style="border-color: var(--border-color);">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
-                    <i class="fas fa-info-circle mr-2"></i> Emergency Details
+                    <i class="fas fa-info-circle mr-2" style="color: var(--primary);"></i> Emergency Details
                 </h3>
             </div>
             <div class="p-6 space-y-6">
-                <!-- Reason -->
+
+                {{-- Reason --}}
                 <div>
                     <h4 class="font-medium mb-2" style="color: var(--text-primary);">
                         <i class="fas fa-exclamation-circle mr-2" style="color: var(--danger);"></i>
@@ -168,21 +171,20 @@
                         <p style="color: var(--text-primary);">{{ $emergencyMode->reason }}</p>
                     </div>
                 </div>
-                
-                <!-- Description -->
+
+                {{-- Description --}}
                 @if($emergencyMode->description)
-                <div>
-                    <h4 class="font-medium mb-2" style="color: var(--text-primary);">
-                        <i class="fas fa-align-left mr-2"></i>
-                        Description
-                    </h4>
-                    <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
-                        <p style="color: var(--text-primary);">{{ $emergencyMode->description }}</p>
+                    <div>
+                        <h4 class="font-medium mb-2" style="color: var(--text-primary);">
+                            <i class="fas fa-align-left mr-2"></i> Description
+                        </h4>
+                        <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                            <p style="color: var(--text-primary);">{{ $emergencyMode->description }}</p>
+                        </div>
                     </div>
-                </div>
                 @endif
-                
-                <!-- Affected Modules -->
+
+                {{-- Affected Modules --}}
                 <div>
                     <h4 class="font-medium mb-3" style="color: var(--text-primary);">
                         <i class="fas fa-cogs mr-2"></i>
@@ -192,218 +194,217 @@
                         </span>
                     </h4>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        @foreach($emergencyMode->affected_modules_list as $module)
-                        <div class="p-3 rounded-lg border flex items-center" 
-                             style="background-color: rgba(var(--warning-rgb), 0.05); border-color: rgba(var(--warning-rgb), 0.2);">
-                            <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3"
-                                 style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);">
-                                <i class="fas fa-ban"></i>
+                        @forelse($emergencyMode->affected_modules_list ?? [] as $module)
+                            <div class="p-3 rounded-lg border flex items-center"
+                                 style="background-color: rgba(var(--warning-rgb), 0.05); border-color: rgba(var(--warning-rgb), 0.2);">
+                                <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+                                     style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);">
+                                    <i class="fas fa-ban"></i>
+                                </div>
+                                <span style="color: var(--text-primary);">{{ $module }}</span>
                             </div>
-                            <span style="color: var(--text-primary);">{{ $module }}</span>
-                        </div>
-                        @endforeach
+                        @empty
+                            <p class="text-sm" style="color: var(--text-secondary);">No modules affected</p>
+                        @endforelse
                     </div>
                 </div>
-                
-                <!-- Restricted Features -->
+
+                {{-- Restricted Features --}}
                 @if(!empty($emergencyMode->restricted_features))
-                <div>
-                    <h4 class="font-medium mb-3" style="color: var(--text-primary);">
-                        <i class="fas fa-lock mr-2"></i>
-                        Restricted Features
-                    </h4>
-                    <div class="flex flex-wrap gap-2">
-                        @foreach($emergencyMode->restricted_features as $feature)
-                        <span class="px-3 py-1 rounded-full text-sm"
-                              style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.3);">
-                            <i class="fas fa-times-circle mr-1"></i>
-                            {{ str_replace('_', ' ', ucfirst($feature)) }}
-                        </span>
-                        @endforeach
+                    <div>
+                        <h4 class="font-medium mb-3" style="color: var(--text-primary);">
+                            <i class="fas fa-lock mr-2"></i> Restricted Features
+                        </h4>
+                        <div class="flex flex-wrap gap-2">
+                            @foreach($emergencyMode->restricted_features as $feature)
+                                <span class="badge"
+                                      style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.3);">
+                                    <i class="fas fa-times-circle mr-1"></i>
+                                    {{ str_replace('_', ' ', ucfirst($feature)) }}
+                                </span>
+                            @endforeach
+                        </div>
                     </div>
-                </div>
                 @endif
-                
-                <!-- Allowed Operations -->
+
+                {{-- Allowed Operations --}}
                 @if(!empty($emergencyMode->allowed_operations))
-                <div>
-                    <h4 class="font-medium mb-3" style="color: var(--text-primary);">
-                        <i class="fas fa-check-circle mr-2" style="color: var(--success);"></i>
-                        Allowed Operations
-                    </h4>
-                    <div class="flex flex-wrap gap-2">
-                        @foreach($emergencyMode->allowed_operations as $operation)
-                        <span class="px-3 py-1 rounded-full text-sm"
-                              style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 1px solid rgba(var(--success-rgb), 0.3);">
-                            <i class="fas fa-check mr-1"></i>
-                            {{ str_replace('_', ' ', ucfirst($operation)) }}
-                        </span>
-                        @endforeach
+                    <div>
+                        <h4 class="font-medium mb-3" style="color: var(--text-primary);">
+                            <i class="fas fa-check-circle mr-2" style="color: var(--success);"></i>
+                            Allowed Operations
+                        </h4>
+                        <div class="flex flex-wrap gap-2">
+                            @foreach($emergencyMode->allowed_operations as $operation)
+                                <span class="badge"
+                                      style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 1px solid rgba(var(--success-rgb), 0.3);">
+                                    <i class="fas fa-check mr-1"></i>
+                                    {{ str_replace('_', ' ', ucfirst($operation)) }}
+                                </span>
+                            @endforeach
+                        </div>
                     </div>
-                </div>
                 @endif
-                
-                <!-- Notification Settings -->
+
+                {{-- Notification + Recovery --}}
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                         <h4 class="font-medium mb-3" style="color: var(--text-primary);">
-                            <i class="fas fa-bell mr-2"></i>
-                            Notification Settings
+                            <i class="fas fa-bell mr-2"></i> Notification Settings
                         </h4>
                         <div class="space-y-2">
                             <div class="flex items-center">
-                                <div class="w-6 h-6 rounded-full flex items-center justify-center mr-3"
-                                     style="background-color: {{ $emergencyMode->notify_users ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--secondary-rgb), 0.1)' }};">
-                                    <i class="fas {{ $emergencyMode->notify_users ? 'fa-check text-green-500' : 'fa-times text-gray-400' }} text-sm"></i>
+                                <div class="w-6 h-6 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+                                     style="background-color: {{ $emergencyMode->notify_users ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--text-secondary), 0.1)' }};">
+                                    <i class="fas {{ $emergencyMode->notify_users ? 'fa-check' : 'fa-times' }} text-sm"
+                                       style="color: {{ $emergencyMode->notify_users ? 'var(--success)' : 'var(--text-secondary)' }};"></i>
                                 </div>
                                 <span style="color: var(--text-primary);">
                                     Notify Users: {{ $emergencyMode->notify_users ? 'Yes' : 'No' }}
                                 </span>
                             </div>
-                            
+
                             @if($emergencyMode->notify_users && !empty($emergencyMode->notification_channels))
-                            <div class="ml-9">
-                                <span class="text-sm" style="color: var(--text-secondary);">Channels:</span>
-                                <div class="flex flex-wrap gap-1 mt-1">
-                                    @foreach($emergencyMode->notification_channels as $channel)
-                                    <span class="px-2 py-0.5 rounded text-xs"
-                                          style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
-                                        {{ $channel }}
-                                    </span>
-                                    @endforeach
+                                <div class="ml-9">
+                                    <span class="text-sm" style="color: var(--text-secondary);">Channels:</span>
+                                    <div class="flex flex-wrap gap-1 mt-1">
+                                        @foreach($emergencyMode->notification_channels as $channel)
+                                            <span class="badge" style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
+                                                {{ $channel }}
+                                            </span>
+                                        @endforeach
+                                    </div>
                                 </div>
-                            </div>
+                            @endif
+
+                            @if($emergencyMode->last_notified_at)
+                                <div class="ml-9 text-xs" style="color: var(--text-secondary);">
+                                    <i class="fas fa-clock mr-1"></i>
+                                    Last notified: {{ $emergencyMode->last_notified_at->diffForHumans() }}
+                                </div>
                             @endif
                         </div>
                     </div>
-                    
+
                     <div>
                         <h4 class="font-medium mb-3" style="color: var(--text-primary);">
-                            <i class="fas fa-shield-alt mr-2"></i>
-                            Recovery Settings
+                            <i class="fas fa-shield-alt mr-2"></i> Recovery Settings
                         </h4>
                         <div class="space-y-2">
                             <div class="flex items-center">
-                                <div class="w-6 h-6 rounded-full flex items-center justify-center mr-3"
-                                     style="background-color: {{ $emergencyMode->auto_recovery ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--secondary-rgb), 0.1)' }};">
-                                    <i class="fas {{ $emergencyMode->auto_recovery ? 'fa-check text-green-500' : 'fa-times text-gray-400' }} text-sm"></i>
+                                <div class="w-6 h-6 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+                                     style="background-color: {{ $emergencyMode->auto_recovery ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--text-secondary), 0.1)' }};">
+                                    <i class="fas {{ $emergencyMode->auto_recovery ? 'fa-check' : 'fa-times' }} text-sm"
+                                       style="color: {{ $emergencyMode->auto_recovery ? 'var(--success)' : 'var(--text-secondary)' }};"></i>
                                 </div>
                                 <span style="color: var(--text-primary);">
                                     Auto-Recovery: {{ $emergencyMode->auto_recovery ? 'Enabled' : 'Disabled' }}
                                 </span>
                             </div>
-                            
-                            @if($emergencyMode->auto_recovery && !empty($emergencyMode->recovery_checks))
-                            <div class="ml-9">
-                                <span class="text-sm" style="color: var(--text-secondary);">Checks:</span>
-                                <div class="flex flex-wrap gap-1 mt-1">
-                                    @foreach($emergencyMode->recovery_checks as $check)
-                                    <span class="px-2 py-0.5 rounded text-xs"
-                                          style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
-                                        {{ $check }}
-                                    </span>
-                                    @endforeach
+
+                            @if($emergencyMode->auto_recovery && !empty($recoveryChecks))
+                                <div class="ml-9">
+                                    <span class="text-sm" style="color: var(--text-secondary);">Checks:</span>
+                                    <div class="flex flex-wrap gap-1 mt-1">
+                                        @foreach($recoveryChecks as $check)
+                                            <span class="badge" style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
+                                                {{ $check }}
+                                            </span>
+                                        @endforeach
+                                    </div>
                                 </div>
-                            </div>
                             @endif
                         </div>
                     </div>
                 </div>
-                
-                <!-- Timeline -->
+
+                {{-- Timeline --}}
                 <div>
                     <h4 class="font-medium mb-4" style="color: var(--text-primary);">
-                        <i class="fas fa-history mr-2"></i>
-                        Emergency Timeline
+                        <i class="fas fa-history mr-2"></i> Emergency Timeline
                     </h4>
                     <div class="relative">
-                        <!-- Timeline line -->
                         <div class="absolute left-4 top-0 bottom-0 w-0.5" style="background-color: var(--border-color);"></div>
-                        
+
                         <div class="space-y-6 ml-10">
-                            <!-- Created -->
-                            <div class="flex items-start">
-                                <div class="w-8 h-8 rounded-full flex items-center justify-center absolute left-0"
-                                     style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 2px solid white; z-index: 10;">
-                                    <i class="fas fa-plus"></i>
+                            {{-- Created --}}
+                            <div class="flex items-start relative">
+                                <div class="w-8 h-8 rounded-full flex items-center justify-center absolute left-[-40px]"
+                                     style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 2px solid var(--card-bg); z-index: 10;">
+                                    <i class="fas fa-plus text-xs"></i>
                                 </div>
                                 <div>
                                     <div class="font-medium" style="color: var(--text-primary);">Emergency Created</div>
                                     <div class="text-sm" style="color: var(--text-secondary);">
                                         {{ $emergencyMode->created_at->format('M d, Y H:i') }}
                                     </div>
-                                    @if($emergencyMode->createdBy)
-                                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                        By: {{ $emergencyMode->createdBy->name ?? 'System' }}
-                                    </div>
-                                    @endif
                                 </div>
                             </div>
-                            
-                            <!-- Activated -->
+
+                            {{-- Activated --}}
                             @if($emergencyMode->activated_at)
-                            <div class="flex items-start">
-                                <div class="w-8 h-8 rounded-full flex items-center justify-center absolute left-0"
-                                     style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 2px solid white; z-index: 10;">
-                                    <i class="fas fa-play"></i>
-                                </div>
-                                <div>
-                                    <div class="font-medium" style="color: var(--text-primary);">Emergency Activated</div>
-                                    <div class="text-sm" style="color: var(--text-secondary);">
-                                        {{ $emergencyMode->activated_at->format('M d, Y H:i') }}
+                                <div class="flex items-start relative">
+                                    <div class="w-8 h-8 rounded-full flex items-center justify-center absolute left-[-40px]"
+                                         style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 2px solid var(--card-bg); z-index: 10;">
+                                        <i class="fas fa-play text-xs"></i>
                                     </div>
-                                    @if($emergencyMode->activatedByUser)
-                                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                        By: {{ $emergencyMode->activatedByUser->name }}
+                                    <div>
+                                        <div class="font-medium" style="color: var(--text-primary);">Emergency Activated</div>
+                                        <div class="text-sm" style="color: var(--text-secondary);">
+                                            {{ $emergencyMode->activated_at->format('M d, Y H:i') }}
+                                        </div>
+                                        @if($emergencyMode->activatedByUser)
+                                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                                By: {{ $emergencyMode->activatedByUser->name }}
+                                            </div>
+                                        @endif
                                     </div>
-                                    @endif
                                 </div>
-                            </div>
                             @endif
-                            
-                            <!-- Last Extended -->
+
+                            {{-- Extended --}}
                             @if($emergencyMode->last_extended_at)
-                            <div class="flex items-start">
-                                <div class="w-8 h-8 rounded-full flex items-center justify-center absolute left-0"
-                                     style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border: 2px solid white; z-index: 10;">
-                                    <i class="fas fa-clock"></i>
-                                </div>
-                                <div>
-                                    <div class="font-medium" style="color: var(--text-primary);">Duration Extended</div>
-                                    <div class="text-sm" style="color: var(--text-secondary);">
-                                        {{ $emergencyMode->last_extended_at->format('M d, Y H:i') }}
+                                <div class="flex items-start relative">
+                                    <div class="w-8 h-8 rounded-full flex items-center justify-center absolute left-[-40px]"
+                                         style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border: 2px solid var(--card-bg); z-index: 10;">
+                                        <i class="fas fa-clock text-xs"></i>
                                     </div>
-                                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                        Total extensions: {{ $emergencyMode->extensions_count }}
+                                    <div>
+                                        <div class="font-medium" style="color: var(--text-primary);">Duration Extended</div>
+                                        <div class="text-sm" style="color: var(--text-secondary);">
+                                            {{ $emergencyMode->last_extended_at->format('M d, Y H:i') }}
+                                        </div>
+                                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                            Total extensions: {{ $emergencyMode->extensions_count ?? 0 }}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
                             @endif
-                            
-                            <!-- Deactivated -->
+
+                            {{-- Deactivated --}}
                             @if($emergencyMode->deactivated_at)
-                            <div class="flex items-start">
-                                <div class="w-8 h-8 rounded-full flex items-center justify-center absolute left-0"
-                                     style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 2px solid white; z-index: 10;">
-                                    <i class="fas fa-stop"></i>
+                                <div class="flex items-start relative">
+                                    <div class="w-8 h-8 rounded-full flex items-center justify-center absolute left-[-40px]"
+                                         style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 2px solid var(--card-bg); z-index: 10;">
+                                        <i class="fas fa-stop text-xs"></i>
+                                    </div>
+                                    <div>
+                                        <div class="font-medium" style="color: var(--text-primary);">Emergency Deactivated</div>
+                                        <div class="text-sm" style="color: var(--text-secondary);">
+                                            {{ $emergencyMode->deactivated_at->format('M d, Y H:i') }}
+                                        </div>
+                                        @if($emergencyMode->deactivatedByUser)
+                                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                                By: {{ $emergencyMode->deactivatedByUser->name }}
+                                            </div>
+                                        @endif
+                                        @if($emergencyMode->deactivation_reason)
+                                            <div class="text-xs mt-2 p-2 rounded border" style="color: var(--text-secondary); border-color: var(--border-color);">
+                                                <strong>Reason:</strong> {{ $emergencyMode->deactivation_reason }}
+                                            </div>
+                                        @endif
+                                    </div>
                                 </div>
-                                <div>
-                                    <div class="font-medium" style="color: var(--text-primary);">Emergency Deactivated</div>
-                                    <div class="text-sm" style="color: var(--text-secondary);">
-                                        {{ $emergencyMode->deactivated_at->format('M d, Y H:i') }}
-                                    </div>
-                                    @if($emergencyMode->deactivatedByUser)
-                                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                        By: {{ $emergencyMode->deactivatedByUser->name }}
-                                    </div>
-                                    @endif
-                                    @if($emergencyMode->deactivation_reason)
-                                    <div class="text-xs mt-1 p-2 rounded border" style="color: var(--text-secondary); border-color: var(--border-color);">
-                                        Reason: {{ $emergencyMode->deactivation_reason }}
-                                    </div>
-                                    @endif
-                                </div>
-                            </div>
                             @endif
                         </div>
                     </div>
@@ -411,14 +412,14 @@
             </div>
         </div>
 
-        <!-- Recent Activity Logs -->
-        <div class="card">
+        {{-- Recent Activity Logs --}}
+        <div class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
             <div class="p-6 border-b" style="border-color: var(--border-color);">
                 <div class="flex justify-between items-center">
                     <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
-                        <i class="fas fa-history mr-2"></i> Recent Activity Logs
+                        <i class="fas fa-history mr-2" style="color: var(--primary);"></i> Recent Activity Logs
                     </h3>
-                    <a href="{{ route('developer.emergency.history', $emergencyMode->id) }}" 
+                    <a href="{{ route('developer.emergency.history', $emergencyMode->id) }}"
                        class="text-sm flex items-center hover:underline" style="color: var(--primary);">
                         View All Logs <i class="fas fa-arrow-right ml-1"></i>
                     </a>
@@ -426,317 +427,321 @@
             </div>
             <div class="p-6">
                 @if($recentLogs && $recentLogs->count() > 0)
-                <div class="space-y-4">
-                    @foreach($recentLogs as $log)
-                    <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
-                        <div class="flex justify-between items-start mb-2">
-                            <div class="flex items-center">
-                                <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3"
-                                     style="background-color: rgba(var(--{{ $log->severity_class }}-rgb), 0.1); color: var(--{{ $log->severity_class }});">
-                                    <i class="fas fa-{{ $log->action == 'activated' ? 'play' : 
-                                                       ($log->action == 'deactivated' ? 'stop' : 
-                                                       ($log->action == 'extended' ? 'clock' : 'info')) }}"></i>
-                                </div>
-                                <div>
-                                    <div class="font-medium" style="color: var(--text-primary);">
-                                        {{ $log->action_name }}
+                    <div class="space-y-4">
+                        @foreach($recentLogs as $log)
+                            @php
+                                $logStyle = match (true) {
+                                    str_contains($log->action, 'activat')    => ['warning', 'fa-play'],
+                                    str_contains($log->action, 'deactivat')  => ['success', 'fa-stop'],
+                                    str_contains($log->action, 'extend')     => ['primary', 'fa-clock'],
+                                    str_contains($log->action, 'cancel')     => ['danger',  'fa-times'],
+                                    str_contains($log->action, 'fail')       => ['danger',  'fa-exclamation-triangle'],
+                                    str_contains($log->action, 'creat')      => ['info',    'fa-plus'],
+                                    default                                  => ['info',    'fa-info-circle'],
+                                };
+                            @endphp
+                            <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                                <div class="flex justify-between items-start mb-2 flex-wrap gap-2">
+                                    <div class="flex items-center">
+                                        <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+                                             style="background-color: rgba(var(--{{ $logStyle[0] }}-rgb), 0.1); color: var(--{{ $logStyle[0] }});">
+                                            <i class="fas {{ $logStyle[1] }}"></i>
+                                        </div>
+                                        <div>
+                                            <div class="font-medium" style="color: var(--text-primary);">
+                                                {{ ucfirst(str_replace('_', ' ', $log->action)) }}
+                                            </div>
+                                            <div class="text-xs" style="color: var(--text-secondary);">
+                                                {{ $log->created_at->format('M d, Y H:i:s') }}
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div class="text-xs" style="color: var(--text-secondary);">
-                                        {{ $log->created_at->format('M d, Y H:i:s') }}
+                                    @if($log->performer)
+                                        <div class="badge" style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
+                                            {{ $log->performer->name }}
+                                        </div>
+                                    @endif
+                                </div>
+
+                                <div class="text-sm mt-2" style="color: var(--text-primary);">
+                                    {{ $log->details }}
+                                </div>
+
+                                @if($log->metadata && is_array($log->metadata))
+                                    <div class="mt-3 pt-3 border-t" style="border-color: var(--border-color);">
+                                        <div class="text-xs" style="color: var(--text-secondary);">Details:</div>
+                                        <div class="text-xs mt-1 space-y-1">
+                                            @foreach($log->metadata as $key => $value)
+                                                <div>
+                                                    <span class="font-medium" style="color: var(--text-secondary);">
+                                                        {{ ucfirst(str_replace('_', ' ', $key)) }}:
+                                                    </span>
+                                                    <span style="color: var(--text-primary);">
+                                                        @if(is_array($value))
+                                                            {{ json_encode($value) }}
+                                                        @else
+                                                            {{ $value }}
+                                                        @endif
+                                                    </span>
+                                                </div>
+                                            @endforeach
+                                        </div>
                                     </div>
-                                </div>
+                                @endif
                             </div>
-                            @if($log->performer)
-                            <div class="text-xs px-2 py-1 rounded" style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
-                                {{ $log->performer->name }}
-                            </div>
-                            @endif
-                        </div>
-                        
-                        <div class="text-sm mt-2" style="color: var(--text-primary);">
-                            {{ $log->details }}
-                        </div>
-                        
-                        @if($log->metadata)
-                        <div class="mt-3 pt-3 border-t" style="border-color: var(--border-color);">
-                            <div class="text-xs" style="color: var(--text-secondary);">Details:</div>
-                            <div class="text-xs mt-1 space-y-1">
-                                @foreach($log->metadata as $key => $value)
-                                <div>
-                                    <span class="font-medium" style="color: var(--text-secondary);">
-                                        {{ ucfirst(str_replace('_', ' ', $key)) }}:
-                                    </span>
-                                    <span style="color: var(--text-primary);">
-                                        @if(is_array($value))
-                                            {{ json_encode($value) }}
-                                        @else
-                                            {{ $value }}
-                                        @endif
-                                    </span>
-                                </div>
-                                @endforeach
-                            </div>
-                        </div>
-                        @endif
+                        @endforeach
                     </div>
-                    @endforeach
-                </div>
                 @else
-                <div class="text-center py-8">
-                    <div class="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center"
-                         style="background-color: rgba(var(--text-secondary), 0.1);">
-                        <i class="fas fa-history" style="color: var(--text-secondary); font-size: 1.5rem;"></i>
+                    <div class="text-center py-8">
+                        <div class="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center"
+                             style="background-color: rgba(var(--text-secondary), 0.1);">
+                            <i class="fas fa-history" style="color: var(--text-secondary); font-size: 1.5rem;"></i>
+                        </div>
+                        <h4 class="font-medium mb-2" style="color: var(--text-primary);">No Activity Logs</h4>
+                        <p class="text-sm" style="color: var(--text-secondary);">
+                            No activity has been recorded for this emergency mode yet.
+                        </p>
                     </div>
-                    <h4 class="font-medium mb-2" style="color: var(--text-primary);">No Activity Logs</h4>
-                    <p class="text-sm" style="color: var(--text-secondary);">
-                        No activity has been recorded for this emergency mode yet.
-                    </p>
-                </div>
                 @endif
             </div>
         </div>
     </div>
 
-    <!-- Right Column: Sidebar -->
+    {{-- ============================================================
+         | RIGHT COLUMN
+         * ============================================================ --}}
     <div class="space-y-6">
-        <!-- Status Card -->
-        <div class="card">
+
+        {{-- Status Summary --}}
+        <div class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
             <div class="p-6 border-b" style="border-color: var(--border-color);">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
-                    <i class="fas fa-chart-bar mr-2"></i> Status Summary
+                    <i class="fas fa-chart-bar mr-2" style="color: var(--primary);"></i> Status Summary
                 </h3>
             </div>
             <div class="p-6 space-y-4">
-                <!-- Current Status -->
                 <div>
                     <div class="text-sm mb-2" style="color: var(--text-secondary);">Current Status</div>
                     <div class="flex items-center">
-                        <div class="w-3 h-3 rounded-full mr-2 
-                            @if($emergencyMode->is_active) bg-red-500 animate-pulse
-                            @elseif($emergencyMode->status === 'scheduled') bg-blue-500
-                            @else bg-green-500 @endif">
-                        </div>
+                        <div class="w-3 h-3 rounded-full mr-2"
+                             style="background-color: {{ $statusColor[1] }};"></div>
                         <span class="font-medium capitalize" style="color: var(--text-primary);">
                             {{ str_replace('_', ' ', $emergencyMode->status) }}
                         </span>
                     </div>
                 </div>
-                
-                <!-- Impact Metrics -->
-                @if(isset($impactMetrics) && !empty($impactMetrics))
-                <div>
-                    <div class="text-sm mb-2" style="color: var(--text-secondary);">Impact Summary</div>
-                    <div class="space-y-3">
-                        <div>
-                            <div class="flex justify-between text-sm mb-1">
-                                <span style="color: var(--text-secondary);">Affected Users</span>
-                                <span style="color: var(--text-primary);">{{ $impactMetrics['total_affected'] ?? 0 }}</span>
-                            </div>
-                            <div class="w-full bg-gray-200 rounded-full h-2">
-                                <div class="bg-red-500 h-2 rounded-full" 
-                                     style="width: {{ min(100, ($impactMetrics['affected_percentage'] ?? 0)) }}%;">
+
+                @if(!empty($impactMetrics))
+                    <div>
+                        <div class="text-sm mb-2" style="color: var(--text-secondary);">Impact Summary</div>
+                        <div class="space-y-3">
+                            <div>
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span style="color: var(--text-secondary);">Affected Users</span>
+                                    <span style="color: var(--text-primary);">{{ number_format($impactMetrics['total_affected'] ?? 0) }}</span>
+                                </div>
+                                <div class="w-full rounded-full h-2" style="background-color: var(--border-color);">
+                                    <div class="h-2 rounded-full"
+                                         style="background-color: var(--danger); width: {{ min(100, ($impactMetrics['affected_percentage'] ?? 0)) }}%;"></div>
+                                </div>
+                                <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                    {{ $impactMetrics['affected_percentage'] ?? 0 }}% of active users
                                 </div>
                             </div>
-                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                {{ $impactMetrics['affected_percentage'] ?? 0 }}% of active users
-                            </div>
-                        </div>
-                        
-                        <div class="grid grid-cols-2 gap-2 text-center">
-                            <div class="p-2 rounded border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
-                                <div class="text-lg font-semibold" style="color: var(--text-primary);">
-                                    {{ $impactMetrics['duration_minutes'] ?? 0 }}
+
+                            <div class="grid grid-cols-2 gap-2 text-center">
+                                <div class="p-2 rounded border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                                    <div class="text-lg font-semibold" style="color: var(--text-primary);">
+                                        {{ $impactMetrics['duration_minutes'] ?? 0 }}
+                                    </div>
+                                    <div class="text-xs" style="color: var(--text-secondary);">Minutes</div>
                                 </div>
-                                <div class="text-xs" style="color: var(--text-secondary);">Minutes</div>
-                            </div>
-                            <div class="p-2 rounded border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
-                                <div class="text-lg font-semibold" style="color: var(--text-primary);">
-                                    {{ round($impactMetrics['duration_minutes'] / 60, 1) }}
+                                <div class="p-2 rounded border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                                    <div class="text-lg font-semibold" style="color: var(--text-primary);">
+                                        {{ round(($impactMetrics['duration_minutes'] ?? 0) / 60, 1) }}
+                                    </div>
+                                    <div class="text-xs" style="color: var(--text-secondary);">Hours</div>
                                 </div>
-                                <div class="text-xs" style="color: var(--text-secondary);">Hours</div>
                             </div>
                         </div>
                     </div>
-                </div>
                 @endif
-                
-                <!-- Quick Actions -->
+
                 <div>
                     <div class="text-sm mb-3" style="color: var(--text-secondary);">Quick Actions</div>
                     <div class="space-y-2">
                         @if($emergencyMode->is_active)
-                        <button onclick="showDeactivationModal()" 
-                                class="w-full p-3 rounded-lg border flex items-center justify-center hover:bg-opacity-10 transition-colors"
-                                style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger); border-color: rgba(var(--danger-rgb), 0.3);">
-                            <i class="fas fa-power-off mr-2"></i>
-                            Deactivate Emergency
-                        </button>
-                        
-                        <button onclick="showExtensionModal()" 
-                                class="w-full p-3 rounded-lg border flex items-center justify-center hover:bg-opacity-10 transition-colors"
-                                style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border-color: rgba(var(--primary-rgb), 0.3);">
-                            <i class="fas fa-clock mr-2"></i>
-                            Extend Duration
-                        </button>
-                        @elseif($emergencyMode->status === 'inactive')
-                        <form action="{{ route('developer.emergency.activate', $emergencyMode->id) }}" method="POST" class="w-full">
-                            @csrf
-                            <button type="submit" 
-                                    onclick="return confirm('Activate this emergency mode?')"
-                                    class="w-full p-3 rounded-lg border flex items-center justify-center hover:bg-opacity-10 transition-colors"
-                                    style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border-color: rgba(var(--warning-rgb), 0.3);">
-                                <i class="fas fa-play mr-2"></i>
-                                Activate Now
+                            <button type="button" onclick="EmergencyShow.openDeactivation()"
+                                    class="w-full p-3 rounded-lg border flex items-center justify-center transition-all hover:opacity-80"
+                                    style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger); border-color: rgba(var(--danger-rgb), 0.3);">
+                                <i class="fas fa-power-off mr-2"></i> Deactivate Emergency
                             </button>
-                        </form>
+                            <button type="button" onclick="EmergencyShow.openExtension()"
+                                    class="w-full p-3 rounded-lg border flex items-center justify-center transition-all hover:opacity-80"
+                                    style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border-color: rgba(var(--primary-rgb), 0.3);">
+                                <i class="fas fa-clock mr-2"></i> Extend Duration
+                            </button>
+                        @elseif($emergencyMode->status === EmergencyMode::STATUS_INACTIVE)
+                            <form action="{{ route('developer.emergency.activate', $emergencyMode->id) }}" method="POST" class="w-full">
+                                @csrf
+                                <button type="submit"
+                                        onclick="return confirm('Activate this emergency mode?')"
+                                        class="w-full p-3 rounded-lg border flex items-center justify-center transition-all hover:opacity-80"
+                                        style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border-color: rgba(var(--warning-rgb), 0.3);">
+                                    <i class="fas fa-play mr-2"></i> Activate Now
+                                </button>
+                            </form>
                         @endif
-                        
-                        <a href="{{ route('developer.emergency.history', $emergencyMode->id) }}" 
-                           class="w-full p-3 rounded-lg border flex items-center justify-center hover:bg-opacity-10 transition-colors"
+
+                        @if($emergencyMode->isScheduled())
+                            <button type="button" onclick="EmergencyShow.openCancel()"
+                                    class="w-full p-3 rounded-lg border flex items-center justify-center transition-all hover:opacity-80"
+                                    style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger); border-color: rgba(var(--danger-rgb), 0.3);">
+                                <i class="fas fa-times mr-2"></i> Cancel Scheduled
+                            </button>
+                        @endif
+
+                        <a href="{{ route('developer.emergency.history', $emergencyMode->id) }}"
+                           class="w-full p-3 rounded-lg border flex items-center justify-center transition-all hover:opacity-80"
                            style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border-color: rgba(var(--info-rgb), 0.3);">
-                            <i class="fas fa-history mr-2"></i>
-                            View Full History
+                            <i class="fas fa-history mr-2"></i> View Full History
                         </a>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Affected Users -->
-        <div id="affected-users" class="card">
+        {{-- Affected Users --}}
+        <div id="affected-users" class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
             <div class="p-6 border-b" style="border-color: var(--border-color);">
                 <div class="flex justify-between items-center">
                     <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
-                        <i class="fas fa-users mr-2"></i> Affected Users
+                        <i class="fas fa-users mr-2" style="color: var(--primary);"></i> Affected Users
                     </h3>
-                    <span class="text-sm px-2 py-1 rounded-full" 
-                          style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);">
-                        {{ $affectedUsersCount ?? 0 }} users
+                    <span class="badge" style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);">
+                        {{ number_format($affectedUsersCount ?? 0) }} users
                     </span>
                 </div>
             </div>
             <div class="p-6">
                 @if($emergencyMode->affectedUsers && $emergencyMode->affectedUsers->count() > 0)
-                <div class="space-y-3">
-                    @foreach($emergencyMode->affectedUsers->take(5) as $affectedUser)
-                    <div class="p-3 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
-                        <div class="flex items-center justify-between mb-2">
-                            <div class="flex items-center">
-                                <div class="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center mr-3">
-                                    <i class="fas fa-user text-gray-500"></i>
-                                </div>
-                                <div>
-                                    <div class="font-medium" style="color: var(--text-primary);">
-                                        {{ $affectedUser->user->name ?? 'User #' . $affectedUser->user_id }}
+                    <div class="space-y-3">
+                        @foreach($emergencyMode->affectedUsers->take(5) as $affectedUser)
+                            <div class="p-3 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                                <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+                                    <div class="flex items-center">
+                                        <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
+                                             style="background-color: var(--bg-primary); color: var(--text-secondary);">
+                                            <i class="fas fa-user text-xs"></i>
+                                        </div>
+                                        <div>
+                                            <div class="font-medium" style="color: var(--text-primary);">
+                                                {{ $affectedUser->user?->name ?? 'User #' . $affectedUser->user_id }}
+                                            </div>
+                                            <div class="text-xs" style="color: var(--text-secondary);">
+                                                {{ $userTypeLabels[(int) $affectedUser->user_type] ?? 'Type ' . $affectedUser->user_type }}
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div class="text-xs" style="color: var(--text-secondary);">
-                                        {{ $affectedUser->user_type_name }}
-                                    </div>
+                                    @if($affectedUser->notified_at)
+                                        <div class="badge" style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
+                                            <i class="fas fa-check mr-1"></i> Notified
+                                        </div>
+                                    @endif
                                 </div>
+
+                                @if(!empty($affectedUser->affected_features) && is_array($affectedUser->affected_features))
+                                    <div class="text-xs mt-2">
+                                        <span style="color: var(--text-secondary);">Affected features:</span>
+                                        <div class="flex flex-wrap gap-1 mt-1">
+                                            @foreach($affectedUser->affected_features as $feature)
+                                                <span class="badge"
+                                                      style="background-color: rgba(var(--warning-rgb), 0.05); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.2);">
+                                                    {{ str_replace('_', ' ', $feature) }}
+                                                </span>
+                                            @endforeach
+                                        </div>
+                                    </div>
+                                @endif
                             </div>
-                            @if($affectedUser->notified_at)
-                            <div class="text-xs px-2 py-1 rounded" style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
-                                <i class="fas fa-check mr-1"></i> Notified
+                        @endforeach
+
+                        @if(($affectedUsersCount ?? 0) > 5)
+                            <div class="text-center">
+                                <button type="button" onclick="EmergencyShow.openAllUsers()"
+                                        class="text-sm inline-flex items-center hover:underline"
+                                        style="color: var(--primary);">
+                                    View all {{ number_format($affectedUsersCount) }} affected users
+                                    <i class="fas fa-arrow-right ml-1"></i>
+                                </button>
                             </div>
-                            @endif
-                        </div>
-                        
-                        @if(!empty($affectedUser->affected_features))
-                        <div class="text-xs mt-2">
-                            <span style="color: var(--text-secondary);">Affected features:</span>
-                            <div class="flex flex-wrap gap-1 mt-1">
-                                @foreach($affectedUser->affected_features as $feature)
-                                <span class="px-1.5 py-0.5 rounded border text-xs"
-                                      style="background-color: rgba(var(--warning-rgb), 0.05); color: var(--warning); border-color: rgba(var(--warning-rgb), 0.2);">
-                                    {{ str_replace('_', ' ', $feature) }}
-                                </span>
-                                @endforeach
-                            </div>
-                        </div>
                         @endif
                     </div>
-                    @endforeach
-                    
-                    @if($affectedUsersCount > 5)
-                    <div class="text-center">
-                        <a href="#" onclick="showAllUsersModal()" 
-                           class="text-sm inline-flex items-center hover:underline" style="color: var(--primary);">
-                            View all {{ $affectedUsersCount }} affected users
-                            <i class="fas fa-arrow-right ml-1"></i>
-                        </a>
-                    </div>
-                    @endif
-                </div>
                 @else
-                <div class="text-center py-6">
-                    <div class="w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center"
-                         style="background-color: rgba(var(--text-secondary), 0.1);">
-                        <i class="fas fa-users" style="color: var(--text-secondary);"></i>
+                    <div class="text-center py-6">
+                        <div class="w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center"
+                             style="background-color: rgba(var(--text-secondary), 0.1);">
+                            <i class="fas fa-users" style="color: var(--text-secondary);"></i>
+                        </div>
+                        <p class="text-sm" style="color: var(--text-secondary);">
+                            No users affected by this emergency mode.
+                        </p>
                     </div>
-                    <p class="text-sm" style="color: var(--text-secondary);">
-                        No users affected by this emergency mode.
-                    </p>
-                </div>
                 @endif
             </div>
         </div>
 
-        <!-- System Information -->
-        <div class="card">
+        {{-- System Information --}}
+        <div class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
             <div class="p-6 border-b" style="border-color: var(--border-color);">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
-                    <i class="fas fa-server mr-2"></i> System Information
+                    <i class="fas fa-server mr-2" style="color: var(--primary);"></i> System Information
                 </h3>
             </div>
             <div class="p-6 space-y-4">
                 <div>
                     <div class="text-sm mb-1" style="color: var(--text-secondary);">Created</div>
                     <div style="color: var(--text-primary);">{{ $emergencyMode->created_at->format('M d, Y H:i') }}</div>
-                    @if($emergencyMode->createdBy)
-                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                        By: {{ $emergencyMode->createdBy->name }}
-                    </div>
-                    @endif
                 </div>
-                
+
                 @if($emergencyMode->activated_at)
-                <div>
-                    <div class="text-sm mb-1" style="color: var(--text-secondary);">Activated</div>
-                    <div style="color: var(--text-primary);">{{ $emergencyMode->activated_at->format('M d, Y H:i') }}</div>
-                    @if($emergencyMode->activatedByUser)
-                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                        By: {{ $emergencyMode->activatedByUser->name }}
+                    <div>
+                        <div class="text-sm mb-1" style="color: var(--text-secondary);">Activated</div>
+                        <div style="color: var(--text-primary);">{{ $emergencyMode->activated_at->format('M d, Y H:i') }}</div>
+                        @if($emergencyMode->activatedByUser)
+                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                By: {{ $emergencyMode->activatedByUser->name }}
+                            </div>
+                        @endif
                     </div>
-                    @endif
-                </div>
                 @endif
-                
+
                 @if($emergencyMode->deactivated_at)
-                <div>
-                    <div class="text-sm mb-1" style="color: var(--text-secondary);">Deactivated</div>
-                    <div style="color: var(--text-primary);">{{ $emergencyMode->deactivated_at->format('M d, Y H:i') }}</div>
-                    @if($emergencyMode->deactivatedByUser)
-                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                        By: {{ $emergencyMode->deactivatedByUser->name }}
+                    <div>
+                        <div class="text-sm mb-1" style="color: var(--text-secondary);">Deactivated</div>
+                        <div style="color: var(--text-primary);">{{ $emergencyMode->deactivated_at->format('M d, Y H:i') }}</div>
+                        @if($emergencyMode->deactivatedByUser)
+                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                By: {{ $emergencyMode->deactivatedByUser->name }}
+                            </div>
+                        @endif
                     </div>
-                    @endif
-                </div>
                 @endif
-                
+
                 @if($emergencyMode->scheduled_start)
-                <div>
-                    <div class="text-sm mb-1" style="color: var(--text-secondary);">Scheduled Start</div>
-                    <div style="color: var(--text-primary);">{{ $emergencyMode->scheduled_start->format('M d, Y H:i') }}</div>
-                </div>
+                    <div>
+                        <div class="text-sm mb-1" style="color: var(--text-secondary);">Scheduled Start</div>
+                        <div style="color: var(--text-primary);">{{ $emergencyMode->scheduled_start->format('M d, Y H:i') }}</div>
+                    </div>
                 @endif
-                
+
                 @if($emergencyMode->scheduled_end)
-                <div>
-                    <div class="text-sm mb-1" style="color: var(--text-secondary);">Scheduled End</div>
-                    <div style="color: var(--text-primary);">{{ $emergencyMode->scheduled_end->format('M d, Y H:i') }}</div>
-                </div>
+                    <div>
+                        <div class="text-sm mb-1" style="color: var(--text-secondary);">Scheduled End</div>
+                        <div style="color: var(--text-primary);">{{ $emergencyMode->scheduled_end->format('M d, Y H:i') }}</div>
+                    </div>
                 @endif
-                
+
                 <div>
                     <div class="text-sm mb-1" style="color: var(--text-secondary);">Last Updated</div>
                     <div style="color: var(--text-primary);">{{ $emergencyMode->updated_at->format('M d, Y H:i') }}</div>
@@ -746,16 +751,26 @@
     </div>
 </div>
 
-<!-- Deactivation Modal -->
-<div id="deactivationModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-    <div class="card w-full max-w-lg">
+{{-- ============================================================
+     | DEACTIVATION MODAL
+     * ============================================================ --}}
+<div id="deactivationModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4"
+     role="dialog" aria-modal="true" aria-labelledby="deactivationTitle">
+    <div class="card w-full max-w-lg" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
         <div class="p-6">
-            <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary);">
-                <i class="fas fa-power-off mr-2" style="color: var(--danger);"></i>
-                Deactivate Emergency Mode
-            </h3>
-            
-            <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(var(--danger-rgb), 0.1); border: 1px solid rgba(var(--danger-rgb), 0.2);">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="deactivationTitle" class="text-lg font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-power-off mr-2" style="color: var(--danger);"></i> Deactivate Emergency Mode
+                </h3>
+                <button type="button" onclick="EmergencyShow.closeModal('deactivationModal')"
+                        class="p-2 rounded-lg hover:bg-opacity-20"
+                        style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);"
+                        aria-label="Close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(var(--danger-rgb), 0.05); border: 1px solid rgba(var(--danger-rgb), 0.2);">
                 <div class="flex">
                     <i class="fas fa-exclamation-circle mt-1 mr-3" style="color: var(--danger);"></i>
                     <div>
@@ -766,41 +781,43 @@
                     </div>
                 </div>
             </div>
-            
+
             <form action="{{ route('developer.emergency.deactivate', $emergencyMode->id) }}" method="POST">
                 @csrf
-                
+
                 <div class="space-y-4 mb-6">
                     <div>
-                        <label class="block text-sm mb-2" style="color: var(--text-secondary);">
-                            Deactivation Reason <span style="color: var(--danger);">*</span>
+                        <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">
+                            Deactivation Reason <span class="text-red-500">*</span>
                         </label>
-                        <textarea name="deactivation_reason" rows="3" 
-                                  class="w-full p-3 border rounded" 
+                        <textarea name="deactivation_reason" rows="3" maxlength="500"
+                                  class="w-full p-3 border rounded-lg"
                                   style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                   placeholder="Why are you deactivating this emergency mode?"
                                   required minlength="10"></textarea>
-                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                            Minimum 10 characters
-                        </div>
+                        <div class="text-xs mt-1" style="color: var(--text-secondary);">Minimum 10 characters</div>
                     </div>
-                    
+
                     <div class="flex items-center">
                         <input type="checkbox" id="confirmDeactivation" name="confirm" value="1" required
                                class="h-4 w-4 rounded"
                                style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                         <label for="confirmDeactivation" class="ml-2 text-sm" style="color: var(--text-secondary);">
-                            I confirm that I want to deactivate this emergency mode <span style="color: var(--danger);">*</span>
+                            I confirm that I want to deactivate this emergency mode <span class="text-red-500">*</span>
                         </label>
                     </div>
                 </div>
-                
+
                 <div class="flex justify-end space-x-2">
-                    <button type="button" onclick="closeModal('deactivationModal')" class="btn-secondary">
+                    <button type="button" onclick="EmergencyShow.closeModal('deactivationModal')"
+                            class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80"
+                            style="background-color: var(--bg-secondary); color: var(--text-secondary);">
                         Cancel
                     </button>
-                    <button type="submit" class="btn-danger flex items-center">
-                        <i class="fas fa-power-off mr-2"></i> Deactivate Emergency Mode
+                    <button type="submit"
+                            class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                            style="background-color: var(--danger); color: white;">
+                        <i class="fas fa-power-off mr-2"></i> Deactivate
                     </button>
                 </div>
             </form>
@@ -808,39 +825,47 @@
     </div>
 </div>
 
-<!-- Extension Modal -->
-<div id="extensionModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-    <div class="card w-full max-w-lg">
+{{-- ============================================================
+     | EXTENSION MODAL
+     * ============================================================ --}}
+<div id="extensionModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4"
+     role="dialog" aria-modal="true" aria-labelledby="extensionTitle">
+    <div class="card w-full max-w-lg" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
         <div class="p-6">
-            <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary);">
-                <i class="fas fa-clock mr-2" style="color: var(--primary);"></i>
-                Extend Emergency Mode
-            </h3>
-            
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="extensionTitle" class="text-lg font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-clock mr-2" style="color: var(--primary);"></i> Extend Emergency Mode
+                </h3>
+                <button type="button" onclick="EmergencyShow.closeModal('extensionModal')"
+                        class="p-2 rounded-lg hover:bg-opacity-20"
+                        style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);"
+                        aria-label="Close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
             <form action="{{ route('developer.emergency.extend', $emergencyMode->id) }}" method="POST">
                 @csrf
-                
+
                 <div class="space-y-4 mb-6">
                     <div>
-                        <label class="block text-sm mb-2" style="color: var(--text-secondary);">
-                            Extension Reason <span style="color: var(--danger);">*</span>
+                        <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">
+                            Extension Reason <span class="text-red-500">*</span>
                         </label>
-                        <textarea name="extension_reason" rows="3" 
-                                  class="w-full p-3 border rounded" 
+                        <textarea name="extension_reason" rows="3" maxlength="500"
+                                  class="w-full p-3 border rounded-lg"
                                   style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                   placeholder="Why do you need to extend this emergency mode?"
                                   required minlength="10"></textarea>
-                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                            Minimum 10 characters
-                        </div>
+                        <div class="text-xs mt-1" style="color: var(--text-secondary);">Minimum 10 characters</div>
                     </div>
-                    
+
                     <div>
-                        <label class="block text-sm mb-2" style="color: var(--text-secondary);">
-                            Additional Minutes <span style="color: var(--danger);">*</span>
+                        <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">
+                            Additional Minutes <span class="text-red-500">*</span>
                         </label>
                         <div class="flex items-center space-x-4">
-                            <input type="range" id="extension_slider" name="extension_slider" 
+                            <input type="range" id="extension_slider" name="extension_slider"
                                    min="15" max="1440" value="60"
                                    class="flex-1 h-2 rounded-lg appearance-none cursor-pointer"
                                    style="background-color: var(--border-color);">
@@ -849,38 +874,33 @@
                                    class="w-24 p-2 border rounded-lg text-center"
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                    min="15" max="1440" required>
-                            <span class="text-sm" style="color: var(--text-secondary);">minutes</span>
+                            <span class="text-sm" style="color: var(--text-secondary);">min</span>
                         </div>
-                        <div class="flex justify-between mt-1">
+                        <div class="flex justify-between items-center mt-2 flex-wrap gap-2">
                             <span class="text-xs" style="color: var(--text-secondary);">Quick select:</span>
                             <div class="space-x-2">
-                                <button type="button" onclick="setExtension(30)" class="text-xs px-2 py-1 rounded border hover:bg-opacity-10"
-                                        style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border-color: rgba(var(--primary-rgb), 0.3);">
-                                    30 min
-                                </button>
-                                <button type="button" onclick="setExtension(60)" class="text-xs px-2 py-1 rounded border hover:bg-opacity-10"
-                                        style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border-color: rgba(var(--primary-rgb), 0.3);">
-                                    1 hour
-                                </button>
-                                <button type="button" onclick="setExtension(120)" class="text-xs px-2 py-1 rounded border hover:bg-opacity-10"
-                                        style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border-color: rgba(var(--primary-rgb), 0.3);">
-                                    2 hours
-                                </button>
-                                <button type="button" onclick="setExtension(240)" class="text-xs px-2 py-1 rounded border hover:bg-opacity-10"
-                                        style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border-color: rgba(var(--primary-rgb), 0.3);">
-                                    4 hours
-                                </button>
+                                @foreach([30 => '30 min', 60 => '1 hour', 120 => '2 hours', 240 => '4 hours'] as $mins => $label)
+                                    <button type="button" onclick="EmergencyShow.setExtension({{ $mins }})"
+                                            class="text-xs px-2 py-1 rounded border hover:bg-opacity-10"
+                                            style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border-color: rgba(var(--primary-rgb), 0.3);">
+                                        {{ $label }}
+                                    </button>
+                                @endforeach
                             </div>
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="flex justify-end space-x-2">
-                    <button type="button" onclick="closeModal('extensionModal')" class="btn-secondary">
+                    <button type="button" onclick="EmergencyShow.closeModal('extensionModal')"
+                            class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80"
+                            style="background-color: var(--bg-secondary); color: var(--text-secondary);">
                         Cancel
                     </button>
-                    <button type="submit" class="btn-primary flex items-center">
-                        <i class="fas fa-clock mr-2"></i> Extend Emergency Mode
+                    <button type="submit"
+                            class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                            style="background-color: var(--primary); color: white;">
+                        <i class="fas fa-clock mr-2"></i> Extend
                     </button>
                 </div>
             </form>
@@ -888,28 +908,99 @@
     </div>
 </div>
 
-<!-- All Users Modal -->
-<div id="allUsersModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-    <div class="card w-full max-w-4xl max-h-[80vh] overflow-hidden">
+{{-- ============================================================
+     | CANCEL MODAL
+     * ============================================================ --}}
+<div id="cancelModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4"
+     role="dialog" aria-modal="true" aria-labelledby="cancelTitle">
+    <div class="card w-full max-w-lg" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
+        <div class="p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="cancelTitle" class="text-lg font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-times-circle mr-2" style="color: var(--danger);"></i> Cancel Scheduled Emergency
+                </h3>
+                <button type="button" onclick="EmergencyShow.closeModal('cancelModal')"
+                        class="p-2 rounded-lg hover:bg-opacity-20"
+                        style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);"
+                        aria-label="Close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
+            <p class="text-sm mb-4" style="color: var(--text-secondary);">
+                This will cancel the scheduled activation. The emergency mode will remain configured but inactive.
+            </p>
+
+            <form action="{{ route('developer.emergency.cancel', $emergencyMode->id) }}" method="POST">
+                @csrf
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-secondary);">
+                        Cancellation Reason <span class="text-red-500">*</span>
+                    </label>
+                    <textarea name="cancellation_reason" rows="3" maxlength="500"
+                              class="w-full p-3 border rounded-lg"
+                              style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                              placeholder="Why are you cancelling this scheduled emergency mode?"
+                              required minlength="10"></textarea>
+                    <div class="text-xs mt-1" style="color: var(--text-secondary);">Minimum 10 characters</div>
+                </div>
+
+                <div class="flex justify-end space-x-2">
+                    <button type="button" onclick="EmergencyShow.closeModal('cancelModal')"
+                            class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80"
+                            style="background-color: var(--bg-secondary); color: var(--text-secondary);">
+                        Keep Schedule
+                    </button>
+                    <button type="submit"
+                            class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                            style="background-color: var(--danger); color: white;">
+                        <i class="fas fa-times mr-2"></i> Cancel Emergency
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{{-- ============================================================
+     | ALL AFFECTED USERS MODAL
+     * ============================================================ --}}
+<div id="allUsersModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4"
+     role="dialog" aria-modal="true" aria-labelledby="allUsersTitle">
+    <div class="card w-full max-w-4xl max-h-[80vh] overflow-hidden"
+         style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
         <div class="p-6 border-b" style="border-color: var(--border-color);">
-            <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
-                <i class="fas fa-users mr-2"></i>
-                All Affected Users ({{ $affectedUsersCount ?? 0 }})
-            </h3>
+            <div class="flex justify-between items-center">
+                <h3 id="allUsersTitle" class="text-lg font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-users mr-2" style="color: var(--primary);"></i>
+                    All Affected Users ({{ number_format($affectedUsersCount ?? 0) }})
+                </h3>
+                <button type="button" onclick="EmergencyShow.closeModal('allUsersModal')"
+                        class="p-2 rounded-lg hover:bg-opacity-20"
+                        style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);"
+                        aria-label="Close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
         </div>
         <div class="p-6 overflow-y-auto" style="max-height: calc(80vh - 120px);">
-            <!-- Content would be loaded via AJAX or modal content -->
             <div class="text-center py-8">
                 <i class="fas fa-users text-4xl mb-4" style="color: var(--text-secondary); opacity: 0.5;"></i>
-                <p style="color: var(--text-secondary);">
-                    User details would be loaded here. This would typically
-                    be implemented with pagination or search functionality.
+                <p class="text-sm" style="color: var(--text-secondary);">
+                    Full user list is available via the dedicated endpoint
+                    <code class="px-1 rounded" style="background-color: var(--bg-secondary);">/emergency/{id}/affected-users</code>.
+                </p>
+                <p class="text-xs mt-2" style="color: var(--text-secondary);">
+                    Add the endpoint and a modal loader to enable this view.
                 </p>
             </div>
         </div>
         <div class="p-4 border-t" style="border-color: var(--border-color);">
             <div class="flex justify-end">
-                <button type="button" onclick="closeModal('allUsersModal')" class="btn-secondary">
+                <button type="button" onclick="EmergencyShow.closeModal('allUsersModal')"
+                        class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80"
+                        style="background-color: var(--bg-secondary); color: var(--text-secondary);">
                     Close
                 </button>
             </div>
@@ -918,247 +1009,140 @@
 </div>
 @endsection
 
-@section('scripts')
-<script>
-function showDeactivationModal() {
-    document.getElementById('deactivationModal').classList.remove('hidden');
-}
-
-function showExtensionModal() {
-    document.getElementById('extensionModal').classList.remove('hidden');
-}
-
-function showAllUsersModal() {
-    document.getElementById('allUsersModal').classList.remove('hidden');
-}
-
-function closeModal(modalId) {
-    document.getElementById(modalId).classList.add('hidden');
-}
-
-function setExtension(minutes) {
-    document.getElementById('extension_slider').value = minutes;
-    document.getElementById('extension_minutes').value = minutes;
-}
-
-// Initialize extension slider sync
-document.addEventListener('DOMContentLoaded', function() {
-    const extensionSlider = document.getElementById('extension_slider');
-    const extensionInput = document.getElementById('extension_minutes');
-    if (extensionSlider && extensionInput) {
-        extensionSlider.addEventListener('input', function() {
-            extensionInput.value = this.value;
-        });
-        
-        extensionInput.addEventListener('input', function() {
-            extensionSlider.value = this.value;
-        });
-    }
-    
-    // Close modals when clicking outside
-    document.querySelectorAll('.fixed.inset-0').forEach(modal => {
-        modal.addEventListener('click', function(e) {
-            if (e.target === this) {
-                this.classList.add('hidden');
-            }
-        });
-    });
-    
-    // Keyboard navigation
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            closeModal('deactivationModal');
-            closeModal('extensionModal');
-            closeModal('allUsersModal');
-        }
-    });
-    
-    // Form validation for deactivation
-    const deactivationForm = document.querySelector('form[action*="deactivate"]');
-    if (deactivationForm) {
-        deactivationForm.addEventListener('submit', function(e) {
-            const textarea = this.querySelector('textarea[name="deactivation_reason"]');
-            const checkbox = this.querySelector('input[name="confirm"]');
-            
-            if (!textarea.value.trim() || textarea.value.trim().length < 10) {
-                e.preventDefault();
-                alert('Please provide a deactivation reason with at least 10 characters.');
-                textarea.focus();
-                return;
-            }
-            
-            if (!checkbox.checked) {
-                e.preventDefault();
-                alert('Please confirm that you want to deactivate this emergency mode.');
-                checkbox.focus();
-                return;
-            }
-        });
-    }
-    
-    // Form validation for extension
-    const extensionForm = document.querySelector('form[action*="extend"]');
-    if (extensionForm) {
-        extensionForm.addEventListener('submit', function(e) {
-            const textarea = this.querySelector('textarea[name="extension_reason"]');
-            const minutesInput = this.querySelector('input[name="extension_minutes"]');
-            
-            if (!textarea.value.trim() || textarea.value.trim().length < 10) {
-                e.preventDefault();
-                alert('Please provide an extension reason with at least 10 characters.');
-                textarea.focus();
-                return;
-            }
-            
-            const minutes = parseInt(minutesInput.value);
-            if (isNaN(minutes) || minutes < 15 || minutes > 1440) {
-                e.preventDefault();
-                alert('Please enter a valid duration between 15 and 1440 minutes.');
-                minutesInput.focus();
-                return;
-            }
-        });
-    }
-});
-</script>
-
+@push('styles')
 <style>
-/* Custom range slider styling */
-input[type="range"] {
-    -webkit-appearance: none;
-    height: 6px;
-    border-radius: 3px;
-    outline: none;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background-color: var(--primary);
-    cursor: pointer;
-    border: 2px solid white;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-input[type="range"]::-moz-range-thumb {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background-color: var(--primary);
-    cursor: pointer;
-    border: 2px solid white;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-/* Status indicator animations */
-.animate-pulse {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-@keyframes pulse {
-    0%, 100% {
-        opacity: 1;
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.25rem 0.6rem;
+        border-radius: 9999px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        letter-spacing: 0.4px;
     }
-    50% {
-        opacity: 0.5;
+
+    input[type="range"] {
+        -webkit-appearance: none;
+        height: 6px;
+        border-radius: 3px;
+        outline: none;
     }
-}
-
-/* Button styles */
-.btn-primary, .btn-secondary, .btn-warning, .btn-danger {
-    transition: all 0.2s ease-in-out;
-    padding: 0.5rem 1rem;
-    border-radius: 0.375rem;
-    font-weight: 500;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.btn-primary {
-    background-color: var(--primary);
-    color: white;
-    border: 1px solid var(--primary);
-}
-
-.btn-secondary {
-    background-color: var(--bg-secondary);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-}
-
-.btn-warning {
-    background-color: var(--warning);
-    color: white;
-    border: 1px solid var(--warning);
-}
-
-.btn-danger {
-    background-color: var(--danger);
-    color: white;
-    border: 1px solid var(--danger);
-}
-
-.btn-primary:hover, .btn-secondary:hover, .btn-warning:hover, .btn-danger:hover {
-    transform: translateY(-1px);
-    opacity: 0.9;
-}
-
-/* Card styling */
-.card {
-    background-color: var(--bg-primary);
-    border-radius: 0.5rem;
-    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-    border: 1px solid var(--border-color);
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-    .grid-cols-1 {
-        grid-template-columns: 1fr;
+    input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background-color: var(--primary);
+        cursor: pointer;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
     }
-    
-    .lg\:col-span-2 {
-        grid-column: span 1;
+    input[type="range"]::-moz-range-thumb {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background-color: var(--primary);
+        cursor: pointer;
+        border: 2px solid white;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
     }
-    
-    .text-2xl {
-        font-size: 1.5rem;
+
+    .card { transition: box-shadow 0.2s ease; }
+    .card:hover { box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08); }
+
+    input:focus, select:focus, textarea:focus, button:focus {
+        outline: none;
+        box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
     }
-    
-    .p-6 {
-        padding: 1rem;
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.5; }
     }
-}
+    .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
 
-/* Hover effects */
-.hover\:bg-opacity-10:hover {
-    background-color: rgba(0, 0, 0, 0.1);
-}
+    @media (prefers-reduced-motion: reduce) {
+        .animate-pulse, .card { animation: none !important; transition: none !important; }
+    }
 
-.hover\:underline:hover {
-    text-decoration: underline;
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar {
-    width: 8px;
-}
-
-::-webkit-scrollbar-track {
-    background: var(--bg-secondary);
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--border-color);
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: var(--text-secondary);
-}
+    @media (max-width: 768px) {
+        .card { border-radius: 0.5rem; }
+        .text-2xl { font-size: 1.5rem; }
+    }
 </style>
-@endsection
+@endpush
+
+@push('scripts')
+<script>
+(function () {
+    'use strict';
+
+    function openDeactivation() {
+        document.getElementById('deactivationModal').classList.remove('hidden');
+    }
+
+    function openExtension() {
+        document.getElementById('extensionModal').classList.remove('hidden');
+    }
+
+    function openCancel() {
+        document.getElementById('cancelModal').classList.remove('hidden');
+    }
+
+    function openAllUsers() {
+        document.getElementById('allUsersModal').classList.remove('hidden');
+    }
+
+    function closeModal(id) {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+    }
+
+    function setExtension(minutes) {
+        const slider = document.getElementById('extension_slider');
+        const input  = document.getElementById('extension_minutes');
+        if (slider) slider.value = minutes;
+        if (input)  input.value  = minutes;
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        // Range slider sync
+        const slider = document.getElementById('extension_slider');
+        const input  = document.getElementById('extension_minutes');
+        if (slider && input) {
+            slider.addEventListener('input', function () { input.value = this.value; });
+            input.addEventListener('input', function () { slider.value = this.value; });
+        }
+
+        // Backdrop click closes modals
+        document.querySelectorAll('.fixed.inset-0').forEach(modal => {
+            modal.addEventListener('click', function (e) {
+                if (e.target === this) this.classList.add('hidden');
+            });
+        });
+
+        // Escape closes modals
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                closeModal('deactivationModal');
+                closeModal('extensionModal');
+                closeModal('cancelModal');
+                closeModal('allUsersModal');
+            }
+        });
+
+        // Native form validation is enough — no JS override needed
+    });
+
+    window.EmergencyShow = {
+        openDeactivation,
+        openExtension,
+        openCancel,
+        openAllUsers,
+        closeModal,
+        setExtension,
+    };
+})();
+</script>
+@endpush

@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Cache;
@@ -61,12 +61,16 @@ use App\Http\Controllers\Developer\EmergencyModeController;
 use App\Http\Controllers\Admin\SecurityScheduleController as AdminSecurityScheduleController;
 use App\Http\Controllers\Security\SecurityScheduleController as SecurityScheduleController;
 use App\Http\Controllers\Admin\RotationGroupController;
+use App\Http\Controllers\Security\RotationGroupController as SecurityRotationGroupController;
 use App\Http\Controllers\Admin\RotationHistoryController;
+use App\Http\Controllers\Security\RotationHistoryController as SecurityRotationHistoryController;
 use App\Http\Controllers\Admin\SecurityPostController as AdminSecurityPostController;
 use App\Http\Controllers\Security\SecurityPostController as SecurityPostController;
 use App\Http\Controllers\Admin\PostQrCodeController;
+use App\Http\Controllers\Security\PostQrCodeController as SecurityPostQrCodeController;
 use App\Http\Controllers\Security\SecurityDashboardController;
-use App\Http\Controllers\Admin\SecurityShiftController;
+use App\Http\Controllers\Admin\SecurityShiftController    as AdminSecurityShiftController;
+use App\Http\Controllers\Security\SecurityShiftController as SecuritySecurityShiftController;
 use App\Http\Controllers\Admin\SecurityReportsController;
 use App\Http\Controllers\Admin\AdminSupervisorAssignmentController;
 use App\Http\Controllers\Security\SupervisorAssignmentController;
@@ -126,13 +130,28 @@ use App\Http\Controllers\Sanitation\CollectionZoneController;
 use App\Http\Controllers\Sanitation\SanitationSettingController;
 use App\Http\Controllers\ThemeController;
 use App\Http\Controllers\ThemePreviewController;
+use App\Contracts\Theme\ThemeServiceInterface;
+use App\DTOs\Theme\ThemeColorsDTO;
+use App\DTOs\Theme\ThemeSettingsDTO;
 use App\Http\Controllers\Landlord\WasteCollectionController;
 use App\Http\Middleware\EnsureRootSanitationAccess;
 use App\Http\Controllers\LiveChatController;
 use App\Http\Controllers\SearchController;
 use App\Http\Controllers\Landlord\PropertyFamilyLinkController;
 use App\Http\Controllers\Admin\FamilyLinkApprovalController;
+use App\Http\Controllers\Developer\SystemLogController;
+use App\Http\Controllers\Developer\SystemLogAttachmentController;
+use App\Http\Controllers\Developer\DeveloperDatabaseController;
 use Illuminate\Support\Facades\Storage;
+use App\Http\Controllers\Admin\HomepageContentController;
+use App\Http\Controllers\AdPublicController;
+use App\Http\Controllers\Admin\AdSettingsController;
+use App\Http\Controllers\Landlord\AdCampaignController;
+use App\Http\Controllers\Landlord\AdPaymentController;
+use App\Http\Controllers\PropertyUnitPublicController;
+use App\Http\Controllers\Admin\AdminInquiryController;
+use App\Http\Controllers\Landlord\LandlordInquiryController; 
+use App\Http\Controllers\UnitInquiryController;    
 
 use Illuminate\Support\Facades\Auth;
 
@@ -168,20 +187,6 @@ Route::get('/api/user-roles', [HomeController::class, 'getUserRoles'])
 
 
 
-
-// ==================== STANDARD LOGIN ROUTES ====================
-
-Route::get('/login', [LoginController::class, 'showLoginForm'])->name('login');
-Route::post('/login', [LoginController::class, 'login'])->name('login.submit');
-Route::post('/logout', [LoginController::class, 'logout'])->name('logout');
-
-// ==================== SESSION STATUS AND MANAGEMENT ====================
-
-// ⭐ ADDED: Session status and CSRF refresh endpoints
-Route::get('/session-status', [LoginController::class, 'sessionStatus'])->name('session.status');
-Route::post('/refresh-csrf', [LoginController::class, 'refreshCsrfToken'])->name('csrf.refresh');
-Route::get('/page-expired', [LoginController::class, 'handlePageExpired'])->name('page.expired');
-
 // ==================== SESSION MANAGEMENT ROUTES (via SessionController) ====================
 
 Route::prefix('session')->name('session.')->group(function () {
@@ -213,9 +218,117 @@ Route::prefix('session')->name('session.')->group(function () {
     Route::middleware(['auth'])->post('/logout-all', [SessionController::class, 'logoutAllDevices'])->name('logout-all');
 });
 
-// ==================== UNIFIED SOCIAL LOGIN ROUTES ====================
 
-// Dynamic social login routes (supports multiple providers)
+/*
+|--------------------------------------------------------------------------
+| Web Authentication Routes
+|--------------------------------------------------------------------------
+|
+| ── UPDATED (2026-10-13) ──
+|
+|  1. All web 2FA routes now point at the dedicated TwoFactorController.
+|     LoginController no longer owns the 2FA implementation — it only
+|     handles the password phase and the handoff redirect.
+|
+|  2. ✅ NEW: mandatory policy-driven 2FA setup routes, gated by the
+|     `two_factor.setup` middleware group (web + two_factor.setup.required).
+|     These are the routes LoginController redirects to when
+|     DeveloperSetting::isTwoFactorRequiredFor($user) returns true.
+|
+|  3. The `device/trust` route now points at the new trusted-device
+|     scheme on TwoFactorController (cookie-based, hashed in DB).
+|
+|  4. ✅ CONFIRMED REMOVED: the legacy mobile/* block has been removed
+|     from web routes. Every mobile endpoint (mobile login/logout/refresh,
+|     mobile 2FA, push token registration) lives in routes/api.php
+|     under /api/v1/auth/*. If you need the old web paths for a Flutter
+|     build pointed at the web domain, add explicit 301 redirects — do
+|     NOT re-implement them here.
+|
+|  5. Split the 2fa/verify route into a GET (show form) and a POST
+|     (submit code) with distinct names to avoid collisions.
+|
+|  6. Moved account-existence probes behind auth so they can't be
+|     used unauthenticated to enumerate accounts.
+|
+|  7. Narrowed the fallback so it only intercepts known auth prefixes
+|     and leaves non-auth 404s to the app's normal 404 handler.
+|
+|--------------------------------------------------------------------------
+| ROUTE → CONTROLLER METHOD AUDIT
+|--------------------------------------------------------------------------
+| Every route below references a controller method. This comment is the
+| canonical list of methods the router expects to exist. If you deploy
+| and hit a 500 with "Method does not exist", diff this list against
+| the controller classes.
+|
+|   LoginController:
+|     showLoginForm, login, logout,
+|     sessionStatus, refreshCsrfToken, handlePageExpired,
+|     checkSession, continueSession, invalidateSession,
+|     redirectToProvider, handleProviderCallback,
+|     redirectToGoogle, handleGoogleCallback,
+|     redirectToMicrosoft, handleMicrosoftCallback,
+|     linkSocialAccount, unlinkSocialAccount,
+|     getUserDevices, removeDevice, getCurrentDeviceInfo,
+|     showForgotPasswordForm, sendResetLink, resendResetLink,
+|     showResetForm, resetPassword, changePassword, checkPasswordExpiry,
+|     startImpersonation, stopImpersonation, getImpersonationStatus,
+|     getLoginHistory, getActivityDetails, getSuspiciousActivity, clearActivityHistory,
+|     showRecoveryRequestForm, sendRecoveryRequest,
+|     showRecoveryVerification, verifyRecoveryIdentity, completeRecovery,
+|     checkEmailExists, checkPhoneExists, resendVerificationEmail,
+|     listApiTokens, createApiToken, revokeApiToken, updateTokenPermissions,
+|     verifyEmail, sendVerificationEmail,
+|     handleGoogleWebhook, handleMicrosoftWebhook,
+|     handleSmsDeliveryStatus, handleEmailBounce,
+|     debugPhoneNormalization
+|
+|   TwoFactorController:
+|     showVerificationForm, verify, resendCode,
+|     showSetupForm, enableTwoFactor, verifySetup, disableTwoFactor,
+|     showRecoveryCodes, regenerateRecoveryCodes,
+|     getTrustedDevices, removeTrustedDevice, trustDevicePublic,
+|     showRequiredSetupForm, verifySetupRequired,
+|     enableFromSetupRequired, cancelRequiredSetup
+|
+*/
+
+/* ============================================================
+ | STANDARD LOGIN / LOGOUT
+ * ============================================================ */
+
+Route::get ('/login',  [LoginController::class, 'showLoginForm'])->name('login');
+Route::post('/login',  [LoginController::class, 'login'])->name('login.submit');
+Route::post('/logout', [LoginController::class, 'logout'])->name('logout');
+
+/* ============================================================
+ | SESSION STATUS & CSRF REFRESH
+ * ============================================================ */
+
+Route::get ('/session-status', [LoginController::class, 'sessionStatus'])->name('session.status');
+Route::post('/refresh-csrf',   [LoginController::class, 'refreshCsrfToken'])->name('csrf.refresh');
+Route::get ('/page-expired',   [LoginController::class, 'handlePageExpired'])->name('page.expired');
+
+/*
+ | Additional session routes the Blade's session-health poll and the
+ | "Continue / New login" UI reference.
+ */
+Route::get ('/session/check',      [LoginController::class, 'checkSession'])->name('session.check');
+Route::get ('/session/continue',   [LoginController::class, 'continueSession'])->name('session.continue');
+Route::post('/session/invalidate', [LoginController::class, 'invalidateSession'])->name('session.invalidate');
+
+/* ============================================================
+ | SOCIAL LOGIN
+ | ------------------------------------------------------------
+ | ⚠️  The `/auth/*` prefix is ALSO used by the health/config
+ |    routes near the bottom of this file. To avoid any chance
+ |    of collision if a provider named "health" or "config" is
+ |    ever added, the social routes keep the `{provider}` segment
+ |    constrained via `->where(...)`. Do not widen that regex
+ |    without also widening the health/config fallthrough.
+ * ============================================================ */
+
 Route::get('/auth/{provider}', [LoginController::class, 'redirectToProvider'])
     ->where('provider', 'google|microsoft|facebook|apple|github')
     ->name('login.social');
@@ -225,324 +338,424 @@ Route::get('/auth/{provider}/callback', [LoginController::class, 'handleProvider
     ->name('login.social.callback');
 
 // Legacy social login routes (for backward compatibility)
-Route::get('/auth/google', [LoginController::class, 'redirectToGoogle'])->name('login.google.legacy');
-Route::get('/auth/google/callback', [LoginController::class, 'handleGoogleCallback']);
-Route::get('/auth/microsoft', [LoginController::class, 'redirectToMicrosoft'])->name('login.microsoft.legacy');
+Route::get('/auth/google',             [LoginController::class, 'redirectToGoogle'])->name('login.google.legacy');
+Route::get('/auth/google/callback',    [LoginController::class, 'handleGoogleCallback']);
+Route::get('/auth/microsoft',          [LoginController::class, 'redirectToMicrosoft'])->name('login.microsoft.legacy');
 Route::get('/auth/microsoft/callback', [LoginController::class, 'handleMicrosoftCallback']);
 
-// Social account linking/unlinking (authenticated users only)
+// Social account linking / unlinking (authenticated users only)
 Route::middleware(['auth'])->group(function () {
-    Route::post('/auth/{provider}/link', [LoginController::class, 'linkSocialAccount'])->name('social.link');
-    Route::delete('/auth/{provider}/unlink', [LoginController::class, 'unlinkSocialAccount'])->name('social.unlink');
+    Route::post  ('/auth/{provider}/link',   [LoginController::class, 'linkSocialAccount'])
+        ->where('provider', 'google|microsoft|facebook|apple|github')
+        ->name('social.link');
+    Route::delete('/auth/{provider}/unlink', [LoginController::class, 'unlinkSocialAccount'])
+        ->where('provider', 'google|microsoft|facebook|apple|github')
+        ->name('social.unlink');
 });
 
-// ==================== TWO-FACTOR AUTHENTICATION ROUTES ====================
+/* ============================================================
+ | TWO-FACTOR AUTHENTICATION — WEB
+ | ------------------------------------------------------------
+ | Three distinct flows, each with its own middleware group:
+ |
+ |   A. Login handoff (guest)
+ |      The user has passed the password phase but is NOT
+ |      authenticated. They hold only a `2fa:user_id` session
+ |      key written by LoginController before Auth::logout().
+ |      → middleware: guest
+ |
+ |   B. Mandatory setup (two_factor.setup)
+ |      The user is logged OUT, but the developer policy requires
+ |      2FA for their role and they haven't enrolled yet. They
+ |      hold a `2fa_setup_required:user_id` handoff key.
+ |      → middleware: two_factor.setup (web + two_factor.setup.required)
+ |
+ |   C. Voluntary management (auth)
+ |      The user is logged in and is toggling 2FA or managing
+ |      trusted devices from their profile.
+ |      → middleware: auth
+ * ============================================================ */
 
-// 2FA verification routes (accessible before full authentication)
-Route::prefix('2fa')->name('2fa.')->group(function () {
-    Route::get('/verify', [LoginController::class, 'showTwoFactorForm'])->name('verify');
-    Route::post('/verify', [LoginController::class, 'verifyTwoFactor'])->name('verify.submit');
-    Route::post('/resend', [LoginController::class, 'resendTwoFactorCode'])->name('resend');
+// ─── A. Login handoff (guest) ───
+Route::middleware('guest')->prefix('2fa')->name('2fa.')->group(function () {
+    Route::get ('/verify', [TwoFactorController::class, 'showVerificationForm'])->name('verify');
+    Route::post('/verify', [TwoFactorController::class, 'verify'])->name('verify.submit');
+    Route::post('/resend', [TwoFactorController::class, 'resendCode'])->name('resend');
 });
 
-// 2FA management routes (authenticated users only)
-Route::middleware(['auth'])->prefix('2fa')->name('2fa.')->group(function () {
-    Route::post('/enable', [LoginController::class, 'enableTwoFactor'])->name('enable');
-    Route::post('/disable', [LoginController::class, 'disableTwoFactor'])->name('disable');
-    Route::get('/setup', [LoginController::class, 'showTwoFactorSetup'])->name('setup');
-    Route::post('/verify-setup', [LoginController::class, 'verifyTwoFactorSetup'])->name('verify-setup');
-    Route::get('/recovery-codes', [LoginController::class, 'showRecoveryCodes'])->name('recovery-codes');
-    Route::post('/recovery-codes/regenerate', [LoginController::class, 'regenerateRecoveryCodes'])->name('recovery-codes.regenerate');
+// ─── ✅ NEW: B. Mandatory setup (policy-driven) ───
+//
+//  Uses the `two_factor.setup` composite group defined in
+//  bootstrap/app.php: `web` + `two_factor.setup.required`.
+//
+//  Intentionally NOT wrapped in `auth` (the user is logged out)
+//  and NOT wrapped in billing middleware (2FA setup is self-
+//  protection and must not be blocked by overdue billing).
+//
+//  The `two_factor.setup.required` gate reads the handoff key
+//  from the session and rejects anyone without a valid one. This
+//  is what stops anonymous direct hits on `/2fa/setup-required`.
+Route::middleware('two_factor.setup')->prefix('2fa/setup-required')->name('2fa.setup.required.')->group(function () {
+    Route::get ('/',        [TwoFactorController::class, 'showRequiredSetupForm'])->name('index');
+    Route::post('/verify',  [TwoFactorController::class, 'verifySetupRequired'])->name('verify');
+    Route::post('/enable',  [TwoFactorController::class, 'enableFromSetupRequired'])->name('enable');
+    Route::post('/cancel',  [TwoFactorController::class, 'cancelRequiredSetup'])->name('cancel');
 });
 
-// ==================== DEVICE TRACKING ROUTES ====================
+/*
+ | Aliases for the mandatory flow.
+ |
+ | The blade posts to `route('2fa.setup.required.enable')` and
+ | `route('2fa.setup.required.cancel')`. The "index" route uses the
+ | bare `/2fa/setup-required` path (no trailing slash), so we register
+ | a second name on the same URI to keep the blade's `route('2fa.setup.required')`
+ | calls working.
+ */
+Route::middleware('two_factor.setup')
+    ->get('/2fa/setup-required', [TwoFactorController::class, 'showRequiredSetupForm'])
+    ->name('2fa.setup.required');
 
-Route::prefix('device')->name('device.')->group(function () {
-    // Get registered devices for current user (authenticated only)
-    Route::middleware(['auth'])->get('/list', [LoginController::class, 'getUserDevices'])->name('list');
-    
-    // Remove specific device (authenticated only)
-    Route::middleware(['auth'])->delete('/remove/{deviceId}', [LoginController::class, 'removeDevice'])->name('remove');
-    
-    // Trust this device (skip 2FA for future logins)
-    Route::middleware(['auth'])->post('/trust', [LoginController::class, 'trustDevice'])->name('trust');
-    
-    // Get current device info (authenticated only)
-    Route::middleware(['auth'])->get('/current', [LoginController::class, 'getCurrentDeviceInfo'])->name('current');
+// ─── C. Voluntary management (auth) ───
+Route::middleware('auth')->prefix('2fa')->name('2fa.')->group(function () {
+    Route::get ('/setup',                     [TwoFactorController::class, 'showSetupForm'])->name('setup');
+    Route::post('/enable',                    [TwoFactorController::class, 'enableTwoFactor'])->name('enable');
+    Route::post('/verify-setup',              [TwoFactorController::class, 'verifySetup'])->name('verify-setup');
+    Route::post('/disable',                   [TwoFactorController::class, 'disableTwoFactor'])->name('disable');
+    Route::get ('/recovery-codes',            [TwoFactorController::class, 'showRecoveryCodes'])->name('recovery-codes');
+    Route::post('/recovery-codes/regenerate', [TwoFactorController::class, 'regenerateRecoveryCodes'])->name('recovery-codes.regenerate');
+
+    // Trusted devices management
+    Route::get   ('/trusted-devices',            [TwoFactorController::class, 'getTrustedDevices'])->name('trusted-devices');
+    Route::delete('/trusted-devices/{deviceId}', [TwoFactorController::class, 'removeTrustedDevice'])->name('trusted-devices.remove');
 });
 
-// ==================== PASSWORD RESET ROUTES ====================
+/* ============================================================
+ | DEVICE TRACKING
+ | ------------------------------------------------------------
+ | `device/trust` uses the new cookie-based trusted-device
+ | scheme on TwoFactorController. The legacy LoginController shim
+ | is not routed.
+ * ============================================================ */
 
-// Forgot Password Routes
-Route::get('/forgot-password', [LoginController::class, 'showForgotPasswordForm'])->name('password.request');
-Route::post('/forgot-password', [LoginController::class, 'sendResetLink'])->name('password.email');
+Route::middleware(['auth'])->prefix('device')->name('device.')->group(function () {
+    Route::get   ('/list',              [LoginController::class, 'getUserDevices'])->name('list');
+    Route::delete('/remove/{deviceId}', [LoginController::class, 'removeDevice'])->name('remove');
+
+    // Trusted-device write — new scheme
+    Route::post  ('/trust',             [TwoFactorController::class, 'trustDevicePublic'])->name('trust');
+
+    // Current device info (read-only, still on LoginController)
+    Route::get   ('/current',           [LoginController::class, 'getCurrentDeviceInfo'])->name('current');
+});
+
+/* ============================================================
+ | PASSWORD RESET
+ * ============================================================ */
+
+// Forgot password
+Route::get ('/forgot-password',        [LoginController::class, 'showForgotPasswordForm'])->name('password.request');
+Route::post('/forgot-password',        [LoginController::class, 'sendResetLink'])->name('password.email');
 Route::post('/forgot-password/resend', [LoginController::class, 'resendResetLink'])->name('password.resend');
 
-// Reset Password Routes
-Route::get('/reset-password/{token}', [LoginController::class, 'showResetForm'])->name('password.reset');
-Route::post('/reset-password', [LoginController::class, 'resetPassword'])->name('password.update');
+// Reset password
+Route::get ('/reset-password/{token}', [LoginController::class, 'showResetForm'])->name('password.reset');
+Route::post('/reset-password',         [LoginController::class, 'resetPassword'])->name('password.update');
 
-// Password change for authenticated users
+// Change password (authenticated)
 Route::middleware(['auth'])->prefix('password')->name('password.')->group(function () {
-    Route::post('/change', [LoginController::class, 'changePassword'])->name('change');
-    Route::get('/check-expiry', [LoginController::class, 'checkPasswordExpiry'])->name('check-expiry');
+    Route::post('/change',       [LoginController::class, 'changePassword'])->name('change');
+    Route::get ('/check-expiry', [LoginController::class, 'checkPasswordExpiry'])->name('check-expiry');
 });
 
-// ==================== MOBILE API LOGIN ROUTES ====================
+/* ============================================================
+ | MOBILE API — REMOVED FROM WEB (verified)
+ | ------------------------------------------------------------
+ | ✅ CONFIRMED: there are NO mobile routes registered in this
+ |    file. Every mobile endpoint lives in routes/api.php under
+ |    the /api/v1/auth/* prefix:
+ |
+ |      POST   /api/v1/auth/login                (LoginController@mobileLogin)
+ |      POST   /api/v1/auth/logout               (LoginController@mobileLogout)
+ |      POST   /api/v1/auth/refresh              (LoginController@refreshToken)
+ |      POST   /api/v1/auth/2fa/verify           (LoginController@mobileVerifyTwoFactor)
+ |      POST   /api/v1/auth/2fa/resend           (LoginController@mobileResendTwoFactor)
+ |      GET    /api/v1/auth/devices              (LoginController@getMobileDevices)
+ |      DELETE /api/v1/auth/devices/{id}         (LoginController@revokeMobileDevice)
+ |      POST   /api/v1/auth/push-token           (LoginController@registerPushToken)
+ |
+ |    If a legacy Flutter/React-Native build is pointed at the WEB
+ |    domain and expects these paths here, do NOT re-implement them.
+ |    Instead, add explicit 301 redirects in nginx/Apache, or add a
+ |    thin proxy route in routes/web.php that returns a
+ |    `301 Moved Permanently` to the API URL.
+ * ============================================================ */
 
-Route::prefix('mobile')->name('mobile.')->group(function () {
-    // Authentication endpoints
-    Route::post('/login', [LoginController::class, 'mobileLogin'])->name('login');
-    Route::post('/logout', [LoginController::class, 'mobileLogout'])->name('logout');
-    Route::post('/refresh-token', [LoginController::class, 'refreshToken'])->name('refresh');
-    
-    // 2FA for mobile
-    Route::post('/2fa/verify', [LoginController::class, 'mobileVerifyTwoFactor'])->name('2fa.verify');
-    Route::post('/2fa/resend', [LoginController::class, 'mobileResendTwoFactor'])->name('2fa.resend');
-    
-    // Device management for mobile (authenticated via Sanctum)
-    Route::middleware(['auth:sanctum'])->group(function () {
-        Route::get('/devices', [LoginController::class, 'getMobileDevices'])->name('devices');
-        Route::delete('/device/{deviceId}', [LoginController::class, 'revokeMobileDevice'])->name('device.revoke');
-        Route::post('/device/register-push', [LoginController::class, 'registerPushToken'])->name('device.register-push');
-    });
-});
-
-// ==================== USER IMPERSONATION ROUTES ====================
+/* ============================================================
+ | IMPERSONATION
+ * ============================================================ */
 
 Route::middleware(['auth'])->prefix('impersonate')->name('impersonate.')->group(function () {
-    // Start impersonating a user
     Route::post('/start/{user}', [LoginController::class, 'startImpersonation'])
+        ->where('user', '[0-9]+')
         ->name('start')
         ->middleware('can:impersonate-user,user');
-    
-    // Stop impersonating
-    Route::post('/stop', [LoginController::class, 'stopImpersonation'])->name('stop');
-    
-    // Get current impersonation status
-    Route::get('/status', [LoginController::class, 'getImpersonationStatus'])->name('status');
+
+    Route::post('/stop',   [LoginController::class, 'stopImpersonation'])->name('stop');
+    Route::get ('/status', [LoginController::class, 'getImpersonationStatus'])->name('status');
 });
 
-// ==================== LOGIN ACTIVITY ROUTES ====================
+/* ============================================================
+ | LOGIN ACTIVITY
+ * ============================================================ */
 
 Route::middleware(['auth'])->prefix('activity')->name('activity.')->group(function () {
-    // Get login history for current user
-    Route::get('/login-history', [LoginController::class, 'getLoginHistory'])->name('login-history');
-    
-    // Get detailed activity for specific login
-    Route::get('/login/{activityId}', [LoginController::class, 'getActivityDetails'])->name('activity-details');
-    
-    // Get suspicious activity alerts
-    Route::get('/suspicious', [LoginController::class, 'getSuspiciousActivity'])->name('suspicious');
-    
-    // Clear activity history (requires password)
-    Route::delete('/clear', [LoginController::class, 'clearActivityHistory'])->name('clear');
+    Route::get   ('/login-history',      [LoginController::class, 'getLoginHistory'])->name('login-history');
+    Route::get   ('/login/{activityId}', [LoginController::class, 'getActivityDetails'])->name('activity-details');
+    Route::get   ('/suspicious',         [LoginController::class, 'getSuspiciousActivity'])->name('suspicious');
+    Route::delete('/clear',              [LoginController::class, 'clearActivityHistory'])->name('clear');
 });
 
-// ==================== ACCOUNT RECOVERY ROUTES ====================
+/* ============================================================
+ | ACCOUNT RECOVERY
+ * ============================================================ */
 
 Route::prefix('recovery')->name('recovery.')->group(function () {
-    // Account recovery request (when user can't access email/phone)
-    Route::get('/request', [LoginController::class, 'showRecoveryRequestForm'])->name('request');
-    Route::post('/request', [LoginController::class, 'sendRecoveryRequest'])->name('submit');
-    
-    // Verify recovery identity
-    Route::get('/verify/{token}', [LoginController::class, 'showRecoveryVerification'])->name('verify');
+    Route::get ('/request',        [LoginController::class, 'showRecoveryRequestForm'])->name('request');
+    Route::post('/request',        [LoginController::class, 'sendRecoveryRequest'])->name('submit');
+    Route::get ('/verify/{token}', [LoginController::class, 'showRecoveryVerification'])->name('verify');
     Route::post('/verify/{token}', [LoginController::class, 'verifyRecoveryIdentity'])->name('verify.submit');
-    
-    // Complete account recovery
-    Route::post('/complete', [LoginController::class, 'completeRecovery'])->name('complete');
+    Route::post('/complete',       [LoginController::class, 'completeRecovery'])->name('complete');
 });
 
-// ==================== RATE LIMITED PUBLIC ENDPOINTS ====================
+/* ============================================================
+ | ACCOUNT EXISTENCE PROBES (authenticated + rate-limited)
+ * ============================================================ */
 
-Route::middleware(['throttle:10,1'])->group(function () {
-    // Rate-limited endpoints for security
+Route::middleware(['auth', 'throttle:10,1'])->group(function () {
     Route::post('/auth/check-email', [LoginController::class, 'checkEmailExists'])->name('auth.check-email');
     Route::post('/auth/check-phone', [LoginController::class, 'checkPhoneExists'])->name('auth.check-phone');
+});
+
+// Email verification resend — public but strictly throttled.
+Route::middleware(['throttle:3,1'])->group(function () {
     Route::post('/auth/resend-verification', [LoginController::class, 'resendVerificationEmail'])->name('auth.resend-verification');
 });
 
-// ==================== API TOKEN MANAGEMENT ====================
+/* ============================================================
+ | API TOKEN MANAGEMENT
+ * ============================================================ */
 
 Route::middleware(['auth:sanctum'])->prefix('api-tokens')->name('api-tokens.')->group(function () {
-    Route::get('/', [LoginController::class, 'listApiTokens'])->name('list');
-    Route::post('/create', [LoginController::class, 'createApiToken'])->name('create');
-    Route::delete('/{tokenId}', [LoginController::class, 'revokeApiToken'])->name('revoke');
-    Route::post('/{tokenId}/update-permissions', [LoginController::class, 'updateTokenPermissions'])->name('update-permissions');
+    Route::get   ('/',                             [LoginController::class, 'listApiTokens'])->name('list');
+    Route::post  ('/create',                       [LoginController::class, 'createApiToken'])->name('create');
+    Route::delete('/{tokenId}',                    [LoginController::class, 'revokeApiToken'])->name('revoke');
+    Route::post  ('/{tokenId}/update-permissions', [LoginController::class, 'updateTokenPermissions'])->name('update-permissions');
 });
 
-// ==================== EMAIL VERIFICATION ROUTES ====================
+/* ============================================================
+ | EMAIL VERIFICATION
+ * ============================================================ */
 
 Route::prefix('email')->name('verification.')->group(function () {
-    Route::get('/verify/{id}/{hash}', [LoginController::class, 'verifyEmail'])
+    Route::get ('/verify/{id}/{hash}', [LoginController::class, 'verifyEmail'])
         ->name('verify')
         ->middleware(['signed', 'throttle:6,1']);
-    
+
     Route::post('/verification-notification', [LoginController::class, 'sendVerificationEmail'])
         ->name('send')
         ->middleware(['throttle:3,1']);
 });
 
-// ==================== WEBHOOKS AND EXTERNAL SERVICES ====================
+/* ============================================================
+ | WEBHOOKS & EXTERNAL SERVICES
+ * ============================================================ */
 
 Route::prefix('webhooks')->name('webhooks.')->group(function () {
-    // Social login webhooks (for provider-specific events)
-    Route::post('/google', [LoginController::class, 'handleGoogleWebhook'])->name('google');
-    Route::post('/microsoft', [LoginController::class, 'handleMicrosoftWebhook'])->name('microsoft');
-    
-    // SMS delivery status webhooks
-    Route::post('/sms/status', [LoginController::class, 'handleSmsDeliveryStatus'])->name('sms.status');
-    
-    // Email bounce handling
+    Route::post('/google',       [LoginController::class, 'handleGoogleWebhook'])->name('google');
+    Route::post('/microsoft',    [LoginController::class, 'handleMicrosoftWebhook'])->name('microsoft');
+    Route::post('/sms/status',   [LoginController::class, 'handleSmsDeliveryStatus'])->name('sms.status');
     Route::post('/email/bounce', [LoginController::class, 'handleEmailBounce'])->name('email.bounce');
 });
 
-// ==================== HEALTH CHECK AND MONITORING ====================
+/* ============================================================
+ | AUTH HEALTH & CONFIG
+ | ------------------------------------------------------------
+ | ⚠️  These routes live under the /auth prefix. The `/auth/{provider}`
+ |    route earlier in this file constrains `{provider}` to a fixed
+ |    list, so `/auth/health` and `/auth/config` are never swallowed
+ |    by the social redirect route. Route registration order matters
+ |    here — do not move these ABOVE the social group without also
+ |    widening the provider constraint.
+ * ============================================================ */
 
 Route::prefix('auth')->name('auth.')->group(function () {
-    // Health check for authentication services
     Route::get('/health', function () {
         return response()->json([
-            'status' => 'healthy',
+            'status'    => 'healthy',
             'timestamp' => now()->toIso8601String(),
-            'services' => [
-                'session' => true,
-                '2fa' => class_exists(\PragmaRX\Google2FA\Google2FA::class),
-                'social' => [
-                    'google' => !empty(config('services.google.client_id')),
+            'services'  => [
+                'session'       => true,
+                '2fa'           => class_exists(\PragmaRX\Google2FA\Google2FA::class),
+                'social'        => [
+                    'google'    => !empty(config('services.google.client_id')),
                     'microsoft' => !empty(config('services.microsoft.client_id')),
-                    'facebook' => !empty(config('services.facebook.client_id')),
-                    'github' => !empty(config('services.github.client_id'))
+                    'facebook'  => !empty(config('services.facebook.client_id')),
+                    'github'    => !empty(config('services.github.client_id')),
                 ],
                 'rate_limiting' => true,
-                'captcha' => config('auth.captcha_enabled', false)
-            ]
+                'captcha'       => config('auth.captcha_enabled', false),
+            ],
         ]);
     })->name('health');
-    
-    // Get authentication configuration (for frontend)
+
     Route::get('/config', function () {
         return response()->json([
-            'two_factor_enabled' => config('auth.two_factor.enabled', true),
-            'captcha_enabled' => config('auth.captcha_enabled', false),
-            'social_providers' => array_filter([
-                'google' => !empty(config('services.google.client_id')),
+            'two_factor_enabled'    => config('auth.two_factor.enabled', true),
+            'captcha_enabled'       => config('auth.captcha_enabled', false),
+            'social_providers'      => array_filter([
+                'google'    => !empty(config('services.google.client_id')),
                 'microsoft' => !empty(config('services.microsoft.client_id')),
-                'facebook' => !empty(config('services.facebook.client_id')),
-                'github' => !empty(config('services.github.client_id'))
+                'facebook'  => !empty(config('services.facebook.client_id')),
+                'github'    => !empty(config('services.github.client_id')),
             ]),
-            'session_lifetime' => config('session.lifetime', 120),
-            'password_min_length' => config('auth.password_min_length', 8),
-            'csrf_refresh_interval' => config('auth.csrf_refresh_interval', 600) // 10 minutes
+            'session_lifetime'      => config('session.lifetime', 120),
+            'password_min_length'   => config('auth.password_min_length', 8),
+            'csrf_refresh_interval' => config('auth.csrf_refresh_interval', 600),
         ]);
     })->name('config');
 });
 
-// ==================== DEBUG AND TESTING ROUTES ====================
+/* ============================================================
+ | DEBUG ROUTES (local only)
+ * ============================================================ */
 
-// Only available in local environment
 if (app()->environment('local')) {
     Route::prefix('debug')->name('debug.')->group(function () {
-        // Phone number debug
         Route::get('/phone', [LoginController::class, 'debugPhoneNormalization'])
             ->name('phone')
             ->middleware(['auth', 'can:is-super-admin']);
-        
-        // Debug reset email
+
         Route::get('/reset/{token}', function ($token, Request $request) {
             return [
-                'token' => $token,
-                'email' => $request->query('email'),
+                'token'         => $token,
+                'email'         => $request->query('email'),
                 'decoded_email' => urldecode($request->query('email', '')),
-                'full_url' => $request->fullUrl(),
-                'timestamp' => now()->toDateTimeString()
+                'full_url'      => $request->fullUrl(),
+                'timestamp'     => now()->toDateTimeString(),
             ];
         })->name('reset');
-        
-        // Debug 2FA
+
         Route::get('/2fa/{user}', function ($user) {
             $user = \App\Models\User::find($user);
             if (!$user) {
                 return response()->json(['error' => 'User not found'], 404);
             }
-            
+
             return response()->json([
-                'user_id' => $user->id,
-                'email' => $user->email,
-                'two_factor_enabled' => $user->two_factor_enabled ?? false,
-                'two_factor_method' => $user->two_factor_method ?? 'email',
-                'has_backup_codes' => !empty($user->two_factor_backup_codes),
-                'recovery_codes_count' => $user->two_factor_backup_codes ? count(json_decode($user->two_factor_backup_codes, true)) : 0
+                'user_id'              => $user->id,
+                'email'                => $user->email,
+                'two_factor_enabled'   => $user->two_factor_enabled ?? false,
+                'two_factor_method'    => $user->two_factor_method ?? 'email',
+                'has_backup_codes'     => !empty($user->two_factor_backup_codes),
+                'recovery_codes_count' => $user->two_factor_backup_codes
+                    ? count(json_decode($user->two_factor_backup_codes, true))
+                    : 0,
             ]);
         })->name('2fa')->middleware(['auth', 'can:is-super-admin']);
-        
-        // Debug session
+
         Route::get('/session', function () {
             return response()->json([
-                'session_id' => session()->getId(),
-                'has_user' => auth()->check(),
-                'user_id' => auth()->id(),
-                'session_data' => session()->all(),
+                'session_id'         => session()->getId(),
+                'has_user'           => auth()->check(),
+                'user_id'            => auth()->id(),
+                'session_data'       => session()->all(),
                 'two_factor_pending' => session()->has('2fa:user_id'),
-                'impersonating' => session()->has('impersonate'),
-                'csrf_token' => session()->token(),
-                'cookies' => request()->cookies->all(),
-                'headers' => [
+                'two_factor_setup_required' => session()->has('2fa_setup_required:user_id'),
+                'impersonating'      => session()->has('impersonate'),
+                'csrf_token'         => session()->token(),
+                'cookies'            => request()->cookies->all(),
+                'headers'            => [
                     'x-csrf-token' => request()->header('X-CSRF-TOKEN'),
                     'x-xsrf-token' => request()->header('X-XSRF-TOKEN'),
-                ]
+                ],
             ]);
         })->name('session')->middleware(['auth', 'can:is-super-admin']);
-        
-        // Debug route info
+
         Route::get('/routes', function () {
-            $routes = collect(\Route::getRoutes())->filter(function ($route) {
-                return str_starts_with($route->uri(), 'auth') ||
-                       str_starts_with($route->uri(), 'login') ||
-                       str_starts_with($route->uri(), 'session') ||
-                       str_starts_with($route->uri(), '2fa') ||
-                       str_starts_with($route->uri(), 'password') ||
-                       str_starts_with($route->uri(), 'mobile');
-            })->map(function ($route) {
-                return [
-                    'uri' => $route->uri(),
-                    'methods' => $route->methods(),
-                    'name' => $route->getName(),
-                    'action' => $route->getActionName(),
-                ];
-            })->values();
-            
+            $routes = collect(\Route::getRoutes())
+                ->filter(function ($route) {
+                    $uri = $route->uri();
+                    foreach (['auth', 'login', 'session', '2fa', 'password', 'device', 'impersonate', 'activity', 'recovery'] as $prefix) {
+                        if (str_starts_with($uri, $prefix)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                })
+                ->map(function ($route) {
+                    return [
+                        'uri'        => $route->uri(),
+                        'methods'    => $route->methods(),
+                        'name'       => $route->getName(),
+                        'action'     => $route->getActionName(),
+                        'middleware' => $route->gatherMiddleware(),
+                    ];
+                })
+                ->values();
+
             return response()->json([
                 'total_auth_routes' => $routes->count(),
-                'routes' => $routes
+                'routes'            => $routes,
             ]);
         })->name('routes');
     });
 }
 
-// ==================== FALLBACK AND ERROR HANDLING ====================
+/* ============================================================
+ | FALLBACK
+ | ------------------------------------------------------------
+ | Only intercepts paths under known auth prefixes so non-auth
+ | 404s flow to the app's normal handler.
+ |
+ | ✅ FIXED: added `two_factor` (unlikely but future-proof) and
+ |    removed `mobile` (no longer a web prefix). The `auth`
+ |    prefix still catches /auth/health and /auth/config — that
+ |    is correct, since a mistyped `/auth/xyz` should redirect
+ |    to login rather than 404.
+ * ============================================================ */
 
-// Catch-all for undefined auth routes (404)
-Route::fallback(function () {
-    $authPrefixes = ['auth', '2fa', 'session', 'password', 'mobile', 'device', 'impersonate', 'activity', 'recovery'];
-    $path = request()->path();
-    
+Route::fallback(function (Request $request) {
+    $authPrefixes = [
+        'auth',
+        '2fa',
+        'session',
+        'password',
+        'device',
+        'impersonate',
+        'activity',
+        'recovery',
+        'two_factor',
+    ];
+
+    $path = $request->path();
+
     foreach ($authPrefixes as $prefix) {
         if (str_starts_with($path, $prefix)) {
-            // For API requests
-            if (request()->wantsJson()) {
+            if ($request->wantsJson()) {
                 return response()->json([
-                    'error' => 'not_found',
-                    'message' => 'Authentication endpoint not found'
+                    'error'   => 'not_found',
+                    'message' => 'Authentication endpoint not found',
                 ], 404);
             }
-            
-            // For web requests, redirect to login
+
             return redirect()->route('login')
                 ->with('error', 'Page not found. Please login to continue.');
         }
     }
+
+    // Not an auth path — return a plain 404 so the app's default
+    // 404 page (or the API fallback) can handle it.
+    abort(404);
 });
 
 
@@ -551,7 +764,7 @@ Route::get('/dashboard', [HomeController::class, 'redirectToDashboard'])->name('
 
 /*
 |--------------------------------------------------------------------------
-| ✅ NEW: Developer Dashboard & Tools Routes - ENHANCED VERSION
+| âœ… NEW: Developer Dashboard & Tools Routes - ENHANCED VERSION
 |--------------------------------------------------------------------------
 */
 
@@ -570,9 +783,9 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
     Route::get('/dashboard/data', [DashboardController::class, 'getDashboardData'])->name('dashboard.data');
     Route::get('/dashboard/errors', [DashboardController::class, 'getDashboardErrors'])->name('dashboard.errors');
     Route::get('/dashboard/maintenance-schedule', [DashboardController::class, 'getMaintenanceSchedule'])->name('dashboard.maintenance-schedule');
-    Route::get('/dashboard/emergency-modes', [DashboardController::class, 'getEmergencyModes'])->name('dashboard.emergency-modes'); // ✅ ADDED
+    Route::get('/dashboard/emergency-modes', [DashboardController::class, 'getEmergencyModes'])->name('dashboard.emergency-modes'); // âœ… ADDED
     Route::get('/dashboard/impact-analysis', [DashboardController::class, 'getImpactAnalysis'])->name('dashboard.impact-analysis');
-    Route::get('/dashboard/performance-insights', [DashboardController::class, 'getPerformanceInsights'])->name('dashboard.performance-insights'); // ✅ ADDED
+    Route::get('/dashboard/performance-insights', [DashboardController::class, 'getPerformanceInsights'])->name('dashboard.performance-insights'); // âœ… ADDED
     Route::get('/dashboard/alerts', [DashboardController::class, 'getSystemAlerts'])->name('dashboard.alerts');
     Route::get('/dashboard/trends', [DashboardController::class, 'getSystemTrends'])->name('dashboard.trends');
     
@@ -580,10 +793,10 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
     Route::post('/dashboard/run-diagnostics', [DashboardController::class, 'runDiagnostics'])->name('dashboard.run-diagnostics');
     Route::post('/dashboard/run-command', [DashboardController::class, 'runCommand'])->name('dashboard.run-command');
     Route::post('/dashboard/generate-health-report', [DashboardController::class, 'generateHealthReport'])->name('dashboard.generate-health-report');
-    Route::post('/dashboard/clear-alerts', [DashboardController::class, 'clearAlerts'])->name('dashboard.clear-alerts'); // ✅ ADDED
+    Route::post('/dashboard/clear-alerts', [DashboardController::class, 'clearAlerts'])->name('dashboard.clear-alerts'); // âœ… ADDED
     
     // =============================================
-    // ✅ NEW: QUICK ACTION ROUTES (For Blade Template) - KEEP ONLY THIS ONE
+    // âœ… NEW: QUICK ACTION ROUTES (For Blade Template) - KEEP ONLY THIS ONE
     // =============================================
     
     Route::prefix('dashboard')->name('dashboard.')->group(function () {
@@ -611,277 +824,293 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
         // Handle Alert Action (for Blade's alert buttons)
         Route::post('/alerts/{id}/action', [DashboardController::class, 'handleAlertAction'])->name('alerts.action');
     });
-    
-    // =============================================
-    // ✅ NEW: LOGS ROUTES (For Blade Template)
-    // =============================================
-    
-    Route::prefix('logs')->name('logs.')->group(function () {
-        // Main logs page (Blade references this)
-        Route::get('/', [LogController::class, 'index'])->name('index');
-        
-        // Get error statistics
-        Route::get('/statistics/errors', [LogController::class, 'errorStatistics'])->name('statistics.errors');
-        
-        // Mark error as resolved
-        Route::post('/{id}/mark-resolved', [LogController::class, 'markResolved'])->name('mark-resolved');
-        
-        // Get recent errors
-        Route::get('/recent/errors', [LogController::class, 'recentErrors'])->name('recent.errors');
+
     });
+
     
-    // =============================================
-    // SYSTEM HEALTH MONITORING ROUTES
-    // =============================================
-    
-    Route::prefix('health')->name('health.')->group(function () {
-        // Overall Health
-        Route::get('/', [SystemHealthController::class, 'index'])->name('index');
-        Route::get('/overall', [SystemHealthController::class, 'getOverallHealth'])->name('overall');
-        Route::get('/status', [SystemHealthController::class, 'getHealthStatus'])->name('status');
-        Route::get('/metrics', [SystemHealthController::class, 'getSystemMetrics'])->name('metrics');
-        Route::get('/live', [SystemHealthController::class, 'getLiveMetrics'])->name('live');
-        
-        // Detailed Health Checks
-        Route::get('/server', [SystemHealthController::class, 'getServerHealth'])->name('server');
-        Route::get('/database', [SystemHealthController::class, 'getDatabaseHealth'])->name('database');
-        Route::get('/application', [SystemHealthController::class, 'getApplicationHealth'])->name('application');
-        Route::get('/services', [SystemHealthController::class, 'getServiceHealth'])->name('services');
-        Route::get('/performance', [SystemHealthController::class, 'getPerformanceHealth'])->name('performance');
-        Route::get('/security', [SystemHealthController::class, 'getSecurityHealth'])->name('security');
-        
-        // Diagnostics & Reports
-        Route::post('/diagnostics', [SystemHealthController::class, 'runDiagnostics'])->name('run-diagnostics');
-        Route::get('/diagnostics/{id}', [SystemHealthController::class, 'getDiagnosticResult'])->name('diagnostics.result');
-        Route::post('/reports/generate', [SystemHealthController::class, 'generateHealthReport'])->name('generate-report');
-        Route::get('/reports/{id}', [SystemHealthController::class, 'getHealthReport'])->name('report');
-        Route::get('/reports/{id}/download', [SystemHealthController::class, 'downloadHealthReport'])->name('report.download');
-        
-        // Health History & Trends
-        Route::get('/history', [SystemHealthController::class, 'getHealthHistory'])->name('history');
-        Route::get('/trends', [SystemHealthController::class, 'getHealthTrends'])->name('trends');
-        Route::get('/alerts', [SystemHealthController::class, 'getHealthAlerts'])->name('alerts');
-        
-        // Custom Health Checks
-        Route::post('/checks/custom', [SystemHealthController::class, 'runCustomCheck'])->name('checks.custom');
-        Route::get('/checks', [SystemHealthController::class, 'listHealthChecks'])->name('checks.list');
-        Route::get('/checks/{check}', [SystemHealthController::class, 'getHealthCheck'])->name('checks.show');
-    });
-    
-    // =============================================
-    // SYSTEM LOGS MANAGEMENT ROUTES
-    // =============================================
-    
-    Route::prefix('logs')->name('logs.')->group(function () {
-        // Log Overview
-        Route::get('/', [LogController::class, 'index'])->name('index');
-        Route::get('/overview', [LogController::class, 'overview'])->name('overview');
-        Route::get('/statistics', [LogController::class, 'getStatistics'])->name('statistics');
-        
-        // Filtered Log Views
-        Route::get('/errors', [LogController::class, 'errors'])->name('errors');
-        Route::get('/warnings', [LogController::class, 'warnings'])->name('warnings');
-        Route::get('/critical', [LogController::class, 'critical'])->name('critical');
-        Route::get('/debug', [LogController::class, 'debug'])->name('debug');
-        Route::get('/info', [LogController::class, 'info'])->name('info');
-        
-        // Log Search & Filter
-        Route::get('/search', [LogController::class, 'search'])->name('search');
-        Route::post('/filter', [LogController::class, 'filter'])->name('filter');
-        Route::get('/by-date/{date}', [LogController::class, 'getByDate'])->name('by-date');
-        Route::get('/by-level/{level}', [LogController::class, 'getByLevel'])->name('by-level');
-        Route::get('/by-source/{source}', [LogController::class, 'getBySource'])->name('by-source');
-        Route::get('/by-user/{userId}', [LogController::class, 'getByUser'])->name('by-user');
-        
-        // Individual Log Management
-        Route::get('/{log}', [LogController::class, 'show'])->name('show');
-        Route::put('/{log}', [LogController::class, 'update'])->name('update');
-        Route::delete('/{log}', [LogController::class, 'destroy'])->name('destroy');
-        Route::post('/{log}/resolve', [LogController::class, 'markAsResolved'])->name('resolve');
-        Route::post('/{log}/unresolve', [LogController::class, 'markAsUnresolved'])->name('unresolve');
-        
-        // Bulk Operations
-        Route::post('/bulk/resolve', [LogController::class, 'bulkResolve'])->name('bulk.resolve');
-        Route::post('/bulk/delete', [LogController::class, 'bulkDelete'])->name('bulk.delete');
-        Route::post('/bulk/archive', [LogController::class, 'bulkArchive'])->name('bulk.archive');
-        Route::post('/clear/all', [LogController::class, 'clearAll'])->name('clear.all');
-        Route::post('/clear/old', [LogController::class, 'clearOld'])->name('clear.old');
-        
-        // Log Analysis & Reports
-        Route::get('/analysis', [LogController::class, 'analysis'])->name('analysis');
-        Route::get('/trends', [LogController::class, 'trends'])->name('trends');
-        Route::post('/reports/generate', [LogController::class, 'generateReport'])->name('generate-report');
-        Route::get('/reports/{id}', [LogController::class, 'getReport'])->name('report');
-        Route::get('/reports/{id}/download', [LogController::class, 'downloadReport'])->name('report.download');
-        
-        // Log Export
-        Route::get('/export', [LogController::class, 'export'])->name('export');
-        Route::get('/export/csv', [LogController::class, 'exportToCsv'])->name('export.csv');
-        Route::get('/export/json', [LogController::class, 'exportToJson'])->name('export.json');
-        Route::get('/export/pdf', [LogController::class, 'exportToPdf'])->name('export.pdf');
-        
-        // Real-time Log Monitoring
-        Route::get('/stream', [LogController::class, 'stream'])->name('stream');
-        Route::get('/live', [LogController::class, 'live'])->name('live');
-        Route::get('/realtime', [LogController::class, 'realtime'])->name('realtime');
-        
-        // Log Settings & Configuration
-        Route::get('/settings', [LogController::class, 'settings'])->name('settings');
-        Route::post('/settings', [LogController::class, 'updateSettings'])->name('settings.update');
-        Route::post('/settings/retention', [LogController::class, 'updateRetention'])->name('settings.retention');
-        Route::post('/settings/levels', [LogController::class, 'updateLogLevels'])->name('settings.levels');
-        
-        // Log Archives
-        Route::get('/archives', [LogController::class, 'archives'])->name('archives');
-        Route::get('/archives/{archive}', [LogController::class, 'showArchive'])->name('archives.show');
-        Route::post('/archives/{archive}/restore', [LogController::class, 'restoreArchive'])->name('archives.restore');
-        Route::delete('/archives/{archive}', [LogController::class, 'deleteArchive'])->name('archives.delete');
-    });
-    
-    // =============================================
-// MAINTENANCE MANAGEMENT ROUTES - UPDATED WITH ALL MISSING ROUTES
+// =============================================
+// SYSTEM HEALTH MONITORING ROUTES
 // =============================================
 
-Route::prefix('maintenance')->name('maintenance.')->group(function () {
-    // Maintenance Overview
-    Route::get('/', [MaintenanceController::class, 'index'])->name('index');
+Route::middleware(['auth'])
+    ->prefix('developer')
+    ->name('developer.')
+    ->group(function () {
+
+        Route::prefix('health')->name('health.')->group(function () {
+
+            /* ============================================================
+             | VIEWS (blade pages)
+             * ============================================================ */
+
+            // Dashboard
+            Route::get('/', [SystemHealthController::class, 'index'])->name('index');
+
+            // Diagnostics view page
+            Route::view('/diagnostics', 'developer.health.diagnostics')
+                ->name('diagnostics.index');
+
+            // Reports list view page
+            Route::view('/reports', 'developer.health.reports')
+                ->name('reports.index');
+
+            // Trends view page (JSON lives at /trends â€” view lives at /trends-page)
+            Route::view('/trends-page', 'developer.health.trends')
+                ->name('trends.page');
+
+            /* ============================================================
+             | OVERALL HEALTH (JSON)
+             * ============================================================ */
+
+            Route::get('/overall',      [SystemHealthController::class, 'getOverallHealth'])->name('overall');
+            Route::get('/status',       [SystemHealthController::class, 'getHealthStatus'])->name('status');
+            Route::get('/metrics',      [SystemHealthController::class, 'getSystemMetrics'])->name('metrics');
+            Route::get('/live',         [SystemHealthController::class, 'getLiveMetrics'])->name('live');
+            Route::get('/live-metrics', [SystemHealthController::class, 'getLiveMetrics'])->name('live-metrics');
+
+            /* ============================================================
+             | PER-COMPONENT HEALTH (JSON)
+             * ============================================================ */
+
+            Route::get('/server',      [SystemHealthController::class, 'getServerHealth'])->name('server');
+            Route::get('/database',    [SystemHealthController::class, 'getDatabaseHealth'])->name('database');
+            Route::get('/application', [SystemHealthController::class, 'getApplicationHealth'])->name('application');
+            Route::get('/services',    [SystemHealthController::class, 'getServiceHealth'])->name('services');
+            Route::get('/performance', [SystemHealthController::class, 'getPerformanceHealth'])->name('performance');
+            Route::get('/security',    [SystemHealthController::class, 'getSecurityHealth'])->name('security');
+
+            /* ============================================================
+             | DIAGNOSTICS (JSON â€” POST run, GET result)
+             | The GET /diagnostics view route is declared above.
+             * ============================================================ */
+
+            Route::post('/diagnostics',     [SystemHealthController::class, 'runDiagnostics'])->name('run-diagnostics');
+            Route::get('/diagnostics/{id}', [SystemHealthController::class, 'getDiagnosticResult'])->name('diagnostics.result');
+
+            /* ============================================================
+             | HEALTH REPORTS
+             |
+             | ORDER MATTERS:
+             |   /reports/{id}/view   â† declared FIRST (more specific)
+             |   /reports/{id}/download
+             |   /reports/{id}        â† declared LAST (wildcard)
+             |
+             | The GET /reports view route is declared above.
+             * ============================================================ */
+
+            Route::get('/reports/{id}/view', [SystemHealthController::class, 'viewHealthReport'])->name('report.view');
+            Route::get('/reports/{id}/download', [SystemHealthController::class, 'downloadHealthReport'])->name('report.download');
+            Route::get('/reports/{id}',          [SystemHealthController::class, 'getHealthReport'])->name('report');
+
+            Route::post('/reports/generate',     [SystemHealthController::class, 'generateHealthReport'])->name('generate-report');
+
+            /* ============================================================
+             | HISTORY / TRENDS / ALERTS
+             * ============================================================ */
+
+            Route::get('/history', [SystemHealthController::class, 'getHealthHistory'])->name('history');
+            Route::get('/trends',  [SystemHealthController::class, 'getHealthTrends'])->name('trends');
+            Route::get('/alerts',  [SystemHealthController::class, 'getHealthAlerts'])->name('alerts');
+
+            /* ============================================================
+             | CUSTOM CHECKS
+             * ============================================================ */
+
+            Route::post('/checks/custom', [SystemHealthController::class, 'runCustomCheck'])->name('checks.custom');
+            Route::get('/checks',         [SystemHealthController::class, 'listHealthChecks'])->name('checks.list');
+            Route::get('/checks/{check}', [SystemHealthController::class, 'getHealthCheck'])->name('checks.show');
+
+        });
     
-    // ✅ ADDED: Statistics route (for index blade)
-    Route::get('/statistics', [MaintenanceController::class, 'statistics'])->name('statistics');
-    
-    // ✅ ADDED: Calendar view (if referenced elsewhere)
-    Route::get('/calendar', [MaintenanceController::class, 'calendar'])->name('calendar');
-    Route::get('/upcoming', [MaintenanceController::class, 'upcoming'])->name('upcoming');
-    Route::get('/active', [MaintenanceController::class, 'active'])->name('active');
-    
-    // Maintenance CRUD
-    Route::get('/create', [MaintenanceController::class, 'create'])->name('create');
-    Route::post('/', [MaintenanceController::class, 'store'])->name('store');
-    Route::get('/{maintenance}', [MaintenanceController::class, 'show'])->name('show');
-    
-    // ✅ ADDED: Edit route (for show blade)
-    Route::get('/{maintenance}/edit', [MaintenanceController::class, 'edit'])->name('edit');
-    Route::put('/{maintenance}', [MaintenanceController::class, 'update'])->name('update');
-    Route::delete('/{maintenance}', [MaintenanceController::class, 'destroy'])->name('destroy');
-    
-    // ✅ ADDED: History route (for show blade overflow menu)
-    Route::get('/{maintenance}/history', [MaintenanceController::class, 'history'])->name('history');
-    
-    // Maintenance Actions
-    Route::post('/{maintenance}/approve', [MaintenanceController::class, 'approve'])->name('approve');
-    Route::post('/{maintenance}/start', [MaintenanceController::class, 'start'])->name('start');
-    Route::post('/{maintenance}/complete', [MaintenanceController::class, 'complete'])->name('complete');
-    Route::post('/{maintenance}/cancel', [MaintenanceController::class, 'cancel'])->name('cancel');
-    
-    // ✅ ADDED: Reschedule and extend routes (for show blade)
-    Route::post('/{maintenance}/reschedule', [MaintenanceController::class, 'reschedule'])->name('reschedule');
-    Route::post('/{maintenance}/extend', [MaintenanceController::class, 'extend'])->name('extend');
-    
-    // ✅ ADDED: Duplicate route (for show blade)
-    Route::post('/{maintenance}/duplicate', [MaintenanceController::class, 'duplicate'])->name('duplicate');
-    
-    // ✅ ADDED: Export route (for show blade)
-    Route::post('/{maintenance}/export', [MaintenanceController::class, 'export'])->name('export');
-    Route::get('/{maintenance}/export/download', [MaintenanceController::class, 'downloadExport'])->name('export.download');
-    
-    // ✅ ADDED: Report route (for show blade)
-    Route::get('/{maintenance}/report', [MaintenanceController::class, 'report'])->name('report');
-    
-    // Maintenance Notifications
-    Route::post('/{maintenance}/resend-notifications', [MaintenanceController::class, 'resendNotifications'])->name('resend-notifications');
-    Route::post('/{maintenance}/send-reminder', [MaintenanceController::class, 'sendReminder'])->name('send-reminder');
-    Route::post('/{maintenance}/update-progress', [MaintenanceController::class, 'updateProgress'])->name('update-progress');
-    
-    // Maintenance Impact Analysis
-    Route::get('/{maintenance}/impact', [MaintenanceController::class, 'impactAnalysis'])->name('impact');
-    Route::get('/{maintenance}/affected-users', [MaintenanceController::class, 'affectedUsers'])->name('affected-users');
-    Route::get('/{maintenance}/affected-modules', [MaintenanceController::class, 'affectedModules'])->name('affected-modules');
-    
-    // Maintenance Reports
-    Route::get('/{maintenance}/generate-report', [MaintenanceController::class, 'generateReport'])->name('generate-report');
-    Route::get('/{maintenance}/download-report', [MaintenanceController::class, 'downloadReport'])->name('download-report');
-    
-    // ✅ ADDED: API endpoints for blade templates
-    Route::get('/api/upcoming', [MaintenanceController::class, 'apiUpcoming'])->name('api.upcoming');
-    Route::get('/api/active', [MaintenanceController::class, 'apiActive'])->name('api.active');
-    Route::get('/api/check-module/{module}', [MaintenanceController::class, 'apiCheckModule'])->name('api.check-module');
-    
-    // ✅ ADDED: Settings and templates (if needed)
-    Route::get('/settings', [MaintenanceController::class, 'settings'])->name('settings');
-    Route::post('/settings', [MaintenanceController::class, 'updateSettings'])->name('settings.update');
-    
-    // ✅ ADDED: Templates management
-    Route::get('/templates', [MaintenanceController::class, 'templates'])->name('templates');
-    Route::post('/templates', [MaintenanceController::class, 'storeTemplate'])->name('templates.store');
-    Route::post('/templates/{template}/use', [MaintenanceController::class, 'useTemplate'])->name('templates.use');
-});
-    
-   // =============================================
-// EMERGENCY MODE ROUTES - COMPLETE AND UPDATED VERSION - KEEP ONLY THIS ONE
+
+// =============================================
+// LOGS MANAGEMENT ROUTES  (file-based viewer — LogController)
 // =============================================
 
-Route::prefix('emergency')->name('emergency.')->group(function () {
-    // Main emergency mode listing and creation
-    Route::get('/', [EmergencyModeController::class, 'index'])->name('index');
-    Route::get('/create', [EmergencyModeController::class, 'create'])->name('create');
-    Route::post('/', [EmergencyModeController::class, 'store'])->name('store');
-    
-    // Show emergency details
-    Route::get('/{id}', [EmergencyModeController::class, 'show'])->name('show');
-    
-    // History and statistics
-    Route::get('/{id}/history', [EmergencyModeController::class, 'history'])->name('history');
-    Route::get('/statistics', [EmergencyModeController::class, 'statistics'])->name('statistics');
-    
-    // Emergency mode actions (POST routes) - CRITICAL FOR BLADE TEMPLATE
-    Route::post('/{id}/activate', [EmergencyModeController::class, 'activate'])->name('activate');
-    Route::post('/{id}/deactivate', [EmergencyModeController::class, 'deactivate'])->name('deactivate');
-    Route::post('/{id}/extend', [EmergencyModeController::class, 'extend'])->name('extend');
-    Route::post('/{id}/cancel', [EmergencyModeController::class, 'cancel'])->name('cancel');
-    
-    // Emergency Mode Management (from existing routes)
-    Route::get('/status', [EmergencyModeController::class, 'status'])->name('status');
-    Route::get('/settings', [EmergencyModeController::class, 'settings'])->name('settings');
-    
-    // Emergency Mode Actions
-    Route::post('/update', [EmergencyModeController::class, 'update'])->name('update');
-    
-    // Emergency Mode Notifications
-    Route::post('/notify/users', [EmergencyModeController::class, 'notifyUsers'])->name('notify.users');
-    Route::post('/notify/admins', [EmergencyModeController::class, 'notifyAdmins'])->name('notify.admins');
-    Route::post('/notify/all', [EmergencyModeController::class, 'notifyAll'])->name('notify.all');
-    
-    // Emergency Mode Access Control
-    Route::get('/access', [EmergencyModeController::class, 'accessControl'])->name('access');
-    Route::post('/access/users', [EmergencyModeController::class, 'manageUserAccess'])->name('access.users');
-    Route::post('/access/roles', [EmergencyModeController::class, 'manageRoleAccess'])->name('access.roles');
-    Route::post('/access/ip', [EmergencyModeController::class, 'manageIpAccess'])->name('access.ip');
-    
-    // Emergency Mode Reports
-    Route::get('/reports', [EmergencyModeController::class, 'reports'])->name('reports');
-    Route::get('/reports/{report}', [EmergencyModeController::class, 'showReport'])->name('reports.show');
-    Route::post('/reports/generate', [EmergencyModeController::class, 'generateReport'])->name('reports.generate');
-    Route::get('/reports/{report}/download', [EmergencyModeController::class, 'downloadReport'])->name('reports.download');
-    
-    // Emergency Mode Settings
-    Route::post('/settings', [EmergencyModeController::class, 'updateSettings'])->name('settings.update');
-    Route::get('/settings/triggers', [EmergencyModeController::class, 'triggerSettings'])->name('settings.triggers');
-    Route::post('/settings/triggers', [EmergencyModeController::class, 'updateTriggerSettings'])->name('settings.triggers.update');
-    Route::get('/settings/notifications', [EmergencyModeController::class, 'notificationSettings'])->name('settings.notifications');
-    Route::post('/settings/notifications', [EmergencyModeController::class, 'updateNotificationSettings'])->name('settings.notifications.update');
-    Route::get('/settings/access', [EmergencyModeController::class, 'accessSettings'])->name('settings.access');
-    Route::post('/settings/access', [EmergencyModeController::class, 'updateAccessSettings'])->name('settings.access.update');
-    
-    // API endpoints
-    Route::get('/api/active', [EmergencyModeController::class, 'apiActive'])->name('api.active');
-    Route::get('/api/check-module/{module}', [EmergencyModeController::class, 'apiCheckModule'])->name('api.check.module');
-    
-    // ✅ ADDED: Toggle route (for Blade template quick actions)
-    Route::post('/{id}/toggle', [EmergencyModeController::class, 'toggle'])->name('toggle');
-    
-    // ✅ ADDED: Active status API
-    Route::get('/status/active', [EmergencyModeController::class, 'activeStatus'])->name('status.active');
+Route::prefix('logs')->name('logs.')->group(function () {
+
+    /*
+    |--------------------------------------------------------------------------
+    | Static routes — MUST come before /{log}
+    |--------------------------------------------------------------------------
+    */
+
+    // Overview / main entry
+    Route::get('/',           [LogController::class, 'index'])->name('index');
+    Route::get('/overview',   [LogController::class, 'overview'])->name('overview');
+
+    // Statistics
+    Route::get('/statistics',        [LogController::class, 'getStatistics'])->name('statistics');
+    Route::get('/statistics/errors', [LogController::class, 'errorStatistics'])->name('statistics.errors');
+
+    // Filtered views
+    Route::get('/errors',   [LogController::class, 'errors'])->name('errors');
+    Route::get('/warnings', [LogController::class, 'warnings'])->name('warnings');
+    Route::get('/critical', [LogController::class, 'critical'])->name('critical');
+    Route::get('/debug',    [LogController::class, 'debug'])->name('debug');
+    Route::get('/info',     [LogController::class, 'info'])->name('info');
+
+    // Search & filter
+    Route::get('/search',              [LogController::class, 'search'])->name('search');
+    Route::post('/filter',             [LogController::class, 'filter'])->name('filter');
+    Route::get('/recent/errors',       [LogController::class, 'recentErrors'])->name('recent.errors');
+    Route::get('/by-date/{date}',      [LogController::class, 'getByDate'])->name('by-date');
+    Route::get('/by-level/{level}',    [LogController::class, 'getByLevel'])->name('by-level');
+    Route::get('/by-source/{source}',  [LogController::class, 'getBySource'])->name('by-source');
+    Route::get('/by-user/{userId}',    [LogController::class, 'getByUser'])->name('by-user');
+
+    // Analysis & reports
+    Route::get('/analysis',  [LogController::class, 'analysis'])->name('analysis');
+    Route::get('/trends',    [LogController::class, 'trends'])->name('trends');
+    Route::post('/reports/generate',         [LogController::class, 'generateReport'])->name('generate-report');
+    Route::get('/reports/{id}',              [LogController::class, 'getReport'])->name('report');
+    Route::get('/reports/{id}/download',     [LogController::class, 'downloadReport'])->name('report.download');
+
+    // Export
+    Route::get('/export',        [LogController::class, 'export'])->name('export');
+    Route::get('/export/csv',    [LogController::class, 'exportToCsv'])->name('export.csv');
+    Route::get('/export/json',   [LogController::class, 'exportToJson'])->name('export.json');
+    Route::get('/export/pdf',    [LogController::class, 'exportToPdf'])->name('export.pdf');
+
+    // Real-time monitoring
+    Route::get('/stream',    [LogController::class, 'stream'])->name('stream');
+    Route::get('/live',      [LogController::class, 'live'])->name('live');
+    Route::get('/realtime',  [LogController::class, 'realtime'])->name('realtime');
+
+    // Settings
+    Route::get('/settings',              [LogController::class, 'settings'])->name('settings');
+    Route::post('/settings',             [LogController::class, 'updateSettings'])->name('settings.update');
+    Route::post('/settings/retention',   [LogController::class, 'updateRetention'])->name('settings.retention');
+    Route::post('/settings/levels',      [LogController::class, 'updateLogLevels'])->name('settings.levels');
+
+    // Archives
+    Route::get('/archives',                        [LogController::class, 'archives'])->name('archives');
+    Route::get('/archives/{archive}',              [LogController::class, 'showArchive'])->name('archives.show');
+    Route::post('/archives/{archive}/restore',     [LogController::class, 'restoreArchive'])->name('archives.restore');
+    Route::delete('/archives/{archive}',           [LogController::class, 'deleteArchive'])->name('archives.delete');
+
+    // Bulk operations
+    Route::post('/bulk/resolve',  [LogController::class, 'bulkResolve'])->name('bulk.resolve');
+    Route::post('/bulk/delete',   [LogController::class, 'bulkDelete'])->name('bulk.delete');
+    Route::post('/bulk/archive',  [LogController::class, 'bulkArchive'])->name('bulk.archive');
+    Route::post('/clear/all',     [LogController::class, 'clearAll'])->name('clear.all');
+    Route::post('/clear/old',     [LogController::class, 'clearOld'])->name('clear.old');
+
+    /*
+    |--------------------------------------------------------------------------
+    | Parameterised routes — LAST
+    |--------------------------------------------------------------------------
+    | Order matters: /{log} would otherwise swallow /search, /export, etc.
+    | The numeric constraint is belt-and-braces.
+    */
+
+    Route::get('/{log}',             [LogController::class, 'show'])
+        ->whereNumber('log')->name('show');
+
+    Route::put('/{log}',             [LogController::class, 'update'])
+        ->whereNumber('log')->name('update');
+
+    Route::delete('/{log}',          [LogController::class, 'destroy'])
+        ->whereNumber('log')->name('destroy');
+
+    Route::post('/{log}/resolve',    [LogController::class, 'markAsResolved'])
+        ->whereNumber('log')->name('resolve');
+
+    Route::post('/{log}/unresolve',  [LogController::class, 'markAsUnresolved'])
+        ->whereNumber('log')->name('unresolve');
+
+    // Legacy alias used by the Blade template
+    Route::post('/{id}/mark-resolved', [LogController::class, 'markResolved'])
+        ->whereNumber('id')->name('mark-resolved');
 });
+    
+           /* ============================================================
+         | MAINTENANCE MANAGEMENT
+         * ============================================================ */
+
+        Route::prefix('maintenance')
+            ->name('maintenance.')
+            ->group(function () {
+
+                /* ---------- LIST / VIEW ---------- */
+
+                Route::get('/', [MaintenanceController::class, 'index'])->name('index');
+
+                /* ---------- CREATE / STORE ---------- */
+
+                Route::get('/create', [MaintenanceController::class, 'create'])->name('create');
+                Route::post('/',      [MaintenanceController::class, 'store'])->name('store');
+
+                /* ---------- STATIC sub-pages (must precede /{maintenance}) ---------- */
+
+                Route::get('/statistics', [MaintenanceController::class, 'statistics'])->name('statistics');
+
+                // Trash management
+                Route::get('/trash',                        [MaintenanceController::class, 'trash'])->name('trash');
+                Route::post('/trash/{id}/restore',          [MaintenanceController::class, 'restore'])->name('restore');
+                Route::delete('/trash/{id}/force-delete',   [MaintenanceController::class, 'forceDelete'])->name('force-delete');
+                Route::post('/trash/bulk-restore',          [MaintenanceController::class, 'bulkRestore'])->name('bulk-restore');
+                Route::post('/trash/bulk-force-delete',     [MaintenanceController::class, 'bulkForceDelete'])->name('bulk-force-delete');
+                Route::post('/trash/empty',                 [MaintenanceController::class, 'emptyTrash'])->name('empty-trash');
+                Route::get('/trash/{id}/details',           [MaintenanceController::class, 'trashDetails'])->name('trash-details');
+
+                // API endpoints (must come BEFORE /{maintenance} catch)
+                Route::get('/api/upcoming',                 [MaintenanceController::class, 'apiUpcoming'])->name('api.upcoming');
+                Route::get('/api/active',                   [MaintenanceController::class, 'apiActive'])->name('api.active');
+                Route::get('/api/check-module/{module}',    [MaintenanceController::class, 'apiCheckModule'])->name('api.check-module');
+
+                /* ---------- PER-RECORD ---------- */
+
+                Route::get('/{maintenance}',            [MaintenanceController::class, 'show'])->name('show');
+                Route::get('/{maintenance}/edit',       [MaintenanceController::class, 'edit'])->name('edit');
+                Route::put('/{maintenance}',            [MaintenanceController::class, 'update'])->name('update');
+                Route::delete('/{maintenance}',         [MaintenanceController::class, 'destroy'])->name('destroy');
+
+                /* ---------- STATE TRANSITIONS ---------- */
+
+                Route::post('/{maintenance}/approve',   [MaintenanceController::class, 'approve'])->name('approve');
+                Route::post('/{maintenance}/start',     [MaintenanceController::class, 'start'])->name('start');
+                Route::post('/{maintenance}/complete',  [MaintenanceController::class, 'complete'])->name('complete');
+                Route::post('/{maintenance}/cancel',    [MaintenanceController::class, 'cancel'])->name('cancel');
+
+                /* ---------- HISTORY ---------- */
+
+                Route::get('/{maintenance}/history',    [MaintenanceController::class, 'history'])->name('history');
+            });
+    
+   /* ============================================================
+         | EMERGENCY MODE MANAGEMENT
+         * ============================================================ */
+
+        Route::prefix('emergency')
+            ->name('emergency.')
+            ->group(function () {
+
+                /* ---------- LIST / CREATE / STATIC ---------- */
+
+                Route::get('/',           [EmergencyModeController::class, 'index'])->name('index');
+                Route::get('/create',     [EmergencyModeController::class, 'create'])->name('create');
+                Route::post('/',          [EmergencyModeController::class, 'store'])->name('store');
+
+                // Static sub-pages — MUST come before /{emergency}
+                Route::get('/statistics', [EmergencyModeController::class, 'statistics'])->name('statistics');
+
+                // API endpoints — MUST come before /{emergency}
+                Route::get('/api/active',                  [EmergencyModeController::class, 'apiActive'])->name('api.active');
+                Route::get('/api/check-module/{module}',   [EmergencyModeController::class, 'apiCheckModule'])->name('api.check-module');
+
+                /* ---------- PER-RECORD ---------- */
+
+                Route::get('/{emergency}',          [EmergencyModeController::class, 'show'])->name('show');
+                Route::get('/{emergency}/history',  [EmergencyModeController::class, 'history'])->name('history');
+
+                Route::post('/{emergency}/activate',   [EmergencyModeController::class, 'activate'])->name('activate');
+                Route::post('/{emergency}/deactivate', [EmergencyModeController::class, 'deactivate'])->name('deactivate');
+                Route::post('/{emergency}/extend',     [EmergencyModeController::class, 'extend'])->name('extend');
+                Route::post('/{emergency}/cancel',     [EmergencyModeController::class, 'cancel'])->name('cancel');
+            });
+
+
     
     // =============================================
     // SYSTEM PERFORMANCE & MONITORING ROUTES
@@ -1537,13 +1766,13 @@ Route::prefix('emergency')->name('emergency.')->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| ✅ UPDATED: User Invitation Routes (Public Access - No Auth Required)
+| âœ… UPDATED: User Invitation Routes (Public Access - No Auth Required)
 |--------------------------------------------------------------------------
 */
 
 // Public user invitation acceptance routes (no auth required)
 Route::prefix('invitations')->name('invitation.')->group(function () {
-    // ✅ MAIN ROUTE: This matches what the model expects
+    // âœ… MAIN ROUTE: This matches what the model expects
     Route::get('/accept/{token}', [UserInvitationController::class, 'showAcceptForm'])
         ->name('accept'); // Creates: invitation.accept
     
@@ -1563,7 +1792,7 @@ Route::prefix('invitations')->name('invitation.')->group(function () {
         ->name('validate-token');
 });
 
-// ✅ BACKWARD COMPATIBILITY: Keep old route names if referenced elsewhere
+// âœ… BACKWARD COMPATIBILITY: Keep old route names if referenced elsewhere
 Route::prefix('user/invitations')->name('user.invitations.')->group(function () {
     Route::get('/accept/{token}', [UserInvitationController::class, 'showAcceptForm'])
         ->name('accept');
@@ -1583,13 +1812,13 @@ Route::prefix('user/invitations')->name('user.invitations.')->group(function () 
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Tenant Invitation Routes (Public Access - No Auth Required)
+| âœ… ADDED: Tenant Invitation Routes (Public Access - No Auth Required)
 |--------------------------------------------------------------------------
 */
 
 // Public tenant invitation acceptance routes (no auth required)
 Route::prefix('tenant-invitation')->name('tenant.invitation.')->group(function () {
-    // ✅ MAIN ROUTE: This matches what the TenantInvitation model expects
+    // âœ… MAIN ROUTE: This matches what the TenantInvitation model expects
     Route::get('/accept/{token}', [TenantInvitationController::class, 'accept'])
         ->name('accept'); // Creates: tenant.invitation.accept
     
@@ -1618,7 +1847,7 @@ Route::prefix('tenant-invitation')->name('tenant.invitation.')->group(function (
 
 /*
 |--------------------------------------------------------------------------
-| ✅ BACKWARD COMPATIBILITY: Alternative Tenant Invitation Route Names
+| âœ… BACKWARD COMPATIBILITY: Alternative Tenant Invitation Route Names
 |--------------------------------------------------------------------------
 */
 
@@ -1642,7 +1871,7 @@ Route::prefix('tenant/invitations')->name('tenant.invitations.')->group(function
 
 /*
 |--------------------------------------------------------------------------
-| ✅ UPDATED: User Invitation Management Routes (Admin Only)
+| âœ… UPDATED: User Invitation Management Routes (Admin Only)
 |--------------------------------------------------------------------------
 */
 
@@ -1696,7 +1925,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Tenant Invitation Management Routes (Admin Only)
+| âœ… ADDED: Tenant Invitation Management Routes (Admin Only)
 |--------------------------------------------------------------------------
 */
 
@@ -1742,7 +1971,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Landlord Invitation Routes (Public Access)
+| âœ… ADDED: Landlord Invitation Routes (Public Access)
 |--------------------------------------------------------------------------
 */
 
@@ -1759,7 +1988,7 @@ Route::prefix('landlord/invitations')->name('landlord.invitations.')->group(func
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Landlord-specific Tenant Invitation Routes
+| âœ… ADDED: Landlord-specific Tenant Invitation Routes
 |--------------------------------------------------------------------------
 */
 
@@ -1810,7 +2039,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])->prefix('landlord')->name('land
     // Channel analytics
     Route::get('/channels/{channel}/analytics', [HomeController::class, 'channelAnalytics'])->name('channels.analytics');
     
-    // ✅ ADDED: Landlord active invitations
+    // âœ… ADDED: Landlord active invitations
     Route::get('/active-invitations', [LandlordInvitationController::class, 'getLandlordActiveInvitations'])
         ->name('active-invitations');
 });
@@ -1829,7 +2058,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])->prefix('landlord')->name('land
         // Update routes
         Route::put('/update', [ProfileController::class, 'update'])->name('update');
         Route::put('/personal', [ProfileController::class, 'updateLandlordPersonal'])->name('personal.update');
-        Route::put('/contact', [ProfileController::class, 'updateLandlordContact'])->name('contact.update'); // ✅ FIXED
+        Route::put('/contact', [ProfileController::class, 'updateLandlordContact'])->name('contact.update'); // âœ… FIXED
         Route::put('/password', [ProfileController::class, 'updatePassword'])->name('password.update');
         
         // Photo routes
@@ -1858,7 +2087,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])->prefix('landlord')->name('land
 
 /*
 |--------------------------------------------------------------------------
-| ✅ FIXED: Tenant Profile Management Routes - COMPLETE VERSION
+| âœ… FIXED: Tenant Profile Management Routes - COMPLETE VERSION
 |--------------------------------------------------------------------------
 */
 
@@ -1883,25 +2112,25 @@ Route::middleware(['auth', 'multi.auth.user:3'])->prefix('tenant')->name('tenant
         Route::get('/contact-info', [ProfileController::class, 'edit'])->name('contact-info');
         Route::put('/contact-info', [ProfileController::class, 'updateContactInfo'])->name('contact-info.update');
         
-        // ✅ NEW: Tenant details routes (Missing from original)
+        // âœ… NEW: Tenant details routes (Missing from original)
         Route::get('/tenant-details', [ProfileController::class, 'edit'])->name('tenant-details');
         Route::put('/tenant-details', [ProfileController::class, 'updateTenantDetails'])->name('tenant-details.update');
         
-        // ✅ NEW: Emergency contacts routes (Missing from original)
+        // âœ… NEW: Emergency contacts routes (Missing from original)
         Route::get('/emergency-contacts', [ProfileController::class, 'edit'])->name('emergency-contacts');
         Route::put('/emergency-contacts', [ProfileController::class, 'updateEmergencyContacts'])->name('emergency-contacts.update');
         
-        // ✅ FIXED: Profile photo management
+        // âœ… FIXED: Profile photo management
         Route::get('/photo', [ProfileController::class, 'edit'])->name('photo');
         Route::post('/photo', [PhotoController::class, 'updateProfilePhoto'])->name('photo.update');
         Route::delete('/photo', [PhotoController::class, 'removeProfilePhoto'])->name('photo.remove');
         
-        // ✅ FIXED: Phone verification routes - Match blade template names
+        // âœ… FIXED: Phone verification routes - Match blade template names
         Route::get('/phone-verification', [ProfileController::class, 'edit'])->name('phone.verification');
-        Route::post('/phone/verify/send', [ProfileController::class, 'sendPhoneVerification'])->name('phone.verify.send'); // ✅ FIXED NAME
+        Route::post('/phone/verify/send', [ProfileController::class, 'sendPhoneVerification'])->name('phone.verify.send'); // âœ… FIXED NAME
         Route::post('/phone/verify', [ProfileController::class, 'verifyPhone'])->name('phone.verify');
         
-        // ✅ NEW: Email verification routes (Missing from original)
+        // âœ… NEW: Email verification routes (Missing from original)
         Route::post('/email/verify/send', [ProfileController::class, 'sendEmailVerification'])->name('email.verify.send');
         Route::post('/email/verify', [ProfileController::class, 'verifyEmail'])->name('email.verify');
         
@@ -1911,23 +2140,23 @@ Route::middleware(['auth', 'multi.auth.user:3'])->prefix('tenant')->name('tenant
         // Download personal data - Fixed to match blade
         Route::get('/data/download', [ProfileController::class, 'downloadPersonalData'])->name('data.download');
         
-        // ✅ NEW: Form-specific update routes for the blade tabs - Match form actions
+        // âœ… NEW: Form-specific update routes for the blade tabs - Match form actions
         Route::put('/personal/update', [ProfileController::class, 'updatePersonalInfo'])->name('personal.update');
         Route::put('/contact/update', [ProfileController::class, 'updateContactInfo'])->name('contact.update');
         Route::put('/tenant/update', [ProfileController::class, 'updateTenantDetails'])->name('tenant.update');
         Route::put('/emergency/update', [ProfileController::class, 'updateEmergencyContacts'])->name('emergency.update');
         
-        // ✅ NEW: Missing routes from blade template
+        // âœ… NEW: Missing routes from blade template
         Route::put('/password/update', [ProfileController::class, 'updatePassword'])->name('password.update'); // Alternative for blade
         
-        // ✅ NEW: Stats route as shown in blade
+        // âœ… NEW: Stats route as shown in blade
         Route::get('/profile/stats', [ProfileController::class, 'getProfileStats'])->name('profile.stats');
     });
 });
 
 /*
 |--------------------------------------------------------------------------
-| ✅ FIXED: Security Personnel Profile Management Routes - COMPLETE UPDATE
+| âœ… FIXED: Security Personnel Profile Management Routes - COMPLETE UPDATE
 |--------------------------------------------------------------------------
 */
 
@@ -1944,10 +2173,10 @@ Route::middleware(['auth', 'multi.auth.user:6'])->prefix('security')->name('secu
         Route::get('/password', [ProfileController::class, 'edit'])->name('password');
         Route::put('/password', [ProfileController::class, 'updatePassword'])->name('password.update');
         
-        // ✅ NEW: Personal information routes for tabbed interface
+        // âœ… NEW: Personal information routes for tabbed interface
         Route::put('/personal', [ProfileController::class, 'updatePersonal'])->name('personal.update');
         
-        // ✅ NEW: Security information routes for tabbed interface
+        // âœ… NEW: Security information routes for tabbed interface
         Route::put('/security', [ProfileController::class, 'updateSecurity'])->name('security.update');
         
         // Alternative route names for backward compatibility
@@ -1957,12 +2186,12 @@ Route::middleware(['auth', 'multi.auth.user:6'])->prefix('security')->name('secu
         Route::get('/security-info', [ProfileController::class, 'edit'])->name('security-info');
         Route::put('/security-info', [ProfileController::class, 'updateSecurityInfo'])->name('security-info.update');
         
-        // ✅ FIXED: Profile photo management
+        // âœ… FIXED: Profile photo management
         Route::get('/photo', [ProfileController::class, 'edit'])->name('photo');
         Route::post('/photo', [PhotoController::class, 'updateProfilePhoto'])->name('photo.update');
         Route::delete('/photo', [PhotoController::class, 'removeProfilePhoto'])->name('photo.remove');
         
-        // ✅ FIXED: Phone verification routes - Complete implementation
+        // âœ… FIXED: Phone verification routes - Complete implementation
         Route::get('/phone-verification', [ProfileController::class, 'edit'])->name('phone.verification');
         Route::post('/phone/verify/send', [ProfileController::class, 'sendPhoneVerification'])->name('phone.verify.send');
         Route::post('/phone/verify', [ProfileController::class, 'verifyPhone'])->name('phone.verify');
@@ -1985,7 +2214,7 @@ Route::middleware(['auth', 'multi.auth.user:6'])->prefix('security')->name('secu
 
 /*
 |--------------------------------------------------------------------------
-| ✅ FIXED: Field agent Profile Management Routes - COMPLETE UPDATE
+| âœ… FIXED: Field agent Profile Management Routes - COMPLETE UPDATE
 |--------------------------------------------------------------------------
 */
 Route::middleware(['auth', 'multi.auth.user:4'])->prefix('agent')->name('agent.')->group(function () {
@@ -2006,7 +2235,7 @@ Route::middleware(['auth', 'multi.auth.user:4'])->prefix('agent')->name('agent.'
         Route::put('/contact', [ProfileController::class, 'updateContact'])->name('contact.update');
         Route::put('/agent-info', [ProfileController::class, 'updateAgentInfo'])->name('agent.update');
         
-        // ✅ FIXED: Added missing notifications route
+        // âœ… FIXED: Added missing notifications route
         Route::put('/notifications', [ProfileController::class, 'updateNotifications'])->name('notifications.update');
         
         Route::put('/security', [ProfileController::class, 'updateSecurity'])->name('security.update');
@@ -2037,7 +2266,7 @@ Route::middleware(['auth', 'multi.auth.user:4'])->prefix('agent')->name('agent.'
 
 /*
 |--------------------------------------------------------------------------
-| ✅ FIXED: Profile Management Routes (For All Authenticated Users) - UPDATED PHONE VERIFICATION
+| âœ… FIXED: Profile Management Routes (For All Authenticated Users) - UPDATED PHONE VERIFICATION
 |--------------------------------------------------------------------------
 */
 
@@ -2057,7 +2286,7 @@ Route::middleware(['auth'])->prefix('profile')->name('profile.')->group(function
     // Remove profile photo - PhotoController
     Route::delete('/photo', [PhotoController::class, 'removeProfilePhoto'])->name('photo.remove');
     
-    // ✅ FIXED: Phone verification - Use ProfileController instead of VerificationController
+    // âœ… FIXED: Phone verification - Use ProfileController instead of VerificationController
     Route::post('/send-verification', [ProfileController::class, 'sendPhoneVerification'])->name('send-verification');
     Route::post('/verify-phone', [ProfileController::class, 'verifyPhone'])->name('verify-phone');
     
@@ -2127,7 +2356,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
 // ==================== DEVELOPER PROFILE ROUTES ====================
 /*
 |--------------------------------------------------------------------------
-| ✅ FIXED: Developer Profile Management Routes - UPDATED PHONE VERIFICATION
+| âœ… FIXED: Developer Profile Management Routes - UPDATED PHONE VERIFICATION
 |--------------------------------------------------------------------------
 */
 Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('developer.')->group(function () {
@@ -2198,7 +2427,7 @@ Route::get('/verify-email/{token}', [ProfileController::class, 'verifyEmail'])
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: User Invitation Management Routes (Admin Only)
+| âœ… ADDED: User Invitation Management Routes (Admin Only)
 |--------------------------------------------------------------------------
 */
 
@@ -2228,7 +2457,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Landlord Invitation Management Routes (Admin Only)
+| âœ… ADDED: Landlord Invitation Management Routes (Admin Only)
 |--------------------------------------------------------------------------
 */
 
@@ -2263,18 +2492,18 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
 
 /*
 |--------------------------------------------------------------------------
-| Chatbot Routes — Public + Authenticated
+| Chatbot Routes â€” Public + Authenticated
 |--------------------------------------------------------------------------
 |
 | The chat has two audiences:
 |
-|   🌐  GUESTS (not logged in)
+|   ðŸŒ  GUESTS (not logged in)
 |       - Can see the floating widget on the homepage.
 |       - Can send messages, get replies, fetch their session history,
 |         and clear it. Identified by a session token.
 |       - Strongly rate-limited to prevent abuse.
 |
-|   🔒  AUTHENTICATED USERS
+|   ðŸ”’  AUTHENTICATED USERS
 |       - Can access the full-page chat UI per role.
 |       - Have their history persisted against their user_id.
 |       - Looser throttles because they're trusted.
@@ -2284,7 +2513,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
 */
 
 /* =========================================================================
-   PUBLIC ENDPOINTS — accessible to guests + authenticated users
+   PUBLIC ENDPOINTS â€” accessible to guests + authenticated users
    ========================================================================= */
 
 Route::middleware(['web'])
@@ -2300,7 +2529,7 @@ Route::middleware(['web'])
         | Used by the floating widget on the homepage (guests) and by
         | role dashboards (authenticated users).
         |
-        | Throttle: 15 requests/minute per IP (strict — spam protection).
+        | Throttle: 15 requests/minute per IP (strict â€” spam protection).
         */
         Route::post('/send', [ChatController::class, 'sendMessage'])
             ->name('send')
@@ -2433,19 +2662,19 @@ Route::middleware(['auth', 'web'])->group(function () {
 });
 
 /* =========================================================================
-   LIVE CHAT — Human-to-Human Support & Escalation (auth-only)
+   LIVE CHAT â€” Human-to-Human Support & Escalation (auth-only)
    =========================================================================
 |
 | Flow:
-|   • Support   : Landlord / Tenant / Field Agent / Security / Sanitation /
-|                 Contractor  →  Admin / Super Admin
-|   • Escalation: Admin / Super Admin  →  Developer
+|   â€¢ Support   : Landlord / Tenant / Field Agent / Security / Sanitation /
+|                 Contractor  â†’  Admin / Super Admin
+|   â€¢ Escalation: Admin / Super Admin  â†’  Developer
 |
 | Guests do NOT have access to live chat. They use the bot chat at
 | /chat/* instead. This keeps the agent pool clean and prevents anonymous
 | abuse.
 |
-| ⚠️ IMPORTANT — route order:
+| âš ï¸ IMPORTANT â€” route order:
 |   Static paths (``/``, ``/start``, ``/inbox/agents``, ``/unread/count``)
 |   MUST be declared BEFORE the dynamic ``/{conversation}`` route.
 |   The ``whereNumber('conversation')`` constraint acts as a second safety
@@ -2454,19 +2683,19 @@ Route::middleware(['auth', 'web'])->group(function () {
 */
 
 /* =========================================================================
-   LIVE CHAT — Human-to-Human Support & Escalation (auth-only)
+   LIVE CHAT â€” Human-to-Human Support & Escalation (auth-only)
    =========================================================================
 |
 | Flow:
-|   • Support   : Landlord / Tenant / Field Agent / Security / Sanitation /
-|                 Contractor  →  Admin / Super Admin
-|   • Escalation: Admin / Super Admin  →  Developer
+|   â€¢ Support   : Landlord / Tenant / Field Agent / Security / Sanitation /
+|                 Contractor  â†’  Admin / Super Admin
+|   â€¢ Escalation: Admin / Super Admin  â†’  Developer
 |
 | Guests do NOT have access to live chat. They use the bot chat at
 | /chat/* instead. This keeps the agent pool clean and prevents
 | anonymous abuse.
 |
-| ⚠️ IMPORTANT — route order:
+| âš ï¸ IMPORTANT â€” route order:
 |   Static paths (``/``, ``/start``, ``/inbox/agents``, ``/unread/count``,
 |   ``/purge/closed``) MUST be declared BEFORE the dynamic
 |   ``/{conversation}`` route. The ``whereNumber('conversation')``
@@ -2495,7 +2724,7 @@ Route::middleware(['auth', 'web'])
          |------------------------------------------------------------------
          | POST { subject?: string }
          | Returns: { success, conversation, redirect_url }
-         | Reuses an existing open conversation if one exists — so the
+         | Reuses an existing open conversation if one exists â€” so the
          | widget never creates duplicates on repeated clicks.
          */
         Route::post('/start', [LiveChatController::class, 'start'])
@@ -2505,7 +2734,7 @@ Route::middleware(['auth', 'web'])
         /* -----------------------------------------------------------------
          | Agent Inbox (MUST come before /{conversation})
          |------------------------------------------------------------------
-         | Lists all open conversations — unassigned first, then by
+         | Lists all open conversations â€” unassigned first, then by
          | last activity. Restricted to admin / super-admin / developer.
          */
         Route::get('/inbox/agents', [LiveChatController::class, 'agentInbox'])
@@ -2547,7 +2776,7 @@ Route::middleware(['auth', 'web'])
             ->middleware('throttle:120,1');
 
         /* -----------------------------------------------------------------
-         | Message feed (JSON) — used by the polling widget
+         | Message feed (JSON) â€” used by the polling widget
          |------------------------------------------------------------------
          | GET /live-chat/{conversation}/messages?after={lastId}
          | Returns all messages with id > after.
@@ -2687,7 +2916,7 @@ Route::get('/invitations/accept/{token}', [AgentInvitationController::class, 'sh
 |--------------------------------------------------------------------------
 */
 
-// ✅ UPDATED: Super Admin Dashboard using SuperAdminController - ADDED ALL API ENDPOINTS
+// âœ… UPDATED: Super Admin Dashboard using SuperAdminController - ADDED ALL API ENDPOINTS
 Route::middleware(['auth', 'multi.auth.user:0'])->prefix('super-admin')->name('super-admin.')->group(function () {
     // Main dashboard
     Route::get('/dashboard', [SuperAdminController::class, 'dashboard'])
@@ -2698,7 +2927,7 @@ Route::middleware(['auth', 'multi.auth.user:0'])->prefix('super-admin')->name('s
     Route::post('/dashboard/refresh', [SuperAdminController::class, 'refreshDashboard'])->name('dashboard.refresh');
     Route::get('/dashboard/export', [SuperAdminController::class, 'exportDashboardData'])->name('dashboard.export');
     
-    // ✅ ADDED: Individual API endpoints for each data type
+    // âœ… ADDED: Individual API endpoints for each data type
     Route::get('/api/user-statistics', [SuperAdminController::class, 'apiUserStatistics'])->name('api.user-statistics');
     Route::get('/api/payment-statistics', [SuperAdminController::class, 'apiPaymentStatistics'])->name('api.payment-statistics');
     Route::get('/api/property-statistics', [SuperAdminController::class, 'apiPropertyStatistics'])->name('api.property-statistics');
@@ -2723,11 +2952,11 @@ Route::middleware(['auth', 'multi.auth.user:0'])->prefix('super-admin')->name('s
 Route::middleware(['auth', 'multi.auth.user:0'])->get('/superadmin/dashboard', [SuperAdminController::class, 'dashboard'])
     ->name('superadmin.dashboard');
 
-// ✅ FIXED: Admin Dashboard Routes - Simplified and working
+// âœ… FIXED: Admin Dashboard Routes - Simplified and working
 Route::middleware(['auth', 'multi.auth.user:1'])->get('/admin/dashboard', [HomeController::class, 'adminDashboard'])
     ->name('admin.dashboard');
 
-// ✅ ADDED: Enhanced Admin Dashboard Routes with prefix group
+// âœ… ADDED: Enhanced Admin Dashboard Routes with prefix group
 Route::middleware(['auth', 'multi.auth.user:1'])->prefix('admin')->name('admin.')->group(function () {
     // Dashboard API routes for admin
     Route::get('/dashboard/data', [HomeController::class, 'getAdminDashboardData'])->name('dashboard.data');
@@ -2762,7 +2991,7 @@ Route::middleware(['auth', 'multi.auth.user:6'])->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: User Controller Routes (Landlord Tenant Management)
+| âœ… ADDED: User Controller Routes (Landlord Tenant Management)
 |--------------------------------------------------------------------------
 */
 
@@ -2859,17 +3088,17 @@ Route::middleware(['auth', 'multi.auth.user:4'])->prefix('field-agent')->name('f
     Route::post('/registration/{planId}/register-property', [RegistrationPlanController::class, 'registerProperty'])->name('registration.register-property');
 
     // ----------------------------------------------------------------------
-    // Statistics — points to the real controller method
+    // Statistics â€” points to the real controller method
     // ----------------------------------------------------------------------
     Route::get('/statistics', [FieldAgentPropertyController::class, 'statistics'])->name('statistics');
 
     // ----------------------------------------------------------------------
-    // Performance — points to the real controller method
+    // Performance â€” points to the real controller method
     // ----------------------------------------------------------------------
     Route::get('/performance', [FieldAgentPropertyController::class, 'performance'])->name('performance');
 
     // ----------------------------------------------------------------------
-    // Inspections (placeholder closures — leave as-is until feature exists)
+    // Inspections (placeholder closures â€” leave as-is until feature exists)
     // ----------------------------------------------------------------------
     Route::get('/inspections', function () {
         return view('field-agent.inspections.index');
@@ -2880,7 +3109,7 @@ Route::middleware(['auth', 'multi.auth.user:4'])->prefix('field-agent')->name('f
     })->name('inspections.create');
 
     // ----------------------------------------------------------------------
-    // Verifications (placeholder closures — leave as-is until feature exists)
+    // Verifications (placeholder closures â€” leave as-is until feature exists)
     // ----------------------------------------------------------------------
     Route::get('/verifications', function () {
         return view('field-agent.verifications.index');
@@ -2940,7 +3169,7 @@ Route::middleware(['auth', 'multi.auth.user:4'])->prefix('field-agent')->name('f
 
 /*
 |--------------------------------------------------------------------------
-| ✅ PROPERTY UNIT MANAGEMENT ROUTES - REORGANIZED BY CONTROLLER
+| âœ… PROPERTY UNIT MANAGEMENT ROUTES - REORGANIZED BY CONTROLLER
 |--------------------------------------------------------------------------
 */
 
@@ -2982,12 +3211,12 @@ Route::middleware(['web'])->group(function () {
 
 // ========== PROPERTY UNIT CONTROLLER ROUTES ==========
 Route::middleware(['auth'])->group(function () {
-    
+
     // ----- Index Route -----
     Route::get('/property-units', [PropertyUnitController::class, 'index'])
         ->name('property-units.index')
         ->middleware('multi.auth.user:0,1,2,3');
-    
+
     // ----- Create/Store Routes (Landlord only) -----
     Route::middleware(['multi.auth.user:2'])->group(function () {
         Route::get('/property-units/create', [PropertyUnitController::class, 'create'])
@@ -2995,13 +3224,13 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/property-units', [PropertyUnitController::class, 'store'])
             ->name('property-units.store');
     });
-    
+
     // ----- Export Route (Admin and Landlord only) -----
     Route::middleware(['multi.auth.user:0,1,2'])->group(function () {
         Route::get('/property-units/export', [PropertyUnitController::class, 'export'])
             ->name('property-units.export');
     });
-    
+
     // ----- Trash Routes (Landlord only) -----
     Route::middleware(['multi.auth.user:2'])->prefix('property-units')->group(function () {
         Route::get('/trash', [PropertyUnitController::class, 'trash'])
@@ -3009,13 +3238,13 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/trash/empty', [PropertyUnitController::class, 'emptyTrash'])
             ->name('property-units.empty-trash');
     });
-    
+
     // ----- Bulk Selection Redirect -----
-    Route::get('/property-units/bulk-selection', function() {
+    Route::get('/property-units/bulk-selection', function () {
         return redirect()->route('property-units.bulk-approval')
             ->with('info', 'Please use the bulk approval page for unit selection.');
     })->name('property-units.bulk-selection');
-    
+
     // ----- API Routes -----
     Route::prefix('api')->name('api.')->group(function () {
         Route::get('/property-units/by-property/{propertyId}', [PropertyUnitController::class, 'getUnitsByProperty'])
@@ -3035,14 +3264,14 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/property-units/search', [PropertyUnitController::class, 'searchUnits'])
             ->name('property-units.search');
     });
-    
+
     // ----- Parameterized Routes (/property-units/{id}) -----
     Route::prefix('property-units/{id}')->where(['id' => '[0-9]+'])->group(function () {
-        
+
         // Show route
         Route::get('/', [PropertyUnitController::class, 'show'])
             ->name('property-units.show');
-        
+
         // Edit/Update/Delete (Landlord only)
         Route::middleware(['multi.auth.user:2'])->group(function () {
             Route::get('/edit', [PropertyUnitController::class, 'edit'])
@@ -3056,7 +3285,22 @@ Route::middleware(['auth'])->group(function () {
             Route::post('/restore', [PropertyUnitController::class, 'restore'])
                 ->name('property-units.restore');
         });
-        
+
+        // ========== PHOTO ROUTES (Superadmin / Admin / Landlord) ==========
+        // Same role-gate as export so admins can moderate media, and the
+        // controller's `manageUnits` check still permits linked family members.
+        Route::middleware(['multi.auth.user:0,1,2'])->group(function () {
+            Route::post   ('/photos',              [PropertyUnitController::class, 'uploadPhotos'])
+                ->name('property-units.photos.store');
+            Route::delete ('/photos/{photo}',      [PropertyUnitController::class, 'deletePhoto'])
+                ->where(['photo' => '[0-9]+'])
+                ->name('property-units.photos.destroy');
+            Route::patch  ('/photos/{photo}/cover',[PropertyUnitController::class, 'setCoverPhoto'])
+                ->where(['photo' => '[0-9]+'])
+                ->name('property-units.photos.cover');
+        });
+        // ==================================================================
+
         // Trash Management (Landlord only)
         Route::middleware(['multi.auth.user:2'])->group(function () {
             Route::post('/restore-from-trash', [PropertyUnitController::class, 'restoreFromTrash'])
@@ -3064,7 +3308,7 @@ Route::middleware(['auth'])->group(function () {
             Route::delete('/force-delete', [PropertyUnitController::class, 'forceDelete'])
                 ->name('property-units.force-delete');
         });
-        
+
         // Contact Landlord (Tenant only)
         Route::middleware(['multi.auth.user:3'])->group(function () {
             Route::get('/contact-landlord', [PropertyUnitController::class, 'showContactLandlordForm'])
@@ -3072,24 +3316,24 @@ Route::middleware(['auth'])->group(function () {
             Route::post('/contact-landlord/send', [PropertyUnitController::class, 'sendMessageToLandlord'])
                 ->name('property-units.contact-landlord.send');
         });
-        
+
         // Unit Documents View
-        Route::get('/documents', function($id) {
+        Route::get('/documents', function ($id) {
             $unit = App\Models\PropertyUnit::findOrFail($id);
             $user = auth()->user();
-            
+
             if ($user->isLandlord() && $unit->property->landlord_id !== $user->id) {
                 abort(403, 'You can only view documents for your own properties.');
             }
             if ($user->isTenant() && $unit->tenant_id !== $user->id) {
                 abort(403, 'You can only view documents for your assigned unit.');
             }
-            
+
             return view('property_units.documents', compact('unit'));
         })->name('property-units.documents');
-        
+
         // Payment History Redirect
-        Route::get('/payment-history', function($id) {
+        Route::get('/payment-history', function ($id) {
             return redirect()->route('property-units.financials', $id)
                 ->with('info', 'Payment history is available in the financials section.');
         })->name('property-units.payment-history');
@@ -3192,7 +3436,7 @@ Route::middleware(['auth'])->group(function () {
             Route::post('/create-lease', [PropertyUnitLeaseController::class, 'createLease'])
                 ->name('property-units.create-lease');
             
-            // ✅ FIXED: Renew Lease route - now accessible to anyone with landlord role
+            // âœ… FIXED: Renew Lease route - now accessible to anyone with landlord role
             // This works for Super Admin, Admin, Security Personnel who also have landlord role
             Route::post('/renew-lease', [PropertyUnitLeaseController::class, 'renewLease'])
                 ->name('property-units.renew-lease');
@@ -3271,17 +3515,17 @@ Route::middleware(['auth', 'multi.auth.user:3'])
         
         Route::prefix('maintenance')->name('maintenance.')->group(function () {
             
-            // ✅ STATIC ROUTES FIRST (no parameters)
+            // âœ… STATIC ROUTES FIRST (no parameters)
             Route::get('/create', [TenantMaintenanceController::class, 'create'])->name('create');
             Route::get('/trashed', [TenantMaintenanceController::class, 'trashed'])->name('trashed');
             Route::get('/export-current-page', [TenantMaintenanceController::class, 'exportCurrentPage'])->name('export-current-page');
             Route::get('/export-all', [TenantMaintenanceController::class, 'exportAll'])->name('export-all');
             Route::get('/api/requests', [TenantMaintenanceController::class, 'apiRequests'])->name('api.requests');
             
-            // ✅ POST ROUTES
+            // âœ… POST ROUTES
             Route::post('/', [TenantMaintenanceController::class, 'store'])->name('store');
             
-            // ✅ PARAMETERIZED ROUTES (with {id})
+            // âœ… PARAMETERIZED ROUTES (with {id})
             Route::get('/', [TenantMaintenanceController::class, 'index'])->name('index');
             Route::get('/{id}', [TenantMaintenanceController::class, 'show'])->name('show');
             Route::put('/{id}/cancel', [TenantMaintenanceController::class, 'cancel'])->name('cancel');
@@ -3329,13 +3573,13 @@ Route::middleware(['auth'])->group(function () {
             // INVOICE DETAIL / UPDATE
             // ============================================================
 
-            // ✅ NEW: ----- Show a Single Invoice -----
+            // âœ… NEW: ----- Show a Single Invoice -----
             Route::get('/invoices/{invoice}', [PropertyUnitFinancialController::class, 'showInvoice'])
                 ->whereNumber('invoice')
                 ->name('property-units.show-invoice')
                 ->middleware('multi.auth.user:2,3');
 
-            // ✅ NEW: ----- Update Invoice (non-financial fields) -----
+            // âœ… NEW: ----- Update Invoice (non-financial fields) -----
             Route::patch('/invoices/{invoice}', [PropertyUnitFinancialController::class, 'updateInvoice'])
                 ->whereNumber('invoice')
                 ->name('property-units.update-invoice')
@@ -3357,13 +3601,13 @@ Route::middleware(['auth'])->group(function () {
                 ->name('property-units.void-invoice')
                 ->middleware('multi.auth.user:2');
 
-            // ✅ NEW: ----- Apply Late Fee to an Overdue Invoice -----
+            // âœ… NEW: ----- Apply Late Fee to an Overdue Invoice -----
             Route::post('/invoices/{invoice}/apply-late-fee', [PropertyUnitFinancialController::class, 'applyLateFee'])
                 ->whereNumber('invoice')
                 ->name('property-units.apply-late-fee')
                 ->middleware('multi.auth.user:2');
 
-            // ✅ NEW: ----- Recalculate Invoice Status from amount_paid -----
+            // âœ… NEW: ----- Recalculate Invoice Status from amount_paid -----
             Route::post('/invoices/{invoice}/recalculate', [PropertyUnitFinancialController::class, 'recalculateStatus'])
                 ->whereNumber('invoice')
                 ->name('property-units.recalculate-invoice')
@@ -3373,7 +3617,7 @@ Route::middleware(['auth'])->group(function () {
             // INVOICE DELIVERY
             // ============================================================
 
-            // ✅ NEW: ----- Send Invoice to Tenant via Email -----
+            // âœ… NEW: ----- Send Invoice to Tenant via Email -----
             Route::post('/invoices/{invoice}/send-to-tenant', [PropertyUnitFinancialController::class, 'sendInvoiceToTenant'])
                 ->whereNumber('invoice')
                 ->name('property-units.send-invoice')
@@ -3389,12 +3633,12 @@ Route::middleware(['auth'])->group(function () {
             // BULK / MAINTENANCE ACTIONS
             // ============================================================
 
-            // ✅ NEW: ----- Bulk Void Invoices -----
+            // âœ… NEW: ----- Bulk Void Invoices -----
             Route::post('/invoices/bulk-void', [PropertyUnitFinancialController::class, 'bulkVoid'])
                 ->name('property-units.bulk-void')
                 ->middleware('multi.auth.user:2');
 
-            // ✅ NEW: ----- Mark Overdue Invoices -----
+            // âœ… NEW: ----- Mark Overdue Invoices -----
             Route::post('/invoices/mark-overdue', [PropertyUnitFinancialController::class, 'markOverdue'])
                 ->name('property-units.mark-overdue')
                 ->middleware('multi.auth.user:2');
@@ -3470,7 +3714,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])->prefix('landlord')->name('land
         Route::get('/lease-management', [PropertyUnitLeaseController::class, 'showLeaseManagement'])->name('property-units.lease-management');
         Route::get('/create-lease', [PropertyUnitLeaseController::class, 'showCreateLeaseForm'])->name('property-units.create-lease.form');
         Route::post('/create-lease', [PropertyUnitLeaseController::class, 'createLease'])->name('property-units.create-lease');
-        // ✅ FIXED: Landlord-specific renew route (kept for backward compatibility)
+        // âœ… FIXED: Landlord-specific renew route (kept for backward compatibility)
         Route::post('/renew-lease', [PropertyUnitLeaseController::class, 'renewLease'])->name('property-units.renew-lease');
         
         // PropertyUnitMaintenanceController routes
@@ -3736,7 +3980,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         // PropertyUnitLeaseController routes
         Route::get('/lease-management', [PropertyUnitLeaseController::class, 'showLeaseManagement'])->name('property-units.lease-management');
         Route::get('/create-lease', [PropertyUnitLeaseController::class, 'showCreateLeaseForm'])->name('property-units.create-lease.form');
-        // ✅ FIXED: Admin-specific renew route (kept for backward compatibility)
+        // âœ… FIXED: Admin-specific renew route (kept for backward compatibility)
         Route::post('/renew-lease', [PropertyUnitLeaseController::class, 'renewLease'])->name('property-units.renew-lease');
         
         // PropertyUnitMaintenanceController routes
@@ -3907,7 +4151,7 @@ Route::middleware(['auth', 'multi.auth.user:0'])->prefix('super-admin')->name('s
         
         // PropertyUnitLeaseController routes
         Route::get('/lease-management', [PropertyUnitLeaseController::class, 'showLeaseManagement'])->name('property-units.lease-management');
-        // ✅ FIXED: Super Admin-specific renew route (kept for backward compatibility)
+        // âœ… FIXED: Super Admin-specific renew route (kept for backward compatibility)
         Route::post('/renew-lease', [PropertyUnitLeaseController::class, 'renewLease'])->name('property-units.renew-lease');
         
         // Document routes
@@ -4099,7 +4343,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])->prefix('tenant')->name('tenant
 
 /*
 |--------------------------------------------------------------------------
-| SMS Provider — Read-Only (Super-Admin + Developer)
+| SMS Provider â€” Read-Only (Super-Admin + Developer)
 |--------------------------------------------------------------------------
 | Super-admins can view status, usage stats, and configuration details,
 | but cannot write any credentials.
@@ -4115,7 +4359,7 @@ Route::middleware(['auth', 'multi.auth.user:0,5'])->prefix('admin')->name('admin
 
 /*
 |--------------------------------------------------------------------------
-| SMS Provider — Write Access (Developer Only)
+| SMS Provider â€” Write Access (Developer Only)
 |--------------------------------------------------------------------------
 | Every endpoint that mutates state or writes to .env is developer-only.
 |--------------------------------------------------------------------------
@@ -4136,7 +4380,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('admin')->name('admin.'
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ENHANCED: Payment Provider Configuration Routes
+| âœ… ENHANCED: Payment Provider Configuration Routes
 |--------------------------------------------------------------------------
 |
 */
@@ -4171,7 +4415,7 @@ Route::middleware(['auth', 'multi.auth.user:0', 'can:manage-payments'])
         Route::get('/payment-providers/webhook-urls', [PaymentProviderController::class, 'getWebhookUrls'])
             ->name('payment-providers.webhook-urls');
 
-        // Environment verification — reads current env, does not write
+        // Environment verification â€” reads current env, does not write
         Route::post('/payment-providers/verify-environment', [PaymentProviderController::class, 'verifyEnvironmentSwitch'])
             ->name('payment-providers.verify-environment');
 
@@ -4206,7 +4450,7 @@ Route::middleware(['auth', 'multi.auth.user:0', 'can:manage-payments'])
                 ->middleware('throttle:10,1')
                 ->name('payment-providers.test');
 
-            // Immediate status polling — mutating because it forces an
+            // Immediate status polling â€” mutating because it forces an
             // env reload + cache flush, which is expensive.
             Route::post('/payment-providers/immediate-status', [PaymentProviderController::class, 'getImmediateProviderStatus'])
                 ->name('payment-providers.immediate-status');
@@ -4234,13 +4478,13 @@ Route::middleware(['auth', 'multi.auth.user:0', 'can:manage-payments'])
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ENHANCED: Payment Provider Configuration Routes (Developer)
+| âœ… ENHANCED: Payment Provider Configuration Routes (Developer)
 |--------------------------------------------------------------------------
 |
 | Access model (defence in depth):
-|   1. `auth`                     → user must be logged in
-|   2. `multi.auth.user:5`        → user must be a developer (type 5)
-|   3. `can:manage-developer-payments` → gate on the controller/route layer
+|   1. `auth`                     â†’ user must be logged in
+|   2. `multi.auth.user:5`        â†’ user must be a developer (type 5)
+|   3. `can:manage-developer-payments` â†’ gate on the controller/route layer
 |
 | All routes are POST-safe and named consistently with the admin controller
 | so the shared blade/JS works without branching.
@@ -4306,7 +4550,7 @@ Route::middleware(['auth', 'multi.auth.user:5', 'can:manage-developer-payments']
         // TESTING
         // =================================================================
         Route::post('/payment-providers/test-connection', [DeveloperPaymentProviderController::class, 'testConnection'])
-            ->middleware('throttle:10,1') // ← external API calls
+            ->middleware('throttle:10,1') // â† external API calls
             ->name('payment-providers.test-connection');
 
         // =================================================================
@@ -4333,7 +4577,7 @@ Route::middleware(['auth', 'multi.auth.user:5', 'can:manage-developer-payments']
 
 /*
 |--------------------------------------------------------------------------
-| ✅ UPDATED: System Settings Routes with Split Controllers
+| âœ… UPDATED: System Settings Routes with Split Controllers
 |--------------------------------------------------------------------------
 */
 
@@ -4356,7 +4600,7 @@ Route::middleware(['auth', 'multi.auth.user:0'])->prefix('admin')->name('admin.'
         ->name('system-settings.retry-env-update');
 
     // ========== SMS SENDER ID (ADMIN-EDITABLE ONLY) ==========
-    // Whitelisted endpoint — plain admins can update ONLY the sender ID.
+    // Whitelisted endpoint â€” plain admins can update ONLY the sender ID.
     // Developers and super-admins also hit this for the AJAX save path.
     Route::post('/system-settings/update-sender-id', [SystemSettingController::class, 'updateSenderId'])
         ->name('system-settings.update-sender-id');
@@ -4555,7 +4799,7 @@ Route::middleware(['auth', 'multi.auth.user:0'])->prefix('admin')->name('admin.'
 
 /*
 |--------------------------------------------------------------------------
-| Invoice Management Routes — COMPLETE WITH ALL ROUTES (PROPERLY ORDERED)
+| Invoice Management Routes â€” COMPLETE WITH ALL ROUTES (PROPERLY ORDERED)
 |--------------------------------------------------------------------------
 |
 | Notes on ordering:
@@ -4639,7 +4883,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
     Route::get('/invoices/settings', [InvoiceController::class, 'getSettings'])->name('invoices.settings');
 
     // ---------- BULK COVERAGE (static) ----------
-    // ✅ ADDED: both names point to the same action so old and new code work
+    // âœ… ADDED: both names point to the same action so old and new code work
     Route::get('/invoices/check-bulk-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('invoices.check-bulk-coverage');
     Route::get('/invoices/check-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('invoices.check-coverage');
 
@@ -4740,11 +4984,11 @@ Route::middleware(['auth', 'multi.auth.user:2'])->prefix('landlord')->name('land
     Route::get('/outstanding-summary', [InvoiceController::class, 'getLandlordOutstandingSummary'])->name('outstanding-summary');
     Route::post('/payment-summary', [InvoiceController::class, 'getPaymentSummary'])->name('payment-summary');
 
-    // ✅ FIXED: renamed to landlord-coverage-summary so it no longer collides
+    // âœ… FIXED: renamed to landlord-coverage-summary so it no longer collides
     // with the property-scoped 'coverage-summary' route below
     Route::get('/coverage-summary', [InvoiceController::class, 'getLandlordCoverageSummary'])->name('landlord-coverage-summary');
 
-    // ✅ ADDED: both names point to the same action so old + new code work
+    // âœ… ADDED: both names point to the same action so old + new code work
     Route::get('/check-bulk-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('check-bulk-coverage');
     Route::get('/check-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('check-coverage');
 
@@ -4790,7 +5034,7 @@ Route::middleware(['auth'])->group(function () {
     // Outstanding invoices API
     Route::get('/outstanding-invoices', [InvoiceController::class, 'getOutstandingInvoices'])->name('outstanding-invoices');
 
-    // Bulk coverage check — both names so admin + landlord + shared code work
+    // Bulk coverage check â€” both names so admin + landlord + shared code work
     Route::get('/check-bulk-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('check-bulk-coverage');
     Route::get('/check-coverage', [InvoiceController::class, 'checkBulkCoverage'])->name('check-coverage');
 });
@@ -4833,7 +5077,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])->prefix('tenant')->name('tenant
     Route::get('/invoices/{invoice}/export-pdf', [TenantInvoiceController::class, 'exportPdf'])->name('invoices.export-pdf');
     
     // =============================================
-    // ✅ TENANT PAYMENT ROUTES - WITH ALL CALLBACKS
+    // âœ… TENANT PAYMENT ROUTES - WITH ALL CALLBACKS
     // =============================================
     
     // Payment Form & Processing
@@ -4842,7 +5086,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])->prefix('tenant')->name('tenant
     Route::get('/payments/history', [TenantPaymentController::class, 'history'])->name('payments.history');
     
     // =============================================
-    // ✅ CRITICAL: PAYMENT CALLBACK ROUTES - FIXES THE ERROR
+    // âœ… CRITICAL: PAYMENT CALLBACK ROUTES - FIXES THE ERROR
     // =============================================
     
     // Generic callback route (supports all providers)
@@ -5089,7 +5333,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
         });
 
         // =============================================
-        // ✅ TENANT PAYMENT ROUTES - COMPLETE WITH ALL CALLBACKS
+        // âœ… TENANT PAYMENT ROUTES - COMPLETE WITH ALL CALLBACKS
         // =============================================
         
         Route::prefix('payments')->name('payments.')->group(function () {
@@ -5098,7 +5342,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
             Route::get('make', [TenantPaymentController::class, 'make'])->name('make');
             
             // =============================================
-            // ✅ CRITICAL: PAYMENT CALLBACK ROUTES - FIXES THE ERROR
+            // âœ… CRITICAL: PAYMENT CALLBACK ROUTES - FIXES THE ERROR
             // =============================================
             
             // Generic callback route (supports all providers)
@@ -5227,7 +5471,7 @@ Route::prefix('api')->name('api.')->group(function () {
     ->name('admin.tenant-invoices.update');
     
     // =============================================
-    // ✅ PAYMENT CALLBACK/WEBHOOK ROUTES - Public (for payment gateways)
+    // âœ… PAYMENT CALLBACK/WEBHOOK ROUTES - Public (for payment gateways)
     // =============================================
     
     Route::post('payments/mobile-money/callback', [TenantPaymentController::class, 'mobileMoneyCallback'])
@@ -5242,14 +5486,14 @@ Route::prefix('api')->name('api.')->group(function () {
         ->name('payments.verify');
     
     // =============================================
-    // ✅ PAYMENT STATUS CHECK ROUTE (AJAX)
+    // âœ… PAYMENT STATUS CHECK ROUTE (AJAX)
     // =============================================
     
     Route::get('payments/status/{transactionId}', [TenantPaymentController::class, 'checkPaymentStatus'])
         ->name('payments.status');
     
     // =============================================
-    // ✅ PAYMENT DETAILS ROUTE (AJAX)
+    // âœ… PAYMENT DETAILS ROUTE (AJAX)
     // =============================================
     
     Route::get('payments/details/{paymentId}', [TenantPaymentController::class, 'getPaymentDetails'])
@@ -5272,7 +5516,7 @@ Route::prefix('public')->name('public.')->group(function () {
         ->name('payment.callback');
     
     // =============================================
-    // ✅ PUBLIC PAYMENT WEBHOOK (for external services)
+    // âœ… PUBLIC PAYMENT WEBHOOK (for external services)
     // =============================================
     
     Route::post('payment-webhook/{gateway}', [TenantPaymentController::class, 'webhookHandler'])
@@ -5301,7 +5545,7 @@ Route::prefix('webhook')->name('webhook.')->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| ✅ UPDATED: Registration Plans Routes with Split Controllers
+| âœ… UPDATED: Registration Plans Routes with Split Controllers
 |--------------------------------------------------------------------------
 */
 
@@ -5313,12 +5557,12 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
     // Individual show route to handle trashed records
     Route::get('registration-plans/{id}', [RegistrationPlanController::class, 'show'])->name('registration-plans.show');
     
-    // ✅ ADDED: Agent Management Routes
+    // âœ… ADDED: Agent Management Routes
     Route::prefix('registration-plans/{id}')->name('registration-plans.')->group(function () {
         Route::post('add-agent', [RegistrationPlanAgentController::class, 'addAgent'])->name('add-agent');
         Route::delete('remove-agent/{agentId}', [RegistrationPlanAgentController::class, 'removeAgent'])->name('remove-agent');
         
-        // ✅ ADDED: Missing route for agents.remove (to fix the error)
+        // âœ… ADDED: Missing route for agents.remove (to fix the error)
         Route::delete('agents/{agentId}/remove', [RegistrationPlanAgentController::class, 'removeAgent'])
             ->name('agents.remove');
             
@@ -5328,7 +5572,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
         Route::get('assignments/{assignmentId}', [RegistrationPlanAgentController::class, 'getAssignmentDetails'])->name('assignment-details');
     });
     
-    // ✅ ADDED: Status Management Routes
+    // âœ… ADDED: Status Management Routes
     Route::prefix('registration-plans/{id}')->name('registration-plans.')->group(function () {
         Route::post('mark-in-progress', [RegistrationPlanStatusController::class, 'markInProgress'])->name('mark-in-progress');
         Route::post('mark-completed', [RegistrationPlanStatusController::class, 'markCompleted'])->name('mark-completed');
@@ -5336,7 +5580,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
         Route::post('reactivate', [RegistrationPlanStatusController::class, 'reactivate'])->name('reactivate');
     });
     
-    // ✅ ADDED: Notification routes (FIXED: Moved outside status management group)
+    // âœ… ADDED: Notification routes (FIXED: Moved outside status management group)
     Route::prefix('notifications')->name('notifications.')->group(function () {
         Route::post('/{notification}/read', [NotificationController::class, 'markAsRead'])
             ->name('markAsRead');
@@ -5346,7 +5590,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
             ->name('index');
     });
     
-    // ✅ ADDED: Trash Management Routes
+    // âœ… ADDED: Trash Management Routes
     Route::prefix('registration-plans')->name('registration-plans.')->group(function () {
         Route::get('trash/list', [RegistrationPlanTrashController::class, 'index'])->name('trash');
         Route::post('{id}/restore', [RegistrationPlanTrashController::class, 'restore'])->name('restore');
@@ -5354,7 +5598,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
         Route::delete('trash/empty', [RegistrationPlanTrashController::class, 'emptyTrash'])->name('empty-trash');
     });
     
-    // ✅ ADDED: Pattern Management Routes
+    // âœ… ADDED: Pattern Management Routes
     Route::prefix('registration-plans')->name('registration-plans.')->group(function () {
         Route::post('check-global-sequence', [RegistrationPlanPatternController::class, 'checkGlobalSequence'])->name('check-global-sequence');
         Route::post('validate-pattern', [RegistrationPlanPatternController::class, 'validatePattern'])->name('validate-pattern');
@@ -5362,19 +5606,19 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
         Route::get('{id}/next-pattern', [RegistrationPlanPatternController::class, 'getNextPatternForPlan'])->name('get-next-pattern-for-plan');
     });
     
-    // ✅ ADDED: Export and Bulk Actions Routes
+    // âœ… ADDED: Export and Bulk Actions Routes
     Route::prefix('registration-plans')->name('registration-plans.')->group(function () {
         Route::post('export', [RegistrationPlanExportController::class, 'export'])->name('export');
         Route::post('bulk-actions', [RegistrationPlanExportController::class, 'bulkActions'])->name('bulk-actions');
     });
     
-    // ✅ ADDED: Analytics and Statistics Routes
+    // âœ… ADDED: Analytics and Statistics Routes
     Route::prefix('registration-plans')->name('registration-plans.')->group(function () {
         Route::get('analytics', [RegistrationPlanAnalyticsController::class, 'analytics'])->name('analytics');
         Route::get('statistics/data', [RegistrationPlanAnalyticsController::class, 'statistics'])->name('statistics');
     });
     
-    // ✅ ADDED: Service Management Routes
+    // âœ… ADDED: Service Management Routes
     Route::prefix('registration-plans')->name('registration-plans.')->group(function () {
         Route::get('service-status', [RegistrationPlanServiceController::class, 'getServiceStatus'])->name('service-status');
         Route::post('test-channels', [RegistrationPlanServiceController::class, 'testChannels'])->name('test-channels');
@@ -5430,10 +5674,10 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
     Route::get('users/export/pdf', [ExportController::class, 'exportToPdf'])->name('users.export.pdf');
 
     // ==================== STANDARD USER RESOURCE ROUTES ====================
-    // ✅ MOVED: Specific routes BEFORE the resource route to prevent conflicts
+    // âœ… MOVED: Specific routes BEFORE the resource route to prevent conflicts
     Route::get('users/list-email', [\App\Http\Controllers\Admin\UserManagementController::class, 'getUserListForEmail'])->name('users.list-email');
     
-    // ✅ MOVED: Test route for debugging
+    // âœ… MOVED: Test route for debugging
     Route::get('users/test', [\App\Http\Controllers\Admin\UserManagementController::class, 'testRoute'])->name('users.test');
     
     Route::resource('users', UserManagementController::class)->except(['destroy']);
@@ -5572,6 +5816,12 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
     Route::post('users/property-owners/export', [UserManagementController::class, 'exportPropertyOwners'])->name('users.property-owners.export');
     Route::get('users/property-owners/export/csv', [UserManagementController::class, 'exportPropertyOwnersCsv'])->name('users.property-owners.export.csv');
     Route::get('users/property-owners/export/pdf', [UserManagementController::class, 'exportPropertyOwnersPdf'])->name('users.property-owners.export.pdf');
+
+    Route::post('/users/{id}/approve-personnel', [UserManagementController::class, 'approvePersonnel'])
+    ->name('users.approve-personnel');
+
+    Route::post('/users/{id}/reject-personnel', [UserManagementController::class, 'rejectPersonnel'])
+    ->name('users.reject-personnel');
 });
 
 // ==================== PUBLIC USER LOOKUP ROUTES ====================
@@ -5587,13 +5837,13 @@ Route::get('referral/{code}', [UserManagementController::class, 'trackReferral']
 */
 
 /* =========================================================================
-   PUBLIC — LANDLORD REGISTRATION COMPLETION  (NO AUTH)
+   PUBLIC â€” LANDLORD REGISTRATION COMPLETION  (NO AUTH)
    =========================================================================
 
    These routes are intentionally placed OUTSIDE every auth middleware
    group. A landlord who has been invited to register receives a link
    with a signed one-time token via email/SMS. The token IS the
-   credential — requiring them to log in first defeats the entire
+   credential â€” requiring them to log in first defeats the entire
    purpose of the invite flow (they don't have an account yet).
 
    The controller validates:
@@ -5628,13 +5878,13 @@ Route::prefix('landlord')->name('landlord.')->group(function () {
 
    Super admins (0) and admins (1) share this group. Family-link review
    endpoints live at the top so literal paths ("bulk-review") are
-   registered before any wildcard ("{link}") — otherwise Laravel would
+   registered before any wildcard ("{link}") â€” otherwise Laravel would
    bind the literal string as a model ID and 404.
 */
 Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
 
     /* -----------------------------------------------------------------
-       PROPERTY FAMILY LINK — ADMIN REVIEW QUEUE
+       PROPERTY FAMILY LINK â€” ADMIN REVIEW QUEUE
        -----------------------------------------------------------------
        Admins review, approve, reject, revoke, and bulk-process family
        link proposals submitted by landlords.
@@ -5645,7 +5895,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
         Route::get('/', [FamilyLinkApprovalController::class, 'index'])
             ->name('index');
 
-        // Bulk approve/reject — MUST be before {link}
+        // Bulk approve/reject â€” MUST be before {link}
         Route::post('/bulk-review', [FamilyLinkApprovalController::class, 'bulkReview'])
             ->name('bulk-review');
 
@@ -5729,9 +5979,13 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->group(function () {
    =========================================================================
 
    Landlords access properties they own PLUS properties they have been
-   linked to via an approved family link. The `family.link.active`
-   middleware enforces that boundary at the HTTP layer so revoked links
-   are bounced instantly — even mid-session.
+   linked to via an approved family link. Two middlewares enforce that
+   boundary at the HTTP layer:
+
+     family.link.active       → verifies the user has an approved
+                                family link (or owns the property)
+     family.link.permission:X → verifies the linked user's permission
+                                set includes `X` (owners always pass)
 
    Route ordering rule: literal paths before wildcards, always.
 */
@@ -5746,11 +6000,19 @@ Route::middleware(['auth', 'multi.auth.user:2'])->group(function () {
         Route::get('/', [PropertyFamilyLinkController::class, 'index'])
             ->name('index');
 
-        // Submit a new proposal
+        // Submit a new proposal (or resubmit a rejected one in place)
         Route::post('/', [PropertyFamilyLinkController::class, 'store'])
             ->name('store');
 
-        // Cancel a pending proposal
+        // Gate 1 — landlord confirms their own proposal
+        Route::post('/{link}/confirm', [PropertyFamilyLinkController::class, 'confirm'])
+            ->name('confirm');
+
+        // Edit permissions on an approved link
+        Route::put('/{link}/permissions', [PropertyFamilyLinkController::class, 'updatePermissions'])
+            ->name('permissions');
+
+        // Cancel a pending proposal (any pending stage)
         Route::delete('/{link}', [PropertyFamilyLinkController::class, 'cancel'])
             ->name('cancel');
 
@@ -5765,11 +6027,6 @@ Route::middleware(['auth', 'multi.auth.user:2'])->group(function () {
         [PropertyFamilyLinkController::class, 'forProperty']
     )->name('landlord.properties.family-links');
 
-    Route::post(
-    'landlord/family-links/{link}/confirm',
-    [PropertyFamilyLinkController::class, 'confirm']
-    )->name('landlord.family-links.confirm');
-
     /* -----------------------------------------------------------------
        PROPERTY VIEWING ROUTES (READ ONLY)
        ----------------------------------------------------------------- */
@@ -5779,31 +6036,66 @@ Route::middleware(['auth', 'multi.auth.user:2'])->group(function () {
     Route::get('landlord/properties', [PropertyController::class, 'myProperties'])
         ->name('landlord.properties.index');
 
+    /* =================================================================
+       FAMILY-LINK-GUARDED PROPERTY ROUTES
+       =================================================================
+
+       Every route here resolves `{property}`, so both middlewares can
+       check the bound model directly:
+
+         family.link.active       → is the current user the owner, or a
+                                    linked family member with an approved
+                                    link on THIS property?
+         family.link.permission:X → does the linked user's permissions
+                                    include X? (Owners always pass.)
+
+       Routes are grouped by the permission they require so the guard
+       list stays readable. Owners short-circuit the permission check
+       inside the middleware, so a landlord with `view`-only permissions
+       on a link they don't own is unaffected.
+       ----------------------------------------------------------------- */
+
     /*
     |------------------------------------------------------------------
-    | Family-link-guarded landlord property routes.
-    |
-    | Any route that resolves `{property}` and grants access to
-    | property-scoped data runs through `family.link.active` so that:
-    |   - Owners pass (ownership check inside the middleware)
-    |   - Linked members pass with the appropriate permission
-    |   - Revoked / rejected links get a 403 immediately
+    | View property — requires `view`
     |------------------------------------------------------------------
+    | Owners pass automatically. A linked family member with `view`
+    | (or anything that implies view) can open the property page.
     */
-    Route::middleware(['family.link.active'])->group(function () {
+    Route::middleware(['family.link.active', 'family.link.permission:view'])->group(function () {
 
-        // View a property
         Route::get('landlord/properties/{property}', [PropertyController::class, 'show'])
             ->name('landlord.properties.show');
+    });
 
-        // Update construction details for a specific property
+    /*
+    |------------------------------------------------------------------
+    | Edit property — requires `edit`
+    |------------------------------------------------------------------
+    | Construction details and coordinate updates.
+    */
+    Route::middleware(['family.link.active', 'family.link.permission:edit'])->group(function () {
+
         Route::put(
             'landlord/properties/{property}/construction',
             [PropertyController::class, 'updateConstructionWithProperty']
         )->name('properties.update-construction-with-property');
+    });
 
-        // Photo management
-        Route::prefix('landlord/properties')->name('landlord.properties.')->group(function () {
+    /*
+    |------------------------------------------------------------------
+    | Photo management — requires `upload_photos` for mutating routes
+    |                        and `view` for read-only routes
+    |------------------------------------------------------------------
+    | Upload / delete / set-primary are destructive → `upload_photos`.
+    | Gallery / download are read-only → `view`.
+    */
+    Route::prefix('landlord/properties')->name('landlord.properties.')->group(function () {
+
+        // ─────────────────────────────────────────────────────────
+        // Mutating (photos) — upload_photos
+        // ─────────────────────────────────────────────────────────
+        Route::middleware(['family.link.active', 'family.link.permission:upload_photos'])->group(function () {
 
             Route::post('{property}/upload-photos', [PropertyController::class, 'landlordUploadPhotos'])
                 ->name('upload-photos');
@@ -5813,6 +6105,12 @@ Route::middleware(['auth', 'multi.auth.user:2'])->group(function () {
 
             Route::put('{property}/set-primary-photo/{photo}', [PropertyController::class, 'landlordSetPrimaryPhoto'])
                 ->name('set-primary-photo');
+        });
+
+        // ─────────────────────────────────────────────────────────
+        // Read-only (photos) — view
+        // ─────────────────────────────────────────────────────────
+        Route::middleware(['family.link.active', 'family.link.permission:view'])->group(function () {
 
             Route::get('{property}/photo-gallery', [PropertyController::class, 'landlordGetPhotoGallery'])
                 ->name('photo-gallery');
@@ -5820,10 +6118,31 @@ Route::middleware(['auth', 'multi.auth.user:2'])->group(function () {
             Route::get('{property}/download-all-photos', [PropertyController::class, 'landlordDownloadAllPhotos'])
                 ->name('download-all-photos');
         });
+
+        // ─────────────────────────────────────────────────────────
+        // ✅ Digital address edit — OWNER ONLY
+        //
+        // Not part of the family-link groups on purpose. Editing the
+        // digital address rewrites the property's canonical location
+        // and re-geocodes its coordinates — it must never be granted
+        // to a linked family member, regardless of their photo
+        // permissions.
+        //
+        // Owner-only enforcement is done by:
+        //   1. `auth` middleware (from the surrounding group — assume it's applied)
+        //   2. `landlordUpdateDigitalAddress()` checks `landlord_id === auth()->id()`
+        //
+        // If you have a dedicated owner-only middleware (e.g. `property.owner`),
+        // add it here. Otherwise the controller's own guard is the gate.
+        // ─────────────────────────────────────────────────────────
+        Route::put('{property}/digital-address', [PropertyController::class, 'landlordUpdateDigitalAddress'])
+            ->name('update-digital-address');
+    });
     });
 
+
     /* -----------------------------------------------------------------
-       LANDLORD CONSTRUCTION DETAILS — PROPERTY ID IN BODY
+       LANDLORD CONSTRUCTION DETAILS â€” PROPERTY ID IN BODY
        -----------------------------------------------------------------
        This endpoint accepts `property_id` in the POST body rather than
        in the URL, so the family-link middleware can't resolve the model
@@ -5846,10 +6165,10 @@ Route::middleware(['auth', 'multi.auth.user:2'])->group(function () {
         Route::get('/sms-invitation-stats', [PropertyInvitationController::class, 'getSmsInvitationStats'])
             ->name('sms-invitation-stats');
     });
-});
+
 
     // =============================================
-    // ✅ PROPERTY TRASH MANAGEMENT ROUTES
+    // âœ… PROPERTY TRASH MANAGEMENT ROUTES
     // =============================================
     Route::get('properties/trash', [PropertyTrashController::class, 'index'])
         ->name('properties.trash.index');
@@ -5884,7 +6203,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1,2,4,5'])->group(function () {
     
     
     // =============================================
-    // ✅ NEW: Property Invitation Management Routes (Using PropertyInvitationController)
+    // âœ… NEW: Property Invitation Management Routes (Using PropertyInvitationController)
     // =============================================
     
     Route::prefix('properties/{property}')->name('properties.')->group(function () {
@@ -5900,7 +6219,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1,2,4,5'])->group(function () {
         Route::get('/sms-invitation-stats', [PropertyInvitationController::class, 'getSmsInvitationStats'])
             ->name('sms-invitation-stats');
         
-        // ✅ ADDED: Property invitation management
+        // âœ… ADDED: Property invitation management
         Route::get('/invitations', [LandlordInvitationController::class, 'getPropertyInvitations'])
             ->name('invitations');
         Route::post('/send-invitation', [LandlordInvitationController::class, 'store'])
@@ -5937,7 +6256,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])->prefix('landlord')->name('land
     Route::get('/properties/{propertyId}/pay', [PaymentController::class, 'showPaymentForm'])->name('payments.create');
     Route::post('/payments/process', [PaymentController::class, 'processPayment'])->name('payments.process');
     
-    // ✅ ADDED: Payment callback route (required for Paystack and other providers)
+    // âœ… ADDED: Payment callback route (required for Paystack and other providers)
     Route::get('/payments/callback/{provider}', [PaymentController::class, 'handleCallback'])->name('payments.callback');
     
     // Payment verification routes
@@ -5998,13 +6317,13 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])
         Route::post('/payments/{transactionId}/force-verify', [PaymentController::class, 'forceVerifyPayment'])
             ->name('payments.force-verify');
 
-        // ✅ Status update — registered as PUT to match the Blade form's @method('PUT')
+        // âœ… Status update â€” registered as PUT to match the Blade form's @method('PUT')
         Route::put('/payments/{id}/status', [PaymentController::class, 'updateStatus'])
             ->name('payments.updateStatus');
 
         // ---------- BROADEST ROUTE (must come LAST) ----------
 
-        // Show a single payment — matches /payments/{id} and nothing else
+        // Show a single payment â€” matches /payments/{id} and nothing else
         Route::get('/payments/{id}', [PaymentController::class, 'showAdmin'])
             ->name('payments.show');
 
@@ -6042,6 +6361,99 @@ Route::prefix('payments')->name('payments.')->group(function () {
     Route::post('/webhook/flutterwave', [PaymentController::class, 'handleFlutterwaveWebhook'])->name('webhook.flutterwave');
 });
 
+
+/*
+|--------------------------------------------------------------------------
+| Developer System Logs Routes
+|--------------------------------------------------------------------------
+*/
+
+Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('developer.')->group(function () {
+
+    /*
+    |--------------------------------------------------------------------------
+    | System Logs
+    |--------------------------------------------------------------------------
+    | Prefix: developer/system-logs
+    | Name:   developer.system-logs.*
+    */
+
+    Route::prefix('system-logs')->name('system-logs.')->group(function () {
+
+        /*
+        |----------------------------------------------------------------------
+        | Static / data routes FIRST — must come before /{id} catch-all,
+        | otherwise "data", "search", "bulk", "export", "cleanup" would be
+        | swallowed by the {id} parameter.
+        |----------------------------------------------------------------------
+        */
+
+        // JSON data fetchers
+        Route::get('data/logs',       [SystemLogController::class, 'getLogs'])      ->name('data.logs');
+        Route::get('data/statistics', [SystemLogController::class, 'getStatistics'])->name('data.statistics');
+        Route::get('data/analytics',  [SystemLogController::class, 'getAnalytics']) ->name('data.analytics');
+        Route::get('data/insights',   [SystemLogController::class, 'getInsights'])  ->name('data.insights');
+
+        // Search
+        Route::post('search', [SystemLogController::class, 'search'])->name('search');
+
+        // Bulk operations / export / cleanup (collection-level actions)
+        Route::post('bulk',    [SystemLogController::class, 'bulkUpdate'])->name('bulk');
+        Route::post('export',  [SystemLogController::class, 'export'])    ->name('export');
+        Route::post('cleanup', [SystemLogController::class, 'cleanup'])   ->name('cleanup');
+
+        /*
+        |----------------------------------------------------------------------
+        | Attachment download (referenced by SystemLogController::uploadAttachment
+        | via route('developer.system-logs.attachments.download', ...))
+        |----------------------------------------------------------------------
+        */
+        Route::get(
+            '{log}/attachments/{attachment}/download',
+            [SystemLogAttachmentController::class, 'download']
+        )->name('attachments.download');
+
+        /*
+        |----------------------------------------------------------------------
+        | Browse
+        |----------------------------------------------------------------------
+        */
+        Route::get('/',   [SystemLogController::class, 'index'])->name('index');
+        Route::get('{id}', [SystemLogController::class, 'show'])
+            ->whereNumber('id')
+            ->name('show');
+
+        /*
+        |----------------------------------------------------------------------
+        | Per-log mutations
+        |----------------------------------------------------------------------
+        */
+        Route::post('{id}/resolve',  [SystemLogController::class, 'markResolved'])->whereNumber('id')->name('resolve');
+        Route::post('{id}/assign',   [SystemLogController::class, 'assignLog'])   ->whereNumber('id')->name('assign');
+        Route::post('{id}/escalate', [SystemLogController::class, 'escalateLog']) ->whereNumber('id')->name('escalate');
+        Route::post('{id}/comment',  [SystemLogController::class, 'addComment'])  ->whereNumber('id')->name('comment');
+        Route::post('{id}/alert',    [SystemLogController::class, 'sendAlert'])   ->whereNumber('id')->name('alert');
+
+        Route::post('{id}/archive',   [SystemLogController::class, 'archiveLog'])  ->whereNumber('id')->name('archive');
+        Route::post('{id}/unarchive', [SystemLogController::class, 'unarchiveLog'])->whereNumber('id')->name('unarchive');
+
+        /*
+        |----------------------------------------------------------------------
+        | Attachments (upload + delete) — download is defined above
+        |----------------------------------------------------------------------
+        */
+        Route::post(
+            '{id}/attachments',
+            [SystemLogController::class, 'uploadAttachment']
+        )->whereNumber('id')->name('attachments.upload');
+
+        Route::delete(
+            '{log}/attachments/{attachment}',
+            [SystemLogController::class, 'deleteAttachment']
+        )->whereNumber('log')->whereNumber('attachment')->name('attachments.delete');
+    });
+});
+
 /*
 |--------------------------------------------------------------------------
 | Developer Tools Routes
@@ -6049,20 +6461,96 @@ Route::prefix('payments')->name('payments.')->group(function () {
 */
 
 Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('developer.')->group(function () {
-    // System diagnostics (Legacy routes - Redirect to new dashboard)
-    Route::redirect('/diagnostics', '/developer/dashboard')->name('diagnostics');
-    Route::redirect('/api-status', '/developer/health')->name('api-status');
+
+    /* ============================================================
+     | SYSTEM HEALTH MONITORING ROUTES
+     | (Nested so names resolve to developer.health.* â€” do not wrap
+     |  again with ->prefix('developer')->name('developer.'))
+     * ============================================================ */
+    Route::prefix('health')->name('health.')->group(function () {
+
+        /* ---------- VIEWS (blade pages) ---------- */
+
+        Route::get('/', [SystemHealthController::class, 'index'])->name('index');
+
+        // View pages â€” must come BEFORE any {id} wildcard route
+        Route::view('/diagnostics', 'developer.health.diagnostics')->name('diagnostics.index');
+        Route::view('/reports',     'developer.health.reports')->name('reports.index');
+        Route::view('/trends-page', 'developer.health.trends')->name('trends.page');
+
+        /* ---------- OVERALL HEALTH (JSON) ---------- */
+
+        Route::get('/overall',      [SystemHealthController::class, 'getOverallHealth'])->name('overall');
+        Route::get('/status',       [SystemHealthController::class, 'getHealthStatus'])->name('status');
+        Route::get('/metrics',      [SystemHealthController::class, 'getSystemMetrics'])->name('metrics');
+        Route::get('/live',         [SystemHealthController::class, 'getLiveMetrics'])->name('live');
+        Route::get('/live-metrics', [SystemHealthController::class, 'getLiveMetrics'])->name('live-metrics');
+
+        /* ---------- PER-COMPONENT HEALTH (JSON) ---------- */
+
+        Route::get('/server',      [SystemHealthController::class, 'getServerHealth'])->name('server');
+        Route::get('/database',    [SystemHealthController::class, 'getDatabaseHealth'])->name('database');
+        Route::get('/application', [SystemHealthController::class, 'getApplicationHealth'])->name('application');
+        Route::get('/services',    [SystemHealthController::class, 'getServiceHealth'])->name('services');
+        Route::get('/performance', [SystemHealthController::class, 'getPerformanceHealth'])->name('performance');
+        Route::get('/security',    [SystemHealthController::class, 'getSecurityHealth'])->name('security');
+
+        /* ---------- DIAGNOSTICS ---------- */
+
+        Route::post('/diagnostics',     [SystemHealthController::class, 'runDiagnostics'])->name('run-diagnostics');
+        Route::get('/diagnostics/{id}', [SystemHealthController::class, 'getDiagnosticResult'])->name('diagnostics.result');
+
+        /* ---------- HEALTH REPORTS ---------- */
+
+// HTML report view
+Route::get('/reports/{id}/view', function ($id) {
+    $path = 'health_reports/' . $id . '.json';
+
+    abort_unless(
+        preg_match('/^[A-Za-z0-9._\-]+$/', $id) && \Storage::disk('local')->exists($path),
+        404,
+        'Report not found'
+    );
+
+    $report = json_decode(\Storage::disk('local')->get($path), true);
+
+    return view('developer.health.report', ['report' => $report]);
+})->name('report.view');
+
+// JSON report (unchanged)
+Route::get('/reports/{id}',          [SystemHealthController::class, 'getHealthReport'])->name('report');
+Route::get('/reports/{id}/download', [SystemHealthController::class, 'downloadHealthReport'])->name('report.download');
+
+        /* ---------- HISTORY / TRENDS / ALERTS ---------- */
+
+        Route::get('/history', [SystemHealthController::class, 'getHealthHistory'])->name('history');
+        Route::get('/trends',  [SystemHealthController::class, 'getHealthTrends'])->name('trends');
+        Route::get('/alerts',  [SystemHealthController::class, 'getHealthAlerts'])->name('alerts');
+
+        /* ---------- CUSTOM CHECKS ---------- */
+
+        Route::post('/checks/custom', [SystemHealthController::class, 'runCustomCheck'])->name('checks.custom');
+        Route::get('/checks',         [SystemHealthController::class, 'listHealthChecks'])->name('checks.list');
+        Route::get('/checks/{check}', [SystemHealthController::class, 'getHealthCheck'])->name('checks.show');
+    });
+
+    /* ============================================================
+     | LEGACY REDIRECTS
+     | IMPORTANT: the /api-status redirect currently points to
+     | /developer/health which is now a REAL route (the dashboard).
+     | Point it somewhere else, or remove it, to avoid confusing
+     | users who expect an API status page. I've commented it out
+     | and replaced with an explicit "deprecated" marker.
+     * ============================================================ */
+
+    Route::redirect('/diagnostics',     '/developer/dashboard')->name('diagnostics');
+    // Route::redirect('/api-status',    '/developer/health')->name('api-status');  // â† REMOVED: conflicts with the health dashboard
     Route::redirect('/database-health', '/developer/database')->name('database-health');
-    
-    // Log management (Legacy routes - Redirect to new logs system)
-    Route::redirect('/logs', '/developer/logs')->name('logs');
-    Route::redirect('/logs/clear', '/developer/logs/clear/all')->name('logs.clear');
-    Route::redirect('/logs/download', '/developer/logs/export')->name('logs.download');
-    
-    // Performance monitoring (Legacy routes - Redirect to new performance system)
-    Route::redirect('/performance', '/developer/performance')->name('performance');
-    Route::redirect('/cache-status', '/developer/cache')->name('cache-status');
-    Route::redirect('/cache-clear', '/developer/cache/clear')->name('cache-clear');
+
+    // Performance monitoring (Legacy routes â€” Redirect to new performance system)
+    Route::redirect('/performance',    '/developer/performance')->name('performance');
+    Route::redirect('/cache-status',   '/developer/cache')->name('cache-status');
+    Route::redirect('/cache-clear',    '/developer/cache/clear')->name('cache-clear');
 });
 
 /*
@@ -6089,13 +6577,13 @@ Route::get('/test-middleware', function () {
             'super_admin_controller_loaded' => class_exists(\App\Http\Controllers\SuperAdminController::class),
             'user_invitation_controller_loaded' => class_exists(\App\Http\Controllers\UserInvitationController::class),
             'landlord_invitation_controller_loaded' => class_exists(\App\Http\Controllers\LandlordInvitationController::class),
-            // ✅ ADDED: New split controllers
+            // âœ… ADDED: New split controllers
             'email_config_controller_loaded' => class_exists(\App\Http\Controllers\Admin\EmailConfigController::class),
             'whatsapp_config_controller_loaded' => class_exists(\App\Http\Controllers\Admin\WhatsAppConfigController::class),
             'payment_config_controller_loaded' => class_exists(\App\Http\Controllers\Admin\PaymentConfigController::class),
             'logo_controller_loaded' => class_exists(\App\Http\Controllers\Admin\LogoController::class),
             'system_info_controller_loaded' => class_exists(\App\Http\Controllers\Admin\SystemInfoController::class),
-            // ✅ ADDED: New Registration Plan Split Controllers
+            // âœ… ADDED: New Registration Plan Split Controllers
             'registration_plan_agent_controller_loaded' => class_exists(\App\Http\Controllers\RegistrationPlanAgentController::class),
             'registration_plan_status_controller_loaded' => class_exists(\App\Http\Controllers\RegistrationPlanStatusController::class),
             'registration_plan_trash_controller_loaded' => class_exists(\App\Http\Controllers\RegistrationPlanTrashController::class),
@@ -6103,20 +6591,20 @@ Route::get('/test-middleware', function () {
             'registration_plan_export_controller_loaded' => class_exists(\App\Http\Controllers\RegistrationPlanExportController::class),
             'registration_plan_analytics_controller_loaded' => class_exists(\App\Http\Controllers\RegistrationPlanAnalyticsController::class),
             'registration_plan_service_controller_loaded' => class_exists(\App\Http\Controllers\RegistrationPlanServiceController::class),
-            // ✅ ADDED: Tenant Invitation Controller
+            // âœ… ADDED: Tenant Invitation Controller
             'tenant_invitation_controller_loaded' => class_exists(\App\Http\Controllers\TenantInvitationController::class),
-            // ✅ ADDED: Property Unit Controller
+            // âœ… ADDED: Property Unit Controller
             'property_unit_controller_loaded' => class_exists(\App\Http\Controllers\PropertyUnitController::class),
-            // ✅ ADDED: Developer Dashboard Controllers
+            // âœ… ADDED: Developer Dashboard Controllers
             'developer_dashboard_controller_loaded' => class_exists(\App\Http\Controllers\Developer\DashboardController::class),
             'developer_log_controller_loaded' => class_exists(\App\Http\Controllers\Developer\LogController::class),
             'developer_system_health_controller_loaded' => class_exists(\App\Http\Controllers\Developer\SystemHealthController::class),
             'developer_maintenance_controller_loaded' => class_exists(\App\Http\Controllers\Developer\MaintenanceController::class),
             'developer_emergency_mode_controller_loaded' => class_exists(\App\Http\Controllers\Developer\EmergencyModeController::class),
-            // ✅ ADDED: New Property Split Controllers
+            // âœ… ADDED: New Property Split Controllers
             'property_trash_controller_loaded' => class_exists(\App\Http\Controllers\PropertyTrashController::class),
             'property_invitation_controller_loaded' => class_exists(\App\Http\Controllers\PropertyInvitationController::class),
-            // ✅ UPDATED: Enhanced developer dashboard routes check
+            // âœ… UPDATED: Enhanced developer dashboard routes check
             'developer_dashboard_routes_available' => [
                 'index' => Route::has('developer.dashboard'),
                 'metrics' => Route::has('developer.dashboard.metrics'),
@@ -6269,7 +6757,7 @@ Route::get('/test-middleware', function () {
                 'settings_access' => Route::has('developer.emergency.settings.access'),
                 'settings_access_update' => Route::has('developer.emergency.settings.access.update')
             ],
-            // ✅ UPDATED: Enhanced payment provider routes check
+            // âœ… UPDATED: Enhanced payment provider routes check
             'payment_provider_routes_available' => [
                 'index' => Route::has('admin.payment-providers.index'),
                 'configure' => Route::has('admin.payment-providers.configure'),
@@ -6287,7 +6775,7 @@ Route::get('/test-middleware', function () {
                 'webhook_urls' => Route::has('admin.payment-providers.webhook-urls'),
                 'cleanup_backups' => Route::has('admin.payment-providers.cleanup-backups')
             ],
-                // ✅ UPDATED: Property Unit Routes Check with streamlined routes
+                // âœ… UPDATED: Property Unit Routes Check with streamlined routes
             'property_unit_routes_available' => [
                 // ========== ADMIN ROUTES (View Only Access) ==========
                 'admin_index' => Route::has('admin.property-units.index'),
@@ -6304,7 +6792,7 @@ Route::get('/test-middleware', function () {
                 'admin_api_statistics' => Route::has('admin.property-units.api.statistics'),
                 'admin_api_check_availability' => Route::has('admin.property-units.api.check-availability'),
 
-                // ❌ REMOVED: Admin can no longer create/edit/update/destroy landlord units
+                // âŒ REMOVED: Admin can no longer create/edit/update/destroy landlord units
                 'admin_create' => false, // Route removed
                 'admin_store' => false,  // Route removed
                 'admin_edit' => false,   // Route removed
@@ -6477,7 +6965,7 @@ Route::get('/test-middleware', function () {
                 'dashboard_data' => Route::has('super-admin.dashboard.data'),
                 'dashboard_refresh' => Route::has('super-admin.dashboard.refresh'),
                 'dashboard_export' => Route::has('super-admin.dashboard.export'),
-                // ✅ ADDED: Super Admin API endpoints
+                // âœ… ADDED: Super Admin API endpoints
                 'api_user_statistics' => Route::has('super-admin.api.user-statistics'),
                 'api_payment_statistics' => Route::has('super-admin.api.payment-statistics'),
                 'api_property_statistics' => Route::has('super-admin.api.property-statistics'),
@@ -6556,12 +7044,12 @@ Route::get('/test-middleware', function () {
                 'properties_properties_show' => Route::has('properties.properties.show'),
                 'properties_invitations' => Route::has('properties.invitations'),
                 'properties_send_invitation' => Route::has('properties.send-invitation'),
-                // ✅ ADDED: New Property Invitation Routes
+                // âœ… ADDED: New Property Invitation Routes
                 'resend_landlord_invitation' => Route::has('properties.resend-landlord-invitation'),
                 'test_sms_invitation' => Route::has('properties.test-sms-invitation'),
                 'sms_invitation_stats' => Route::has('properties.sms-invitation-stats')
             ],
-            // ✅ UPDATED: Registration Plan Routes with Split Controllers
+            // âœ… UPDATED: Registration Plan Routes with Split Controllers
             'registration_plans_routes_available' => [
                 'index' => Route::has('registration-plans.index'),
                 'create' => Route::has('registration-plans.create'),
@@ -6636,7 +7124,7 @@ Route::get('/test-middleware', function () {
                 'update_email_config' => Route::has('admin.system-settings.update-email-config'),
                 'test_smtp' => Route::has('admin.system-settings.test-smtp')
             ],
-            // ✅ ADDED: New split controller routes
+            // âœ… ADDED: New split controller routes
             'email_config_routes_available' => [
                 'status' => Route::has('admin.email-config.status'),
                 'test_sending' => Route::has('admin.email-config.test-sending'),
@@ -6700,7 +7188,7 @@ Route::get('/test-middleware', function () {
                 'admin_property_invitations' => Route::has('admin.landlord-invitations.property'),
                 'admin_statistics' => Route::has('admin.landlord-invitations.statistics')
             ],
-            // ✅ ADDED: Tenant Invitation Routes
+            // âœ… ADDED: Tenant Invitation Routes
             'tenant_invitation_routes_available' => [
                 'public_accept' => Route::has('tenant.invitation.accept'),
                 'public_process_acceptance' => Route::has('tenant.invitation.process-acceptance'),
@@ -6725,7 +7213,7 @@ Route::get('/test-middleware', function () {
                 'landlord_resend' => Route::has('landlord.tenant-invitations.resend'),
                 'landlord_cancel' => Route::has('landlord.tenant-invitations.cancel')
             ],
-            // ✅ ADDED: Photo management routes
+            // âœ… ADDED: Photo management routes
             'photo_routes_available' => [
                 'profile_photo_update' => Route::has('profile.photo.update'),
                 'profile_photo_remove' => Route::has('profile.photo.remove'),
@@ -6735,7 +7223,7 @@ Route::get('/test-middleware', function () {
                 'admin_user_photo_remove' => Route::has('admin.users.photo.remove'),
                 'admin_user_photo_check_access' => Route::has('admin.users.photo.check-access')
             ],
-            // ✅ ADDED: New property split controller routes
+            // âœ… ADDED: New property split controller routes
             'property_trash_routes_available' => [
                 'index' => Route::has('properties.trash.index'),
                 'restore' => Route::has('properties.trash.restore'),
@@ -6781,7 +7269,7 @@ Route::get('/api/payments/debug/mtn', function() {
 
 /*
 |--------------------------------------------------------------------------
-| ✅ FIXED: Security Schedule Management Routes (Admin Only - Middleware 0,1)
+| âœ… FIXED: Security Schedule Management Routes (Admin Only - Middleware 0,1)
 |--------------------------------------------------------------------------
 | CRITICAL FIX: Route order matters! Specific routes MUST come before 
 | parameterized routes to prevent '/trash' being caught as '{schedule}'
@@ -6797,7 +7285,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
     Route::prefix('security-schedules')->name('security-schedules.')->group(function () {
         
         // ------------------------------------------------------------------
-        // 🚨 SECTION 1: SPECIFIC STATIC ROUTES (NO PARAMETERS)
+        // ðŸš¨ SECTION 1: SPECIFIC STATIC ROUTES (NO PARAMETERS)
         // ------------------------------------------------------------------
         // IMPORTANT: These must come BEFORE any route with {parameters}
         // ------------------------------------------------------------------
@@ -6805,7 +7293,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         // === 1.1 DASHBOARD & LIST VIEWS ===
         Route::get('/', [AdminSecurityScheduleController::class, 'index'])->name('index');
         
-        // === 1.2 🗑️ TRASH MANAGEMENT - CRITICAL: MUST BE BEFORE WILDCARD ===
+        // === 1.2 ðŸ—‘ï¸ TRASH MANAGEMENT - CRITICAL: MUST BE BEFORE WILDCARD ===
         Route::get('/trash', [AdminSecurityScheduleController::class, 'trash'])->name('trash');
         Route::post('/bulk-restore', [AdminSecurityScheduleController::class, 'bulkRestore'])->name('bulk-restore');
         Route::post('/bulk-force-delete', [AdminSecurityScheduleController::class, 'bulkForceDelete'])->name('bulk-force-delete');
@@ -6887,7 +7375,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         Route::get('/rotation-eligible/{scheduleId}', [AdminSecurityScheduleController::class, 'isEligibleForRotation'])->name('rotation-eligible');
         
         // ------------------------------------------------------------------
-        // 🚨 SECTION 2: PARAMETERIZED ROUTES (WITH {PARAMETERS})
+        // ðŸš¨ SECTION 2: PARAMETERIZED ROUTES (WITH {PARAMETERS})
         // ------------------------------------------------------------------
         // IMPORTANT: These come AFTER all static routes to prevent conflicts
         // Order within this section also matters - more specific first
@@ -6910,7 +7398,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         Route::post('/{scheduleId}/break', [AdminSecurityScheduleController::class, 'manageBreak'])->name('manage-break');
         
         // ------------------------------------------------------------------
-        // 🚨 SECTION 3: BULK OPERATIONS & ACTIONS
+        // ðŸš¨ SECTION 3: BULK OPERATIONS & ACTIONS
         // ------------------------------------------------------------------
         // These don't conflict with parameterized routes
         // ------------------------------------------------------------------
@@ -6941,7 +7429,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         Route::post('/validate-constraints', [AdminSecurityScheduleController::class, 'validateConstraints'])->name('validate-constraints');
         
         // ------------------------------------------------------------------
-        // 🚨 SECTION 4: API-STYLE ROUTES FOR AJAX (Web accessible)
+        // ðŸš¨ SECTION 4: API-STYLE ROUTES FOR AJAX (Web accessible)
         // ------------------------------------------------------------------
         // These are web routes with /api prefix for JavaScript calls
         // They remain accessible and don't conflict with parameterized routes
@@ -7006,7 +7494,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
 
 /*
 |--------------------------------------------------------------------------
-| ✅ API ROUTES (Separate prefix for dedicated AJAX calls)
+| âœ… API ROUTES (Separate prefix for dedicated AJAX calls)
 |--------------------------------------------------------------------------
 | These routes are for dedicated API endpoints with /api/admin prefix
 | They complement the web routes and provide JSON responses
@@ -7102,161 +7590,346 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('api/admin')->name('a
     });
 });
 
+
 /*
 |--------------------------------------------------------------------------
-| ✅ SECURITY PERSONNEL SCHEDULE MANAGEMENT ROUTES (User Type 6)
+| SECURITY PERSONNEL SCHEDULE ROUTES (User Type 6)
+|--------------------------------------------------------------------------
+| Contains both:
+|   - Guard-facing routes  (mySchedules, checkin, breaks, handover, …)
+|   - Supervisor / Head-of-Security routes (index, create, store, update,
+|     bulk-assign, rotation, status, export, capacity, trash lifecycle,
+|     bulk restore / force delete, clear-old-trash, calendar, date-details,
+|     post capacity, QR stats, …)
+|
+| Access is gated by `multi.auth.user:6`. The supervisor methods
+| additionally call $this->authorizeManage() (403 unless the user is
+| a head-of-security / supervisor / admin).
+|
+| ROUTE ORDER RULES (critical):
+|   1. Static routes MUST come before any {parameter} route.
+|   2. More specific parameterized routes before the generic catch-all.
+|   3. The generic GET `/{schedule}` MUST be last.
+|
+| DASHBOARD OWNERSHIP:
+|   `GET /security/dashboard` is owned by SecurityDashboardController@index
+|   (name: security.dashboard) and is registered ELSEWHERE in web.php.
+|   It is intentionally NOT touched by this block.
+|
+|   The schedule supervisor landing lives at `GET /security/schedules`
+|   and is named `security.schedules.index` → SecurityScheduleController@index.
+|   That method dispatches by role:
+|     - head-of-security / supervisor / admin → admin-parity dashboard
+|     - ordinary guard (type 6, no supervisor capability) → mySchedules()
+|
+| NAME-COLLISION NOTE:
+|   `security.schedules.index` must be registered EXACTLY ONCE.
+|   Any other file that registers ->name('schedules.index') will
+|   silently override this block. Verified by:
+|     php artisan route:list --name=security.schedules.index
+|   which MUST show `@index` (not `@mySchedules`).
 |--------------------------------------------------------------------------
 */
 
-Route::middleware(['auth', 'multi.auth.user:6'])->prefix('security')->name('security.')->group(function () {
-    
-    // =============================================
-    // SECURITY SCHEDULE MANAGEMENT ROUTES
-    // =============================================
-    
-    Route::prefix('schedules')->name('schedules.')->group(function () {
-        
-        // ------------------------------------------------------------------
-        // 🚨 SECTION 1: SPECIFIC STATIC ROUTES (NO PARAMETERS)
-        // ------------------------------------------------------------------
-        // IMPORTANT: These must come BEFORE any route with {parameters}
-        // ------------------------------------------------------------------
-        
-        // === 1.1 MAIN DASHBOARD / LIST VIEW ===
-        Route::get('/', [SecurityScheduleController::class, 'mySchedules'])->name('index');
-        
-        // === 1.2 PREFERENCES MANAGEMENT ===
-        Route::get('/preferences', [SecurityScheduleController::class, 'preferences'])->name('preferences');
-        Route::post('/preferences', [SecurityScheduleController::class, 'updatePreferences'])->name('preferences.update');
-        
-        // === 1.3 AVAILABILITY MANAGEMENT ===
-        Route::get('/availability', [SecurityScheduleController::class, 'availability'])->name('availability');
-        Route::post('/availability', [SecurityScheduleController::class, 'updateAvailability'])->name('availability.update');
-        Route::get('/availability/data', [SecurityScheduleController::class, 'getAvailability'])->name('availability.data');
-        
-        // === 1.4 STATISTICS & REPORTS ===
-        Route::get('/statistics', [SecurityScheduleController::class, 'getStatistics'])->name('statistics');
-        Route::get('/upcoming-handovers', [SecurityScheduleController::class, 'upcomingHandovers'])->name('upcoming-handovers');
-        
-        // === 1.5 ROTATION GROUPS ===
-        Route::get('/rotation-groups', [SecurityScheduleController::class, 'rotationGroups'])->name('rotation-groups');
-        
-        // === 1.6 BREAK MANAGEMENT ===
-        Route::get('/breaks/list', [SecurityScheduleController::class, 'listBreaks'])->name('breaks.list');
-        
-        // ------------------------------------------------------------------
-        // 🚨 SECTION 2: PARAMETERIZED ROUTES (WITH {PARAMETERS})
-        // ------------------------------------------------------------------
-        // IMPORTANT: These come AFTER all static routes to prevent conflicts
-        // Order within this section also matters - more specific first
-        // ------------------------------------------------------------------
-        
-        // === 2.1 ROTATION GROUP DETAILS ===
-        Route::get('/rotation-group/{groupId}', [SecurityScheduleController::class, 'rotationGroup'])->name('rotation-group');
-        
-        // === 2.2 CHECK-IN/OUT PAGES ===
-        // These must come before other parameterized routes for proper matching
-        Route::get('/{schedule}/checkin', [SecurityScheduleController::class, 'showCheckin'])->name('checkin');
-        Route::get('/{schedule}/checkout', [SecurityScheduleController::class, 'showCheckout'])->name('checkout');
-        
-        // === 2.3 SMART CHECK-IN/OUT OPERATIONS (AJAX) ===
-        Route::post('/{schedule}/smart-checkin', [SecurityScheduleController::class, 'smartCheckin'])->name('smart-checkin');
-        Route::post('/{schedule}/smart-checkout', [SecurityScheduleController::class, 'smartCheckout'])->name('smart-checkout');
-        
-        // === 2.4 CALENDAR EXPORT ===
-        Route::get('/{schedule}/calendar', [SecurityScheduleController::class, 'generateCalendar'])->name('calendar');
-        
-        // === 2.5 BREAK OPERATIONS ===
-        Route::get('/{schedule}/breaks', [SecurityScheduleController::class, 'getBreaks'])->name('breaks');
-        Route::post('/{schedule}/start-break', [SecurityScheduleController::class, 'startBreak'])->name('break.start');
-        Route::post('/{schedule}/end-break', [SecurityScheduleController::class, 'endBreak'])->name('break.end');
-        
-        // === 2.6 HANDOVER MANAGEMENT ===
-        Route::get('/{schedule}/handover', [SecurityScheduleController::class, 'handoverDetails'])->name('handover');
-        Route::post('/{schedule}/handover/complete', [SecurityScheduleController::class, 'completeHandover'])->name('handover.complete');
-        
-        // === 2.7 CHECK-IN/OUT OPERATIONS (Legacy - Backward Compatibility) ===
-        Route::post('/{schedule}/checkin', [SecurityScheduleController::class, 'checkin'])->name('checkin.legacy');
-        Route::post('/{schedule}/checkout', [SecurityScheduleController::class, 'checkout'])->name('checkout.legacy');
-        
-        // === 2.8 SCHEDULE ACTIONS ===
-        Route::post('/{schedule}/swap', [SecurityScheduleController::class, 'requestSwap'])->name('swap');
-        Route::post('/{schedule}/acknowledge', [SecurityScheduleController::class, 'acknowledgeSchedule'])->name('acknowledge');
-        Route::post('/{schedule}/report-issue', [SecurityScheduleController::class, 'reportIssue'])->name('report-issue');
-        
-        // === 2.9 SCHEDULE DETAILS (MUST BE LAST - MOST GENERIC) ===
-        Route::get('/{schedule}', [SecurityScheduleController::class, 'showSchedule'])->name('show');
-    });
-    
-    // =============================================
-    // ✅ DIRECT ROUTES (Without /schedules prefix)
-    // =============================================
-    // These match the routes used in the Blade template
-    // that don't include 'schedules' in the path
-    
-    // Preferences (direct route)
-    Route::get('/preferences', [SecurityScheduleController::class, 'preferences'])->name('preferences');
-    Route::post('/preferences', [SecurityScheduleController::class, 'updatePreferences'])->name('preferences.update');
-    
-    // Availability (direct route)
-    Route::get('/availability', [SecurityScheduleController::class, 'availability'])->name('availability');
-    Route::post('/availability', [SecurityScheduleController::class, 'updateAvailability'])->name('availability.update');
-    
-    // Rotation Group (direct route)
-    Route::get('/rotation-group/{groupId}', [SecurityScheduleController::class, 'rotationGroup'])->name('rotation-group');
-    
-    // Schedule Show (direct route) - for backward compatibility
-    Route::get('/schedule/{schedule}', [SecurityScheduleController::class, 'showSchedule'])->name('schedule.show');
-    
-    // Check-in direct route (for backward compatibility)
-    Route::get('/schedule/{schedule}/checkin', [SecurityScheduleController::class, 'showCheckin'])->name('schedule.checkin');
-    Route::get('/schedule/{schedule}/checkout', [SecurityScheduleController::class, 'showCheckout'])->name('schedule.checkout');
-    
-    // =============================================
-    // ✅ API ROUTES FOR AJAX (Web accessible)
-    // =============================================
-    
+Route::middleware(['auth', 'multi.auth.user:6'])
+    ->prefix('security')
+    ->name('security.')
+    ->group(function () {
+
+    /*
+    |=====================================================================
+    | A. SUPERVISOR / HEAD-OF-SECURITY LANDING (role-dispatched)
+    |---------------------------------------------------------------------
+    | The ONLY route named `security.schedules.index`. Do not register
+    | another `schedules.index` anywhere.
+    |=====================================================================
+    */
+    Route::get('/schedules', [SecurityScheduleController::class, 'index'])
+        ->name('schedules.index');
+
+    /*
+    |=====================================================================
+    | B. GUARD-FACING: MY SCHEDULES & PREFERENCES
+    |=====================================================================
+    */
+    Route::get('/my-schedules', [SecurityScheduleController::class, 'mySchedules'])
+        ->name('schedules.my');
+
+    Route::get('/preferences',   [SecurityScheduleController::class, 'preferences'])
+        ->name('schedules.preferences');                     // TODO: missing method
+    Route::post('/preferences',  [SecurityScheduleController::class, 'updatePreferences'])
+        ->name('schedules.preferences.update');              // TODO: missing method
+    Route::get('/preferences/direct',  [SecurityScheduleController::class, 'preferences'])
+        ->name('preferences.direct');                        // TODO: missing method
+    Route::post('/preferences/direct', [SecurityScheduleController::class, 'updatePreferences'])
+        ->name('preferences.update.direct');                 // TODO: missing method
+
+    /*
+    |=====================================================================
+    | C. GUARD-FACING: AVAILABILITY
+    |=====================================================================
+    */
+    Route::get('/availability',       [SecurityScheduleController::class, 'availability'])
+        ->name('schedules.availability');                    // TODO: missing method
+    Route::post('/availability',      [SecurityScheduleController::class, 'updateAvailability'])
+        ->name('schedules.availability.update');             // TODO: missing method
+    Route::get('/availability/data',  [SecurityScheduleController::class, 'getAvailability'])
+        ->name('schedules.availability.data');               // TODO: missing method
+    Route::get('/availability/direct',  [SecurityScheduleController::class, 'availability'])
+        ->name('availability.direct');                       // TODO: missing method
+    Route::post('/availability/direct', [SecurityScheduleController::class, 'updateAvailability'])
+        ->name('availability.update.direct');                // TODO: missing method
+
+    /*
+    |=====================================================================
+    | D. GUARD-FACING: STATISTICS, HANDOVERS, ROTATION GROUPS, BREAKS LIST
+    |=====================================================================
+    */
+    Route::get('/statistics',         [SecurityScheduleController::class, 'getStatistics'])
+        ->name('schedules.statistics');                      // TODO: missing method
+    Route::get('/upcoming-handovers', [SecurityScheduleController::class, 'upcomingHandovers'])
+        ->name('schedules.upcoming-handovers');              // TODO: missing method
+    Route::get('/rotation-groups',    [SecurityScheduleController::class, 'rotationGroups'])
+        ->name('schedules.rotation-groups');                 // TODO: missing method
+    Route::get('/rotation-group/{groupId}',        [SecurityScheduleController::class, 'rotationGroup'])
+        ->name('schedules.rotation-group');                  // TODO: missing method
+    Route::get('/rotation-group/{groupId}/direct', [SecurityScheduleController::class, 'rotationGroup'])
+        ->name('rotation-group.direct');                     // TODO: missing method
+    Route::get('/breaks/list',        [SecurityScheduleController::class, 'listBreaks'])
+        ->name('schedules.breaks.list');                     // TODO: missing method
+
+    /*
+    |=====================================================================
+    | E. SUPERVISOR: STATIC ROUTES (MUST BE BEFORE {parameter} ROUTES)
+    |=====================================================================
+    */
+
+    // E.1 — Calendar + AJAX date detail
+    Route::get('/calendar',     [SecurityScheduleController::class, 'calendar'])
+        ->name('schedules.calendar');
+    Route::get('/date-details', [SecurityScheduleController::class, 'getDateDetails'])
+        ->name('schedules.date-details');
+
+    // E.2 — Bulk assignment + preview
+    Route::post('/bulk-assign',         [SecurityScheduleController::class, 'bulkAssign'])
+        ->name('schedules.bulk-assign');
+    Route::post('/bulk-assign/preview', [SecurityScheduleController::class, 'previewBulkAssign'])
+        ->name('schedules.bulk-assign-preview');
+
+    // E.3 — Rotation
+    Route::post('/rotate-shift-groups',              [SecurityScheduleController::class, 'rotateShiftGroups'])
+        ->name('schedules.rotate-shift-groups');
+    Route::get('/rotation-groups/{groupId}/history', [SecurityScheduleController::class, 'rotationGroupHistory'])
+        ->name('schedules.rotation-group.history');          // TODO: missing method
+
+    // E.4 — Export
+    Route::get('/export', [SecurityScheduleController::class, 'exportSchedules'])
+        ->name('schedules.export');
+
+    // E.5 — QR statistics, post capacity, AJAX helpers
+    Route::get('/qr-statistics',     [SecurityScheduleController::class, 'getQrCodeStatistics'])
+        ->name('schedules.qr-statistics');
+    Route::get('/post-capacity',     [SecurityScheduleController::class, 'getPostCapacity'])
+        ->name('schedules.post-capacity');
+    Route::get('/check-schedule',    [SecurityScheduleController::class, 'checkScheduleIncluded'])
+        ->name('schedules.check-schedule');                  // TODO: missing method
+    Route::get('/handover-info',     [SecurityScheduleController::class, 'getHandoverInfo'])
+        ->name('schedules.handover-info');                   // TODO: missing method
+    Route::get('/check-availability',[SecurityScheduleController::class, 'checkAvailability'])
+        ->name('schedules.check-availability');              // TODO: missing method
+
+    // E.6 — Create form (static, must precede /{schedule})
+    Route::get('/create', [SecurityScheduleController::class, 'create'])
+        ->name('schedules.create');
+
+    // E.7 — Trash bucket (static, must precede /{schedule})
+Route::get('/trash',                    [SecurityScheduleController::class, 'trash'])
+    ->name('schedules.trash');
+Route::get('/trash/statistics',         [SecurityScheduleController::class, 'getTrashStatistics'])
+    ->name('schedules.trash.statistics');                // TODO: missing method
+
+// Flat-name routes (used by trash.blade.php and the supervisor controller's helpers)
+Route::post('/bulk-restore',      [SecurityScheduleController::class, 'bulkRestore'])
+    ->name('schedules.bulk-restore');
+Route::post('/bulk-force-delete', [SecurityScheduleController::class, 'bulkForceDelete'])
+    ->name('schedules.bulk-force-delete');
+Route::delete('/clear-old-trash', [SecurityScheduleController::class, 'clearOldTrash'])
+    ->name('schedules.clear-old-trash');
+
+// Legacy / namespaced aliases — keep so older links don't break
+Route::post('/trash/bulk-restore',      [SecurityScheduleController::class, 'bulkRestore'])
+    ->name('schedules.trash.bulk-restore');
+Route::post('/trash/bulk-force-delete', [SecurityScheduleController::class, 'bulkForceDelete'])
+    ->name('schedules.trash.bulk-force-delete');
+Route::post('/trash/empty',             [SecurityScheduleController::class, 'emptyTrash'])
+    ->name('schedules.trash.empty');                     // TODO: missing method
+Route::post('/trash/clear-old',         [SecurityScheduleController::class, 'clearOldTrash'])
+    ->name('schedules.trash.clear-old');
+
+    // E.8 — Bulk update (must be before /{schedule})
+    Route::post('/bulk-update', [SecurityScheduleController::class, 'bulkUpdate'])
+        ->name('schedules.bulk-update');
+
+    // E.9 — Store (static POST /)
+    Route::post('/', [SecurityScheduleController::class, 'store'])
+        ->name('schedules.store');
+
+    /*
+    |=====================================================================
+    | F. PARAMETERIZED ROUTES — ORDER MATTERS
+    |---------------------------------------------------------------------
+    | More specific first. The generic GET `/{schedule}` is LAST.
+    |=====================================================================
+    */
+
+    // F.1 — Trash single-record actions
+    Route::post('/{id}/restore',        [SecurityScheduleController::class, 'restore'])
+        ->whereNumber('id')->name('schedules.restore');
+    Route::delete('/{id}/force-delete', [SecurityScheduleController::class, 'forceDelete'])
+        ->whereNumber('id')->name('schedules.force-delete');
+
+    // F.2 — Check-in / checkout *pages*
+    Route::get('/{schedule}/checkin',  [SecurityScheduleController::class, 'showCheckin'])
+        ->whereNumber('schedule')->name('schedules.checkin');
+    Route::get('/{schedule}/checkout', [SecurityScheduleController::class, 'showCheckout'])
+        ->whereNumber('schedule')->name('schedules.checkout'); // TODO: missing method
+
+    // F.3 — Smart check-in/out (AJAX)
+    Route::post('/{schedule}/smart-checkin',  [SecurityScheduleController::class, 'smartCheckin'])
+        ->whereNumber('schedule')->name('schedules.smart-checkin');
+    Route::post('/{schedule}/smart-checkout', [SecurityScheduleController::class, 'smartCheckout'])
+        ->whereNumber('schedule')->name('schedules.smart-checkout');
+
+    // F.4 — Calendar export (single)
+    Route::get('/{schedule}/calendar', [SecurityScheduleController::class, 'generateCalendar'])
+        ->whereNumber('schedule')->name('schedules.calendar.export'); // TODO: missing method
+
+    // F.5 — Breaks (single)
+    Route::get('/{schedule}/breaks',       [SecurityScheduleController::class, 'getBreaks'])
+        ->whereNumber('schedule')->name('schedules.breaks'); // TODO: missing method
+    Route::post('/{schedule}/start-break', [SecurityScheduleController::class, 'startBreak'])
+        ->whereNumber('schedule')->name('schedules.break.start');
+    Route::post('/{schedule}/end-break',   [SecurityScheduleController::class, 'endBreak'])
+        ->whereNumber('schedule')->name('schedules.break.end');
+
+    // F.6 — Handover (single)
+    Route::get('/{schedule}/handover',           [SecurityScheduleController::class, 'handoverDetails'])
+        ->whereNumber('schedule')->name('schedules.handover');          // TODO: missing method
+    Route::post('/{schedule}/handover/complete', [SecurityScheduleController::class, 'completeHandover'])
+        ->whereNumber('schedule')->name('schedules.handover.complete'); // TODO: missing method
+
+    // F.7 — Legacy check-in/out (POST)
+    Route::post('/{schedule}/checkin',  [SecurityScheduleController::class, 'checkin'])
+        ->whereNumber('schedule')->name('schedules.checkin.legacy');
+    Route::post('/{schedule}/checkout', [SecurityScheduleController::class, 'checkout'])
+        ->whereNumber('schedule')->name('schedules.checkout.legacy');
+
+    // F.8 — Schedule actions
+    Route::post('/{schedule}/swap',              [SecurityScheduleController::class, 'requestSwap'])
+        ->whereNumber('schedule')->name('schedules.swap');              // TODO: missing method
+    Route::post('/{schedule}/acknowledge',       [SecurityScheduleController::class, 'acknowledgeSchedule'])
+        ->whereNumber('schedule')->name('schedules.acknowledge');       // TODO: missing method
+    Route::post('/{schedule}/report-issue',      [SecurityScheduleController::class, 'reportIssue'])
+        ->whereNumber('schedule')->name('schedules.report-issue');      // TODO: missing method
+    Route::post('/{schedule}/send-notification', [SecurityScheduleController::class, 'sendNotification'])
+        ->whereNumber('schedule')->name('schedules.send-notification'); // TODO: missing method
+
+    // F.9 — Supervisor status endpoint
+    Route::patch('/{schedule}/status', [SecurityScheduleController::class, 'updateStatus'])
+        ->whereNumber('schedule')->name('schedules.update-status');
+    Route::post('/{schedule}/status',  [SecurityScheduleController::class, 'updateStatus'])
+        ->whereNumber('schedule')->name('schedules.update-status.post');
+
+    // F.10 — Toggle activation (supervisor)
+    Route::post('/{schedule}/toggle-activation', [SecurityScheduleController::class, 'toggleActivation'])
+        ->whereNumber('schedule')->name('schedules.toggle-activation'); // TODO: missing method
+
+    // F.11 — Direct show routes (backward-compat, distinct name)
+    Route::get('/schedule/{schedule}',          [SecurityScheduleController::class, 'showSchedule'])
+        ->whereNumber('schedule')->name('schedule.show');
+    Route::get('/schedule/{schedule}/checkin',  [SecurityScheduleController::class, 'showCheckin'])
+        ->whereNumber('schedule')->name('schedule.checkin');
+    Route::get('/schedule/{schedule}/checkout', [SecurityScheduleController::class, 'showCheckout'])
+        ->whereNumber('schedule')->name('schedule.checkout');          // TODO: missing method
+
+    // F.12 — Supervisor CRUD
+    Route::get('/{schedule}/edit', [SecurityScheduleController::class, 'edit'])
+        ->whereNumber('schedule')->name('schedules.edit');
+    Route::put('/{schedule}',      [SecurityScheduleController::class, 'update'])
+        ->whereNumber('schedule')->name('schedules.update');
+    Route::patch('/{schedule}',    [SecurityScheduleController::class, 'update'])
+        ->whereNumber('schedule')->name('schedules.update.patch');
+    Route::delete('/{schedule}',   [SecurityScheduleController::class, 'destroy'])
+        ->whereNumber('schedule')->name('schedules.destroy');
+
+    // F.13 — LAST: generic show catch-all
+    Route::get('/{schedule}', [SecurityScheduleController::class, 'show'])
+        ->whereNumber('schedule')->name('schedules.show');
+
+    /*
+    |=====================================================================
+    | G. JSON API — guard + supervisor AJAX
+    |=====================================================================
+    */
     Route::prefix('api')->name('api.')->group(function () {
-        
-        // === AVAILABILITY API ===
-        Route::get('/availability', [SecurityScheduleController::class, 'getAvailability'])->name('availability');
-        Route::post('/availability', [SecurityScheduleController::class, 'updateAvailability'])->name('availability.update');
-        
-        // === STATISTICS API ===        Route::get('/statistics', [SecurityScheduleController::class, 'getStatistics'])->name('statistics');
-        
-        // === HANDOVER API ===
-        Route::get('/handovers/upcoming', [SecurityScheduleController::class, 'upcomingHandovers'])->name('handovers.upcoming');
-        
-        // === CHECK-IN API ===
-        Route::post('/schedule/{schedule}/smart-checkin', [SecurityScheduleController::class, 'smartCheckin'])->name('smart-checkin');
-        Route::post('/schedule/{schedule}/smart-checkout', [SecurityScheduleController::class, 'smartCheckout'])->name('smart-checkout');
-        
-        // === BREAK API ===
-        Route::post('/schedule/{schedule}/break/start', [SecurityScheduleController::class, 'startBreak'])->name('break.start');
-        Route::post('/schedule/{schedule}/break/end', [SecurityScheduleController::class, 'endBreak'])->name('break.end');
-        Route::get('/schedule/{schedule}/breaks', [SecurityScheduleController::class, 'getBreaks'])->name('breaks');
-        
-        // === HANDOVER API ===
-        Route::get('/schedule/{schedule}/handover', [SecurityScheduleController::class, 'handoverDetails'])->name('handover');
-        Route::post('/schedule/{schedule}/handover/complete', [SecurityScheduleController::class, 'completeHandover'])->name('handover.complete');
-        
-        // === SCHEDULE API ===
-        Route::get('/schedule/{schedule}', [SecurityScheduleController::class, 'showSchedule'])->name('schedule.show');
-        
-        // === SWAP API ===
-        Route::post('/schedule/{schedule}/swap', [SecurityScheduleController::class, 'requestSwap'])->name('swap');
-        
-        // === REPORT API ===
-        Route::post('/schedule/{schedule}/report-issue', [SecurityScheduleController::class, 'reportIssue'])->name('report-issue');
-        
-        // === ACKNOWLEDGE API ===
-        Route::post('/schedule/{schedule}/acknowledge', [SecurityScheduleController::class, 'acknowledgeSchedule'])->name('acknowledge');
+
+        // G.1 — Guard-facing AJAX
+        Route::get('/availability',  [SecurityScheduleController::class, 'getAvailability'])
+            ->name('availability');                          // TODO: missing method
+        Route::post('/availability', [SecurityScheduleController::class, 'updateAvailability'])
+            ->name('availability.update');                   // TODO: missing method
+
+        Route::get('/statistics', [SecurityScheduleController::class, 'getStatistics'])
+            ->name('statistics');                            // TODO: missing method
+
+        Route::get('/handovers/upcoming', [SecurityScheduleController::class, 'upcomingHandovers'])
+            ->name('handovers.upcoming');                    // TODO: missing method
+
+        Route::post('/schedule/{schedule}/smart-checkin',  [SecurityScheduleController::class, 'smartCheckin'])
+            ->whereNumber('schedule')->name('smart-checkin');
+        Route::post('/schedule/{schedule}/smart-checkout', [SecurityScheduleController::class, 'smartCheckout'])
+            ->whereNumber('schedule')->name('smart-checkout');
+
+        Route::post('/schedule/{schedule}/break/start', [SecurityScheduleController::class, 'startBreak'])
+            ->whereNumber('schedule')->name('break.start');
+        Route::post('/schedule/{schedule}/break/end',   [SecurityScheduleController::class, 'endBreak'])
+            ->whereNumber('schedule')->name('break.end');
+        Route::get('/schedule/{schedule}/breaks',       [SecurityScheduleController::class, 'getBreaks'])
+            ->whereNumber('schedule')->name('breaks');       // TODO: missing method
+
+        Route::get('/schedule/{schedule}/handover',           [SecurityScheduleController::class, 'handoverDetails'])
+            ->whereNumber('schedule')->name('handover');     // TODO: missing method
+        Route::post('/schedule/{schedule}/handover/complete', [SecurityScheduleController::class, 'completeHandover'])
+            ->whereNumber('schedule')->name('handover.complete'); // TODO: missing method
+
+        Route::get('/schedule/{schedule}', [SecurityScheduleController::class, 'showSchedule'])
+            ->whereNumber('schedule')->name('schedule.show');
+
+        Route::post('/schedule/{schedule}/swap',         [SecurityScheduleController::class, 'requestSwap'])
+            ->whereNumber('schedule')->name('swap');         // TODO: missing method
+        Route::post('/schedule/{schedule}/report-issue', [SecurityScheduleController::class, 'reportIssue'])
+            ->whereNumber('schedule')->name('report-issue'); // TODO: missing method
+        Route::post('/schedule/{schedule}/acknowledge',  [SecurityScheduleController::class, 'acknowledgeSchedule'])
+            ->whereNumber('schedule')->name('acknowledge');  // TODO: missing method
+
+        // G.2 — Supervisor AJAX (mirrors admin)
+        Route::get('/post-capacity',         [SecurityScheduleController::class, 'getPostCapacity'])
+            ->name('post-capacity');
+        Route::get('/qr-statistics',         [SecurityScheduleController::class, 'getQrCodeStatistics'])
+            ->name('qr-statistics');
+        Route::post('/bulk-assign/preview',  [SecurityScheduleController::class, 'previewBulkAssign'])
+            ->name('bulk-assign-preview');
+        Route::post('/rotate-shift-groups',  [SecurityScheduleController::class, 'rotateShiftGroups'])
+            ->name('rotate-shift-groups');
+        Route::patch('/schedule/{schedule}/status', [SecurityScheduleController::class, 'updateStatus'])
+            ->whereNumber('schedule')->name('update-status');
     });
 });
 
+
 /*
 |--------------------------------------------------------------------------
-| ✅ DEBUG ROUTES (Optional - for development only)
+| âœ… DEBUG ROUTES (Optional - for development only)
 |--------------------------------------------------------------------------
 */
 
@@ -7291,7 +7964,7 @@ Route::middleware(['auth', 'multi.auth.user:6'])->get('/security/schedules/route
 })->name('security.schedules.routes-list');
 
 // =============================================
-// ✅ ROTATION GROUPS ROUTES (Admin Only)
+// âœ… ROTATION GROUPS ROUTES (Admin Only)
 // =============================================
 
 Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin.')->group(function () {
@@ -7335,7 +8008,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
 });
 
 // =============================================
-// ✅ ROTATION GROUPS API ROUTES (For AJAX calls)
+// âœ… ROTATION GROUPS API ROUTES (For AJAX calls)
 // =============================================
 
 Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('api/admin')->name('api.admin.')->group(function () {
@@ -7363,7 +8036,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('api/admin')->name('a
 });
 
 // =============================================
-// ✅ ROTATION HISTORY ROUTES (Admin Only)
+// âœ… ROTATION HISTORY ROUTES (Admin Only)
 // =============================================
 
 Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin.')->group(function () {
@@ -7385,9 +8058,38 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
     });
 });
 
+// =============================================
+// ✅ ROTATION HISTORY — SECURITY PERSONNEL (user 6)
+// =============================================
+Route::middleware(['auth', 'multi.auth.user:6'])
+    ->prefix('security')
+    ->name('security.')
+    ->group(function () {
+
+    Route::prefix('rotation-history')->name('rotation-history.')->group(function () {
+
+        // =============================================
+        // STATIC ROUTES — MUST COME FIRST
+        // =============================================
+        Route::get('/',           [SecurityRotationHistoryController::class, 'index'])->name('index');
+        Route::get('/statistics', [SecurityRotationHistoryController::class, 'getStatistics'])->name('statistics');
+        Route::get('/timeline',   [SecurityRotationHistoryController::class, 'getTimeline'])->name('timeline');
+        Route::get('/export',     [SecurityRotationHistoryController::class, 'export'])->name('export');
+        Route::get('/date-range', [SecurityRotationHistoryController::class, 'byDateRange'])->name('date-range');
+
+        // =============================================
+        // PARAMETERIZED ROUTES — MUST COME LAST
+        // =============================================
+        Route::get('/schedule/{scheduleId}', [SecurityRotationHistoryController::class, 'forSchedule'])->whereNumber('scheduleId')->name('schedule');
+        Route::get('/user/{userId}',         [SecurityRotationHistoryController::class, 'forUser'])->whereNumber('userId')->name('user');
+        Route::get('/group/{groupId}',       [SecurityRotationHistoryController::class, 'forGroup'])->whereNumber('groupId')->name('group');
+        Route::get('/post/{postId}',         [SecurityRotationHistoryController::class, 'forPost'])->whereNumber('postId')->name('post');
+    });
+});
+
 
     // =============================================
-    // ✅ ROTATION GROUPS API ROUTES
+    // âœ… ROTATION GROUPS API ROUTES
     // =============================================
     
     Route::prefix('rotation-groups')->name('rotation-groups.')->group(function () {
@@ -7410,6 +8112,53 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         Route::get('/{rotationGroup}/statistics', [RotationGroupController::class, 'getStatistics'])->name('statistics');
         Route::get('/needing-rotation', [RotationGroupController::class, 'getGroupsNeedingRotation'])->name('needing-rotation');
     });
+
+
+
+// =============================================
+// SECURITY PERSONNEL — ROTATION GROUPS (user 6)
+// =============================================
+Route::middleware(['auth', 'multi.auth.user:6'])
+    ->prefix('security')
+    ->name('security.')
+    ->group(function () {
+
+    Route::prefix('rotation-groups')->name('rotation-groups.')->group(function () {
+
+        // =============================================
+        // STATIC ROUTES (NO PARAMETERS) — MUST COME FIRST
+        // =============================================
+        Route::get('/',       [SecurityRotationGroupController::class, 'index'])->name('index');
+        Route::get('/create', [SecurityRotationGroupController::class, 'create'])->name('create');
+        Route::post('/',      [SecurityRotationGroupController::class, 'store'])->name('store');
+
+        // AJAX: groups needing rotation
+        Route::get('/needing-rotation', [SecurityRotationGroupController::class, 'getGroupsNeedingRotation'])->name('needing-rotation');
+
+        // =============================================
+        // PARAMETERIZED ROUTES ({rotationGroup}) — LAST
+        // =============================================
+        Route::prefix('{rotationGroup}')->whereNumber('rotationGroup')->group(function () {
+
+            // CRUD
+            Route::get('/',      [SecurityRotationGroupController::class, 'show'])->name('show');
+            Route::get('/edit',  [SecurityRotationGroupController::class, 'edit'])->name('edit');
+            Route::put('/',      [SecurityRotationGroupController::class, 'update'])->name('update');
+            Route::patch('/',    [SecurityRotationGroupController::class, 'update'])->name('update.patch');
+            Route::delete('/',   [SecurityRotationGroupController::class, 'destroy'])->name('destroy');
+
+            // Members
+            Route::post('/assign-members',              [SecurityRotationGroupController::class, 'assignMembers'])->name('assign-members');
+            Route::delete('/members/{member}',          [SecurityRotationGroupController::class, 'removeMember'])->whereNumber('member')->name('remove-member');
+
+            // Rotation operations
+            Route::post('/execute-rotation',            [SecurityRotationGroupController::class, 'executeRotation'])->name('execute-rotation');
+            Route::get('/preview-rotation',             [SecurityRotationGroupController::class, 'previewRotation'])->name('preview-rotation');
+            Route::get('/rotation-history',             [SecurityRotationGroupController::class, 'getRotationHistory'])->name('rotation-history');
+            Route::get('/statistics',                   [SecurityRotationGroupController::class, 'getStatistics'])->name('statistics');
+        });
+    });
+});
 
     
 
@@ -7569,158 +8318,272 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
     });
 });
 
+
 // ============================================
 // SECURITY PERSONNEL ROUTES (User Type: 6)
 // ============================================
 
-Route::middleware(['auth', 'multi.auth.user:6'])->prefix('security')->name('security.')->group(function () {
-    
-    Route::prefix('posts')->name('posts.')->group(function () {
-        
+Route::middleware(['auth', 'multi.auth.user:6'])
+    ->prefix('security')
+    ->name('security.')
+    ->group(function () {
+
         // ============================================
-        // 🔴 SPECIFIC ROUTES FIRST (No parameters)
+        // SECURITY POSTS
         // ============================================
-        
-        // List all posts (index)
-        Route::get('/', [SecurityPostController::class, 'index'])->name('index');
-        
-        // My current post
-        Route::get('/my-post', [SecurityPostController::class, 'myPost'])->name('my-post');
-        
-        // 📌 CREATE ROUTE - MUST BE BEFORE PARAMETERIZED ROUTES
-        Route::get('/create', [SecurityPostController::class, 'create'])->name('create');
-        Route::post('/', [SecurityPostController::class, 'store'])->name('store');
-        
-        // ============================================
-        // 🗑️ TRASH ROUTES - Area Supervisor only
-        // ============================================
-        
-        // View trashed posts
-        Route::get('/trash', [SecurityPostController::class, 'trash'])->name('trash');
-        
-        // Empty entire trash
-        Route::delete('/trash/empty', [SecurityPostController::class, 'emptyTrash'])->name('empty-trash');
-        
-        // ============================================
-        // 📊 API/JSON ROUTES - For AJAX requests
-        // ============================================
-        
-        // Get all posts with staffing status (JSON)
-        Route::get('/staffing/all', [SecurityPostController::class, 'getPostsWithStaffing'])->name('staffing.all');
-        
-        // Get posts by type (JSON)
-        Route::get('/by-type', [SecurityPostController::class, 'getPostsByType'])->name('by-type');
-        
-        // Get shift coverage report (JSON - Area Supervisor only)
-        Route::get('/coverage-report', [SecurityPostController::class, 'getCoverageReport'])->name('coverage-report');
-        
-        // QR scan (uses code, not ID)
-        Route::get('/scan/{code}', [SecurityPostController::class, 'getPostForScan'])->name('scan');
-        
-        // ============================================
-        // 🟡 PARAMETERIZED ROUTES (Last!)
-        // ============================================
-        
-        // View single post
-        Route::get('/{securityPost}', [SecurityPostController::class, 'show'])->name('show');
-        
-        // Schedule
-        Route::get('/{securityPost}/schedule', [SecurityPostController::class, 'getSchedule'])->name('schedule');
-        
-        // ✏️ EDIT ROUTES
-        Route::get('/{securityPost}/edit', [SecurityPostController::class, 'edit'])->name('edit');
-        Route::put('/{securityPost}', [SecurityPostController::class, 'update'])->name('update');
-        
-        // 🗑️ DELETE ROUTES
-        Route::delete('/{securityPost}', [SecurityPostController::class, 'destroy'])->name('destroy');
-        
-        // ♻️ RESTORE AND FORCE DELETE (use ID, not model binding)
-        Route::patch('/{id}/restore', [SecurityPostController::class, 'restore'])->name('restore');
-        Route::delete('/{id}/force-delete', [SecurityPostController::class, 'forceDelete'])->name('force-delete');
-        
-        // ============================================
-        // 📊 BULK OPERATIONS - Area Supervisor only
-        // ============================================
-        
-        // Bulk restore multiple posts
-        Route::post('/bulk-restore', [SecurityPostController::class, 'bulkRestore'])->name('bulk-restore');
-        
-        // Bulk permanently delete multiple posts
-        Route::delete('/bulk-permanent-delete', [SecurityPostController::class, 'bulkPermanentDelete'])->name('bulk-permanent-delete');
-        
-        // ============================================
-        // 📊 ADDITIONAL API ROUTES
-        // ============================================
-        
-        // Get staffing status for a post (JSON)
-        Route::get('/{securityPost}/staffing', [SecurityPostController::class, 'getStaffingStatus'])->name('staffing');
-        
-        // Get post availability for scheduling (JSON)
-        Route::get('/{securityPost}/availability', [SecurityPostController::class, 'getAvailability'])->name('availability');
+        Route::prefix('posts')->name('posts.')->group(function () {
+
+            // --------------------------------------------
+            // LITERAL / STATIC ROUTES FIRST
+            // --------------------------------------------
+
+            Route::get('/',         [SecurityPostController::class, 'index'])->name('index');
+            Route::get('/my-post',  [SecurityPostController::class, 'myPost'])->name('my-post');
+            Route::get('/create',   [SecurityPostController::class, 'create'])->name('create');
+            Route::post('/',        [SecurityPostController::class, 'store'])->name('store');
+            Route::get('/export',   [SecurityPostController::class, 'exportPosts'])->name('export');
+
+            // --------------------------------------------
+            // TRASH ROUTES
+            // --------------------------------------------
+
+            Route::get('/trash', [SecurityPostController::class, 'trash'])->name('trash');
+            Route::delete('/trash/empty', [SecurityPostController::class, 'emptyTrash'])->name('empty-trash');
+            Route::post('/trash/{id}/restore', [SecurityPostController::class, 'restore'])->name('trash.restore');
+            Route::delete('/trash/{id}/force-delete', [SecurityPostController::class, 'forceDelete'])->name('trash.force-delete');
+            Route::post('/bulk-restore', [SecurityPostController::class, 'bulkRestore'])->name('bulk-restore');
+            Route::post('/trash/bulk-restore', [SecurityPostController::class, 'bulkRestore'])->name('trash.bulk-restore');
+            Route::delete('/bulk-permanent-delete', [SecurityPostController::class, 'bulkPermanentDelete'])->name('bulk-permanent-delete');
+            Route::delete('/trash/bulk-permanent-delete', [SecurityPostController::class, 'bulkPermanentDelete'])->name('trash.bulk-permanent-delete');
+
+            // --------------------------------------------
+            // API / JSON ROUTES
+            // --------------------------------------------
+
+            Route::get('/staffing/all', [SecurityPostController::class, 'getPostsWithStaffing'])->name('staffing.all');
+            Route::get('/by-type', [SecurityPostController::class, 'getPostsByType'])->name('by-type');
+            Route::get('/coverage-report', [SecurityPostController::class, 'getCoverageReport'])->name('coverage-report');
+            Route::get('/lookup', [SecurityPostController::class, 'getPosts'])->name('lookup');
+
+            Route::get('/statistics/staffing', [SecurityPostController::class, 'getStaffingStatistics'])->name('statistics.staffing');
+            Route::get('/statistics/utilization', [SecurityPostController::class, 'getUtilizationStatistics'])->name('statistics.utilization');
+            Route::get('/statistics/trash', [SecurityPostController::class, 'getTrashStatistics'])->name('statistics.trash');
+            Route::get('/statistics/qr-codes', [SecurityPostController::class, 'getQrCodeStatistics'])->name('statistics.qr-codes');
+
+            Route::post('/api/bulk-update', [SecurityPostController::class, 'bulkUpdate'])->name('api.bulk-update');
+            Route::get('/api/qr-code-statistics', [SecurityPostController::class, 'getQrCodeStatistics'])->name('api.qr-code-statistics');
+
+            Route::get('/eligible-personnel', [SecurityPostController::class, 'getEligiblePersonnel'])->name('eligible-personnel');
+            Route::get('/scan/{code}', [SecurityPostController::class, 'getPostForScan'])->name('scan');
+
+            // --------------------------------------------
+            // PARAMETERIZED POST ROUTES (AFTER literals)
+            // --------------------------------------------
+
+            Route::get('/{securityPost}', [SecurityPostController::class, 'show'])->name('show');
+            Route::get('/{securityPost}/schedule', [SecurityPostController::class, 'getSchedule'])->name('schedule');
+            Route::get('/{securityPost}/edit', [SecurityPostController::class, 'edit'])->name('edit');
+            Route::put('/{securityPost}', [SecurityPostController::class, 'update'])->name('update');
+            Route::delete('/{securityPost}', [SecurityPostController::class, 'destroy'])->name('destroy');
+            Route::post('/{securityPost}/toggle-activation', [SecurityPostController::class, 'toggleActivation'])->name('toggle-activation');
+            Route::get('/{securityPost}/staffing', [SecurityPostController::class, 'getStaffingStatus'])->name('staffing');
+            Route::get('/{securityPost}/availability', [SecurityPostController::class, 'getAvailability'])->name('availability');
+            Route::get('/{securityPost}/details', [SecurityPostController::class, 'getPostDetails'])->name('details');
+
+            // --------------------------------------------
+            // QR CODE MANAGEMENT (per post)
+            // Uses the ALIASED supervisor controller:
+            //   SecurityPostQrCodeController
+            // --------------------------------------------
+            Route::prefix('{securityPost}/qr-codes')
+                ->name('qr-codes.')
+                ->scopeBindings()
+                ->group(function () {
+
+                    // -------- Static (highest priority) --------
+                    Route::get('/',       [SecurityPostQrCodeController::class, 'index'])->name('index');
+                    Route::get('/create', [SecurityPostQrCodeController::class, 'create'])->name('create');
+                    Route::post('/',      [SecurityPostQrCodeController::class, 'store'])->name('store');
+                    Route::get('/export', [SecurityPostQrCodeController::class, 'export'])->name('export');
+
+                    // -------- API (before {qrCode} catch-all) --------
+                    Route::prefix('api')->name('api.')->group(function () {
+                        Route::get('/statistics',       [SecurityPostQrCodeController::class, 'getStatistics'])->name('statistics');
+                        Route::get('/trash-statistics', [SecurityPostQrCodeController::class, 'getTrashStatistics'])->name('trash-statistics');
+                        Route::delete('/bulk-destroy',  [SecurityPostQrCodeController::class, 'bulkDestroy'])->name('bulk-destroy');
+                        Route::post('/validate',        [SecurityPostQrCodeController::class, 'validateQrCode'])->name('validate');
+                        Route::get('/{qrCode}/usage-history', [SecurityPostQrCodeController::class, 'getUsageHistory'])->name('usage-history');
+                    });
+
+                    // -------- Trash (before {qrCode} catch-all) --------
+
+                    // Short alias `security.posts.qr-codes.trash` —
+                    // blades reference this name; the nested group below
+                    // generates the longer `security.posts.qr-codes.trash.index`.
+                    Route::get('/trash', [SecurityPostQrCodeController::class, 'trash'])
+                        ->name('trash');
+
+                    Route::prefix('trash')->name('trash.')->group(function () {
+                        Route::get('/',                         [SecurityPostQrCodeController::class, 'trash'])->name('index');
+                        Route::post('/bulk-restore',            [SecurityPostQrCodeController::class, 'bulkRestore'])->name('bulk-restore');
+                        Route::delete('/empty',                 [SecurityPostQrCodeController::class, 'emptyTrash'])->name('empty');
+                        Route::post('/{qrCode}/restore',        [SecurityPostQrCodeController::class, 'restore'])->name('restore');
+                        Route::delete('/{qrCode}/force-delete', [SecurityPostQrCodeController::class, 'forceDelete'])->name('force-delete');
+                    });
+
+                    // -------- Dynamic {qrCode} routes (last) --------
+                    Route::get('/{qrCode}',                [SecurityPostQrCodeController::class, 'show'])->name('show');
+                    Route::get('/{qrCode}/download',       [SecurityPostQrCodeController::class, 'download'])->name('download');
+                    Route::post('/{qrCode}/update-status', [SecurityPostQrCodeController::class, 'updateStatus'])->name('update-status');
+                    Route::post('/{qrCode}/regenerate',    [SecurityPostQrCodeController::class, 'regenerate'])->name('regenerate');
+                    Route::delete('/{qrCode}',             [SecurityPostQrCodeController::class, 'destroy'])->name('destroy');
+                });
+        });
     });
-});
 
-
-
-// Security Shifts Routes
+// ============================================================
+// ADMIN — SECURITY SHIFTS (user types 0, 1)
+// ============================================================
 Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin.')->group(function () {
-    
+
     Route::prefix('security-shifts')->name('security-shifts.')->group(function () {
         // Main CRUD operations
-        Route::get('/', [SecurityShiftController::class, 'index'])->name('index');
-        Route::get('/create', [SecurityShiftController::class, 'create'])->name('create');
-        Route::post('/', [SecurityShiftController::class, 'store'])->name('store');
-        
+        Route::get('/',       [AdminSecurityShiftController::class, 'index'])->name('index');
+        Route::get('/create', [AdminSecurityShiftController::class, 'create'])->name('create');
+        Route::post('/',      [AdminSecurityShiftController::class, 'store'])->name('store');
+
         // **TRASH ROUTES MUST COME BEFORE PARAMETERIZED ROUTES**
         Route::prefix('trash')->name('trash.')->group(function () {
-            Route::get('/', [SecurityShiftController::class, 'trash'])->name('index');
-            Route::post('/restore/{id}', [SecurityShiftController::class, 'restore'])->name('restore');
-            Route::delete('/force-delete/{id}', [SecurityShiftController::class, 'forceDelete'])->name('force-delete');
+            Route::get('/',                     [AdminSecurityShiftController::class, 'trash'])->name('index');
+            Route::post('/restore/{id}',        [AdminSecurityShiftController::class, 'restore'])->name('restore');
+            Route::delete('/force-delete/{id}', [AdminSecurityShiftController::class, 'forceDelete'])->name('force-delete');
         });
-        
+
         // **BULK ACTION ROUTE**
-        Route::post('/bulk-action', [SecurityShiftController::class, 'bulkAction'])->name('bulk-action');
-        
+        Route::post('/bulk-action', [AdminSecurityShiftController::class, 'bulkAction'])->name('bulk-action');
+
         // **BULK OPERATIONS GROUP**
         Route::prefix('bulk')->name('bulk.')->group(function () {
-            Route::post('/action', [SecurityShiftController::class, 'bulkAction'])->name('action');
-            Route::post('/restore', [SecurityShiftController::class, 'bulkRestore'])->name('restore');
-            Route::post('/force-delete', [SecurityShiftController::class, 'bulkForceDelete'])->name('force-delete');
+            Route::post('/action',       [AdminSecurityShiftController::class, 'bulkAction'])->name('action');
+            Route::post('/restore',      [AdminSecurityShiftController::class, 'bulkRestore'])->name('restore');
+            Route::post('/force-delete', [AdminSecurityShiftController::class, 'bulkForceDelete'])->name('force-delete');
         });
-        
+
         // **INDIVIDUAL SHIFT ROUTES - COMES LAST**
         Route::prefix('{securityShift}')->group(function () {
-            Route::get('/', [SecurityShiftController::class, 'show'])->name('show');
-            Route::get('/edit', [SecurityShiftController::class, 'edit'])->name('edit');
-            Route::put('/', [SecurityShiftController::class, 'update'])->name('update');
-            Route::delete('/', [SecurityShiftController::class, 'destroy'])->name('destroy');
-            Route::post('/toggle-status', [SecurityShiftController::class, 'toggleStatus'])->name('toggle-status');
+            Route::get('/',               [AdminSecurityShiftController::class, 'show'])->name('show');
+            Route::get('/edit',           [AdminSecurityShiftController::class, 'edit'])->name('edit');
+            Route::put('/',               [AdminSecurityShiftController::class, 'update'])->name('update');
+            Route::delete('/',            [AdminSecurityShiftController::class, 'destroy'])->name('destroy');
+            Route::post('/toggle-status', [AdminSecurityShiftController::class, 'toggleStatus'])->name('toggle-status');
         });
-        
+
         // Schedule & planning group
         Route::prefix('schedule')->name('schedule.')->group(function () {
-            Route::get('/for-schedule', [SecurityShiftController::class, 'getShiftsForSchedule'])->name('shifts');
-            Route::get('/recommended', [SecurityShiftController::class, 'getRecommendedShifts'])->name('recommended');
-            Route::post('/process-rotation', [SecurityShiftController::class, 'processRotation'])->name('process-rotation');
-            Route::get('/calendar', [SecurityShiftController::class, 'shiftCalendar'])->name('calendar');
+            Route::get('/for-schedule',      [AdminSecurityShiftController::class, 'getShiftsForSchedule'])->name('shifts');
+            Route::get('/recommended',       [AdminSecurityShiftController::class, 'getRecommendedShifts'])->name('recommended');
+            Route::post('/process-rotation', [AdminSecurityShiftController::class, 'processRotation'])->name('process-rotation');
+            Route::get('/calendar',          [AdminSecurityShiftController::class, 'shiftCalendar'])->name('calendar');
         });
-        
+
         // Validation & checks
-        Route::post('/check-in-use', [SecurityShiftController::class, 'checkShiftsInUse'])->name('check-in-use');
-        
+        Route::post('/check-in-use', [AdminSecurityShiftController::class, 'checkShiftsInUse'])->name('check-in-use');
+
         // Export/Import/Print
         Route::prefix('reports')->name('reports.')->group(function () {
-            Route::get('/export', [SecurityShiftController::class, 'exportSelected'])->name('export');
-            Route::get('/print', [SecurityShiftController::class, 'print'])->name('print');
-            Route::get('/', [SecurityShiftController::class, 'report'])->name('index');
+            Route::get('/export', [AdminSecurityShiftController::class, 'exportSelected'])->name('export');
+            Route::get('/print',  [AdminSecurityShiftController::class, 'print'])->name('print');
+            Route::get('/',       [AdminSecurityShiftController::class, 'report'])->name('index');
         });
-        
+
         // Import (if implemented)
-        Route::post('/import', [SecurityShiftController::class, 'import'])->name('import');
+        Route::post('/import', [AdminSecurityShiftController::class, 'import'])->name('import');
     });
-    
 });
 
+
+
+// ============================================================
+// HEAD OF SECURITY — SECURITY SHIFTS (user type 6)
+// ------------------------------------------------------------
+// Supervisor-parity mirror of the admin security-shifts block.
+// All routes live under /security/security-shifts and are prefixed
+// with `security.security-shifts.`.
+//
+// Gate: `manage-security-schedules` — enforced inside the controller
+// via authorizeManage() on every method. This block only ensures the
+// user is an authenticated type-6 personnel.
+// ============================================================
+Route::middleware(['auth', 'multi.auth.user:6'])
+    ->prefix('security')
+    ->name('security.')
+    ->group(function () {
+
+    Route::prefix('security-shifts')->name('security-shifts.')->group(function () {
+
+        // ----------------------------------------------------------
+        // Main CRUD operations
+        // ----------------------------------------------------------
+        Route::get('/',       [SecuritySecurityShiftController::class, 'index'])->name('index');
+        Route::get('/create', [SecuritySecurityShiftController::class, 'create'])->name('create');
+        Route::post('/',      [SecuritySecurityShiftController::class, 'store'])->name('store');
+
+        // ----------------------------------------------------------
+        // STATIC routes — MUST come before the {securityShift}
+        // parameterized group.
+        // ----------------------------------------------------------
+
+        // ----- Trash lifecycle (soft-deleted shifts) -----
+        Route::prefix('trash')->name('trash.')->group(function () {
+            Route::get('/',              [SecuritySecurityShiftController::class, 'trash'])->name('index');
+            Route::post('/bulk',         [SecuritySecurityShiftController::class, 'bulkTrashAction'])->name('bulk');
+            Route::post('/{id}/restore', [SecuritySecurityShiftController::class, 'restore'])->whereNumber('id')->name('restore');
+            Route::delete('/{id}',       [SecuritySecurityShiftController::class, 'forceDelete'])->whereNumber('id')->name('force-delete');
+        });
+
+        // ----- Bulk actions on live shifts -----
+        // The index blade targets `security-shifts.bulk-action`.
+        Route::post('/bulk-action', [SecuritySecurityShiftController::class, 'bulkAction'])->name('bulk-action');
+
+        Route::prefix('bulk')->name('bulk.')->group(function () {
+            Route::post('/action', [SecuritySecurityShiftController::class, 'bulkAction'])->name('action');
+        });
+
+        // ----------------------------------------------------------
+        // Schedule & planning (static, must precede /{securityShift})
+        // ----------------------------------------------------------
+        Route::prefix('schedule')->name('schedule.')->group(function () {
+            // Read-only — GET.
+            Route::get('/for-schedule',      [SecuritySecurityShiftController::class, 'getShiftsForSchedule'])->name('shifts');
+            Route::get('/recommended',       [SecuritySecurityShiftController::class, 'getRecommendedShifts'])->name('recommended');
+            // Rotation mutates rotation_config — POST.
+            Route::post('/process-rotation', [SecuritySecurityShiftController::class, 'processRotation'])->name('process-rotation');
+            // Calendar is read-only — GET.
+            Route::get('/calendar',          [SecuritySecurityShiftController::class, 'shiftCalendar'])->name('calendar');
+        });
+
+        // Validation & checks
+        Route::post('/check-in-use', [SecuritySecurityShiftController::class, 'checkShiftsInUse'])->name('check-in-use');
+
+        // Reports / export
+        Route::prefix('reports')->name('reports.')->group(function () {
+            Route::get('/export',  [SecuritySecurityShiftController::class, 'exportSelected'])->name('export');
+            Route::post('/export', [SecuritySecurityShiftController::class, 'exportSelected'])->name('export.post');
+        });
+
+        // ----------------------------------------------------------
+        // PARAMETERIZED routes — MUST come LAST
+        // ----------------------------------------------------------
+        Route::prefix('{securityShift}')->whereNumber('securityShift')->group(function () {
+            Route::get('/',               [SecuritySecurityShiftController::class, 'show'])->name('show');
+            Route::get('/edit',           [SecuritySecurityShiftController::class, 'edit'])->name('edit');
+            Route::put('/',               [SecuritySecurityShiftController::class, 'update'])->name('update');
+            Route::patch('/',             [SecuritySecurityShiftController::class, 'update'])->name('update.patch');
+            Route::delete('/',            [SecuritySecurityShiftController::class, 'destroy'])->name('destroy');
+            Route::post('/toggle-status', [SecuritySecurityShiftController::class, 'toggleStatus'])->name('toggle-status');
+        });
+    });
+});
 
 // In routes/web.php or a test route
 Route::get('/test-global-sequence/{planId}', function($planId) {
@@ -7795,7 +8658,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('admin')->name('admin.'
         Route::get('/configuration-status', [WhatsAppProviderController::class, 'getConfigurationStatus'])
             ->name('configuration-status');
         
-        // ✅ ADD THIS MISSING ROUTE:
+        // âœ… ADD THIS MISSING ROUTE:
         Route::post('/verify-environment', [WhatsAppProviderController::class, 'verifyEnvironment'])
             ->name('verify-environment');
         
@@ -7823,7 +8686,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('admin')->name('admin.'
             ->name('test');
     });
     
-    // ✅ ADD WEBHOOK ROUTE TO FIX PREVIOUS ERROR
+    // âœ… ADD WEBHOOK ROUTE TO FIX PREVIOUS ERROR
     Route::prefix('webhook')->name('webhook.')->group(function () {
         Route::post('/whatsapp', function () {
             return response()->json(['status' => 'ok']);
@@ -7836,7 +8699,7 @@ Route::post('/webhook/whatsapp', function () {
     return response()->json(['status' => 'ok']);
 })->name('webhook.whatsapp');
 
-// ✅ ADD: Webhook verification route (for WhatsApp Business API)
+// âœ… ADD: Webhook verification route (for WhatsApp Business API)
 Route::get('/webhook/whatsapp/verify', function (Illuminate\Http\Request $request) {
     $mode = $request->query('hub.mode');
     $token = $request->query('hub.verify_token');
@@ -7853,7 +8716,7 @@ Route::get('/webhook/whatsapp/verify', function (Illuminate\Http\Request $reques
 
 /*
 |--------------------------------------------------------------------------
-| ✅ FIXED: Quick Action Routes for Notifications
+| âœ… FIXED: Quick Action Routes for Notifications
 |--------------------------------------------------------------------------
 */
 
@@ -7866,7 +8729,7 @@ Route::middleware(['auth', 'web'])->group(function () {
     Route::post('/quick-clear', [NotificationController::class, 'clearAll'])
         ->name('notifications.quick-clear');
     
-    // ✅ FIXED: Notification action handler with role-based redirect
+    // âœ… FIXED: Notification action handler with role-based redirect
     Route::get('/notification-action/{id}', function ($id) {
         $user = auth()->user();
         $notification = $user->notifications()->where('id', $id)->firstOrFail();
@@ -7883,7 +8746,7 @@ Route::middleware(['auth', 'web'])->group(function () {
             return redirect($actionUrl);
         }
         
-        // ✅ FIXED: Role-based fallback redirect
+        // âœ… FIXED: Role-based fallback redirect
         $routeName = match(true) {
             $user->isLandlord() => 'landlord.notifications.index',
             $user->isAdmin() || $user->isSuperAdmin() => 'admin.notifications.index',
@@ -7901,7 +8764,7 @@ Route::middleware(['auth', 'web'])->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| ✅ FIXED: Core Notification Routes (Must come BEFORE role-specific routes)
+| âœ… FIXED: Core Notification Routes (Must come BEFORE role-specific routes)
 |--------------------------------------------------------------------------
 */
 
@@ -7911,7 +8774,7 @@ Route::middleware(['auth', 'web'])->group(function () {
     Route::get('/notifications', [NotificationController::class, 'index'])
         ->name('notifications.index');
     
-    // ✅ ADDED: Single notification view route
+    // âœ… ADDED: Single notification view route
     Route::get('/notifications/{id}', [NotificationController::class, 'show'])
         ->name('notifications.show');
     
@@ -8171,7 +9034,7 @@ Route::middleware(['auth', 'web', 'multi.auth.user:6'])
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Command to List All Notification Routes (for debugging)
+| âœ… ADDED: Command to List All Notification Routes (for debugging)
 |--------------------------------------------------------------------------
 */
 Route::middleware(['auth', 'web'])->get('/debug-notification-routes', function () {
@@ -8192,7 +9055,7 @@ Route::middleware(['auth', 'web'])->get('/debug-notification-routes', function (
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Notification Broadcast Routes (for Real-time)
+| âœ… ADDED: Notification Broadcast Routes (for Real-time)
 |--------------------------------------------------------------------------
 */
 
@@ -8220,7 +9083,7 @@ Route::middleware(['auth', 'web'])->prefix('broadcasting')->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Notification Preferences Routes
+| âœ… ADDED: Notification Preferences Routes
 |--------------------------------------------------------------------------
 */
 
@@ -8238,7 +9101,7 @@ Route::middleware(['auth', 'web'])->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: System-wide Notification Settings (Admin Only)
+| âœ… ADDED: System-wide Notification Settings (Admin Only)
 |--------------------------------------------------------------------------
 */
 
@@ -8289,7 +9152,7 @@ Route::middleware(['auth', 'web', 'multi.auth.user:0,1'])->prefix('admin')->name
 
 /*
 |--------------------------------------------------------------------------
-| ✅ ADDED: Notification Webhook Endpoints (for external services)
+| âœ… ADDED: Notification Webhook Endpoints (for external services)
 |--------------------------------------------------------------------------
 */
 
@@ -8322,7 +9185,7 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/ownership-transfer/create', [LandlordTransferController::class, 'create'])
             ->name('ownership-transfers.create');
         
-        // ✅ NEW: Get transfer form HTML via AJAX (PARTIAL)
+        // âœ… NEW: Get transfer form HTML via AJAX (PARTIAL)
         Route::get('/ownership-transfer/form', [LandlordTransferController::class, 'getForm'])
             ->name('ownership-transfers.form');
         
@@ -9464,19 +10327,19 @@ Route::post('/scheduler/archive-transfers', function() {
 // ========== PUBLIC INVITATION ROUTES ==========
 // These routes are public and don't require authentication
 Route::middleware(['web'])->group(function () {
-    // ✅ FIXED: Invitation acceptance - accessible without authentication
+    // âœ… FIXED: Invitation acceptance - accessible without authentication
     Route::get('/invitation/accept/{token}', [App\Http\Controllers\InvitationController::class, 'accept'])
         ->name('invitation.accept');
     
-    // ✅ FIXED: Password setup after invitation acceptance (NO auth middleware)
+    // âœ… FIXED: Password setup after invitation acceptance (NO auth middleware)
     Route::get('/invitation/setup-password', [App\Http\Controllers\InvitationController::class, 'showSetupPassword'])
         ->name('invitation.setup-password.form');
     
-    // ✅ FIXED: Process password setup (NO auth middleware)
+    // âœ… FIXED: Process password setup (NO auth middleware)
     Route::post('/invitation/setup-password', [App\Http\Controllers\InvitationController::class, 'setupPassword'])
         ->name('invitation.setup-password');
     
-    // ✅ ADDED: Cancel invitation process
+    // âœ… ADDED: Cancel invitation process
     Route::get('/invitation/cancel', [App\Http\Controllers\InvitationController::class, 'cancelInvitationProcess'])
         ->name('invitation.cancel');
 });
@@ -9619,15 +10482,19 @@ Route::middleware(['auth', 'multi.auth.user:5', 'web'])->prefix('developer')->na
         Route::get('/{id}/activities/export', [DeveloperSuperAdminController::class, 'exportActivities'])
             ->name('activities.export');
         
-        // ========== PASSWORD MANAGEMENT ==========
+        // ========== PASSWORD MANAGEMENT ROUTES (FIXED) ==========
         
-        // Change password form
+        // Change password form (GET) — used by the "Change Password" links in views
         Route::get('/{id}/change-password', [DeveloperSuperAdminController::class, 'showChangePasswordForm'])
             ->name('change-password.form');
         
-        // Change password
-        Route::post('/{id}/change-password', [DeveloperSuperAdminController::class, 'changePassword'])
+        // Legacy alias — keeps any other view calling 'change-password' working
+        Route::get('/{id}/change-password', [DeveloperSuperAdminController::class, 'showChangePasswordForm'])
             ->name('change-password');
+        
+        // Change password (POST) — handles the form submission
+        Route::post('/{id}/change-password', [DeveloperSuperAdminController::class, 'changePassword'])
+            ->name('change-password.store');
         
         // ========== API/UTILITY ROUTES ==========
         
@@ -9941,7 +10808,7 @@ Route::prefix('billing')->name('billing.')->middleware(['multi.auth.user:5'])->g
         ->name('developer-dashboard');
 
     // =============================================
-    // ✅ INVOICE LIST ROUTES
+    // âœ… INVOICE LIST ROUTES
     // =============================================
     Route::get('/invoices', [DeveloperBillingController::class, 'billingInvoices'])
         ->name('invoices');
@@ -9950,7 +10817,7 @@ Route::prefix('billing')->name('billing.')->middleware(['multi.auth.user:5'])->g
         ->name('view-invoices');
 
     // =============================================
-    // AGREEMENTS — LIST & DETAIL
+    // AGREEMENTS â€” LIST & DETAIL
     // =============================================
     Route::get('/agreements', [DeveloperBillingController::class, 'agreementsList'])
         ->name('agreements-list');
@@ -10090,7 +10957,7 @@ Route::prefix('billing')->name('billing.')->middleware(['multi.auth.user:5'])->g
         ->name('payment-details');
 
     // =============================================
-    // ✅ SEND REMINDER ROUTES (FIXED)
+    // âœ… SEND REMINDER ROUTES (FIXED)
     // =============================================
     // The blade POSTs to /developer/billing/agreements/{id}/send-reminder
     // (plural "agreements"). Previously only a singular /agreement/...
@@ -10101,7 +10968,7 @@ Route::prefix('billing')->name('billing.')->middleware(['multi.auth.user:5'])->g
         ->whereNumber('agreementId')
         ->name('agreements.send-reminder');
 
-    // Backwards-compatible singular alias — some older views may still use it.
+    // Backwards-compatible singular alias â€” some older views may still use it.
     Route::post('/agreement/{agreementId}/send-reminder', [DeveloperBillingController::class, 'sendReminder'])
         ->whereNumber('agreementId')
         ->name('send-reminder');
@@ -10314,39 +11181,80 @@ Route::prefix('billing')->name('billing.')->middleware(['multi.auth.user:5'])->g
         });
     });
     
-    // =============================================
-    // BACKUP & RESTORE ROUTES (Developer only)
-    // =============================================
-    Route::prefix('backup')->name('backup.')->group(function () {
-        Route::middleware(['multi.auth.user:5'])->group(function () {
-            // Create manual backup
-            Route::post('/create', [DeveloperBackupController::class, 'createBackup'])
-                ->name('create');
-            
-            // List available backups (AJAX)
-            Route::get('/list', [DeveloperBackupController::class, 'listBackups'])
-                ->name('list');
-            
-            // Restore from backup
-            Route::post('/restore', [DeveloperBackupController::class, 'restoreBackup'])
-                ->name('restore');
-            
-            // Download backup file
-            Route::get('/download', [DeveloperBackupController::class, 'downloadBackup'])
-                ->name('download');
-            
-            // Delete backup file
-            Route::delete('/delete', [DeveloperBackupController::class, 'deleteBackup'])
-                ->name('delete');
-            
-            // Verify backup integrity
-            Route::get('/verify', [DeveloperBackupController::class, 'verifyBackup'])
-                ->name('verify');
-            
-            // Backup history page
-            Route::get('/history', [DeveloperBackupController::class, 'backupHistory'])
-                ->name('history');
-        });
+
+/* ============================================================
+ | BACKUP & RESTORE
+ | Mounted under: /developer/backup/...
+ | Named:         developer.backup.*
+ * ============================================================ */
+
+Route::prefix('backup')
+    ->name('backup.')
+    ->group(function () {
+
+        /* ---------- CREATE ---------- */
+
+        Route::post('/create', [DeveloperBackupController::class, 'createBackup'])
+            ->name('create');
+
+        /* ---------- LIST / READ ---------- */
+
+        Route::get('/list', [DeveloperBackupController::class, 'listBackups'])
+            ->name('list');
+
+        Route::get('/history', [DeveloperBackupController::class, 'backupHistory'])
+            ->name('history');
+
+        Route::get('/stats', [DeveloperBackupController::class, 'getBackupStats'])
+            ->name('stats');
+
+        Route::get('/job-status', [DeveloperBackupController::class, 'getBackupJobStatus'])
+            ->name('job-status');
+
+        Route::get('/verify', [DeveloperBackupController::class, 'verifyBackup'])
+            ->name('verify');
+
+        Route::get('/download', [DeveloperBackupController::class, 'downloadBackup'])
+            ->name('download');
+
+        /* ---------- SHOW (new) ---------- */
+
+        Route::get('/show/{filename}', [DeveloperBackupController::class, 'showBackup'])
+            ->where('filename', '[A-Za-z0-9_\-.]+')
+            ->name('show');
+
+        /* ---------- RESTORE ---------- */
+
+        // GET → renders the restore form (choose a backup, request code)
+        Route::get('/restore', [DeveloperBackupController::class, 'showRestore'])
+            ->name('restore.form');
+
+        // POST → performs the restore (requires verification code)
+        Route::post('/restore', [DeveloperBackupController::class, 'restoreBackup'])
+            ->name('restore');
+
+        // POST → emails a verification code to the current user
+        Route::post('/verification-code', [DeveloperBackupController::class, 'generateVerificationCode'])
+            ->name('verification-code');
+
+        /* ---------- DELETE ---------- */
+
+        Route::delete('/delete', [DeveloperBackupController::class, 'deleteBackup'])
+            ->name('delete');
+
+        /* ---------- CACHE ---------- */
+
+        Route::post('/cache/refresh', [DeveloperBackupController::class, 'refreshBackupCache'])
+            ->name('cache.refresh');
+
+        Route::post('/cache/clear', function () {
+            app(DeveloperBackupController::class)->clearBackupCache();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Backup cache cleared.',
+            ]);
+        })->name('cache.clear');
     });
     
     // =============================================
@@ -10382,6 +11290,23 @@ Route::prefix('billing')->name('billing.')->middleware(['multi.auth.user:5'])->g
         return view('developer.tools.dashboard');
     })->name('tools.dashboard');
 });
+
+
+
+/* ============================================================
+ | DATABASE MANAGEMENT
+ * ============================================================ */
+
+Route::prefix('database')
+    ->name('database.')
+    ->group(function () {
+
+        Route::get('/',                 [DeveloperDatabaseController::class, 'index'])->name('index');
+        Route::get('/stats',            [DeveloperDatabaseController::class, 'stats'])->name('stats');
+        Route::get('/tables',           [DeveloperDatabaseController::class, 'tables'])->name('tables');
+        Route::post('/tables/optimize', [DeveloperDatabaseController::class, 'optimizeTable'])->name('tables.optimize');
+        Route::get('/slow-queries',     [DeveloperDatabaseController::class, 'slowQueries'])->name('slow-queries');
+    });
 
 // =============================================
 // SUPER ADMIN BILLING ROUTES (for Super Admins only - Type 0)
@@ -10477,7 +11402,7 @@ Route::middleware(['auth', 'web'])->prefix('superadmin')->name('superadmin.')->g
             ->name('invoice-list');
         
         // =============================================
-        // ✅ ADDED: PAYMENT STATUS ROUTE (for AJAX polling)
+        // âœ… ADDED: PAYMENT STATUS ROUTE (for AJAX polling)
         // =============================================
         
         // Get payment status for a specific invoice (AJAX endpoint)
@@ -10520,7 +11445,7 @@ Route::middleware(['auth', 'web'])->prefix('superadmin')->name('superadmin.')->g
             ->name('record-payment-form');
         
         // =============================================
-        // ✅ PAYMENT CALLBACK & WEBHOOK ROUTES - ADD THIS
+        // âœ… PAYMENT CALLBACK & WEBHOOK ROUTES - ADD THIS
         // =============================================
         
         // Payment callback (for online payment redirects)
@@ -11282,7 +12207,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         Route::get('/export-selected', [AdminSupervisorAssignmentController::class, 'exportSelected'])->name('export-selected');
 
         // ============================================================
-        // ✅ FIXED: TRASH MANAGEMENT - MOVED BEFORE PARAMETERIZED ROUTES
+        // âœ… FIXED: TRASH MANAGEMENT - MOVED BEFORE PARAMETERIZED ROUTES
         // ============================================================
         Route::prefix('trash')->name('trash.')->group(function () {
             Route::get('/', [AdminSupervisorAssignmentController::class, 'trash'])->name('index');
@@ -11382,7 +12307,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         Route::get('/dashboard', [AdminSupervisorAssignmentController::class, 'adminDashboard'])->name('dashboard');
 
         // ============================================================
-        // ✅ FIXED: INDIVIDUAL ASSIGNMENT ROUTES - NOW AFTER ALL STATIC ROUTES
+        // âœ… FIXED: INDIVIDUAL ASSIGNMENT ROUTES - NOW AFTER ALL STATIC ROUTES
         // These must come LAST to avoid capturing static routes
         // ============================================================
         Route::prefix('{assignment}')->group(function () {
@@ -11399,68 +12324,63 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
     });
 });
 
+/*
+|--------------------------------------------------------------------------
+| Security — Supervisor (Head of Security) Routes
+|--------------------------------------------------------------------------
+|
+| The security-side SupervisorAssignmentController is read-only except
+| for one action: resignation. Everything else (appointment, edit,
+| extend, terminate, delete) lives on the admin controller.
+|
+| Routes exposed here:
+|   security.supervisor-assignments.index
+|   security.supervisor-assignments.show
+|   security.supervisor-assignments.resign
+|   security.supervisor-assignments.api.eligible-personnel
+|   security.supervisor-assignments.api.assignment-details
+|
+*/
 
+Route::middleware(['auth', 'multi.auth.user:6'])
+    ->prefix('security')
+    ->name('security.')
+    ->group(function () {
 
-// Security Supervisor Assignments Routes - Security Personnel Controller
-Route::middleware(['auth', 'multi.auth.user:6'])->prefix('security')->name('security.')->group(function () {
-    
-    Route::prefix('supervisor-assignments')->name('supervisor-assignments.')->group(function () {
-        
-        // ============================================================
-        // MAIN CRUD OPERATIONS
-        // ============================================================
-        Route::get('/', [SupervisorAssignmentController::class, 'index'])->name('index');
-        Route::get('/create', [SupervisorAssignmentController::class, 'create'])->name('create');
-        Route::post('/', [SupervisorAssignmentController::class, 'store'])->name('store');
-        
-        // ============================================================
-        // ✅ FIXED: EXPORT ROUTE - MUST COME BEFORE PARAMETERIZED ROUTES
-        // ============================================================
-        Route::get('/export', [SupervisorAssignmentController::class, 'export'])->name('export');
-        
-        // ============================================================
-        // BULK OPERATIONS (Limited - Activate/Deactivate only)
-        // ============================================================
-        Route::post('/bulk-action', [SupervisorAssignmentController::class, 'bulkAction'])->name('bulk-action');
+        Route::prefix('supervisor-assignments')
+            ->name('supervisor-assignments.')
+            ->group(function () {
 
-        // ============================================================
-        // API ENDPOINTS FOR AJAX - MUST COME BEFORE PARAMETERIZED ROUTES
-        // ============================================================
-        Route::prefix('api')->name('api.')->group(function () {
-            Route::get('/eligible-supervisors', [SupervisorAssignmentController::class, 'getEligibleSupervisors'])->name('eligible-supervisors');
-            Route::get('/post-supervisors/{postId}', [SupervisorAssignmentController::class, 'getPostSupervisors'])->name('post-supervisors');
-            Route::get('/assignment-details/{assignment}', [SupervisorAssignmentController::class, 'getAssignmentDetails'])->name('assignment-details');
-        });
+                // --------------------------------------------------------
+                // AJAX endpoints — declared FIRST so they never get eaten
+                // by the {assignment} wildcard below.
+                // --------------------------------------------------------
+                Route::prefix('api')->name('api.')->group(function () {
+                    Route::get('/eligible-personnel', [SupervisorAssignmentController::class, 'getEligiblePersonnel'])
+                        ->name('eligible-personnel');
 
-        // ============================================================
-        // SUPERVISOR DASHBOARD & STATS - MUST COME BEFORE PARAMETERIZED ROUTES
-        // ============================================================
-        Route::get('/dashboard', [SupervisorAssignmentController::class, 'supervisorDashboard'])->name('dashboard');
-        Route::get('/stats', [SupervisorAssignmentController::class, 'getStats'])->name('stats');
+                    Route::get('/assignment-details/{id}', [SupervisorAssignmentController::class, 'getAssignmentDetails'])
+                        ->name('assignment-details');
+                });
 
-        // ============================================================
-        // VALIDATION CHECKS - MUST COME BEFORE PARAMETERIZED ROUTES
-        // ============================================================
-        Route::prefix('validate')->name('validate.')->group(function () {
-            Route::post('/availability', [SupervisorAssignmentController::class, 'checkAvailability'])->name('availability');
-            Route::post('/eligibility', [SupervisorAssignmentController::class, 'checkEligibility'])->name('eligibility');
-        });
+                // --------------------------------------------------------
+                // List + detail
+                // --------------------------------------------------------
+                Route::get('/', [SupervisorAssignmentController::class, 'index'])->name('index');
 
-        // ============================================================
-        // ✅ FIXED: INDIVIDUAL ASSIGNMENT ROUTES - MUST COME LAST
-        // These must be AFTER all static routes to avoid conflicts
-        // ============================================================
-        Route::prefix('{assignment}')->group(function () {
-            Route::get('/', [SupervisorAssignmentController::class, 'show'])->name('show');
-            Route::get('/edit', [SupervisorAssignmentController::class, 'edit'])->name('edit');
-            Route::put('/', [SupervisorAssignmentController::class, 'update'])->name('update');
-            Route::delete('/', [SupervisorAssignmentController::class, 'destroy'])->name('destroy');
-            Route::post('/toggle-active', [SupervisorAssignmentController::class, 'toggleActive'])->name('toggle-active');
-            Route::post('/extend', [SupervisorAssignmentController::class, 'extend'])->name('extend');
-            Route::post('/terminate', [SupervisorAssignmentController::class, 'terminate'])->name('terminate');
-        });
+                // --------------------------------------------------------
+                // Parameterized routes — LAST so they don't collide with
+                // the 'api' prefix above.
+                // --------------------------------------------------------
+                Route::prefix('{assignment}')->group(function () {
+                    Route::get('/', [SupervisorAssignmentController::class, 'show'])->name('show');
+
+                    // The single write operation a head can perform:
+                    // resign from their own active appointment.
+                    Route::post('/resign', [SupervisorAssignmentController::class, 'resign'])->name('resign');
+                });
+            });
     });
-});
 
 
 /*
@@ -11490,7 +12410,7 @@ Route::prefix('security')
                 Route::get('/create', 'create')->name('create');
                 Route::post('/', 'store')->name('store');
                 
-                // ==================== ⚠️ TRASH ROUTES MUST COME BEFORE {userId} ROUTES ====================
+                // ==================== âš ï¸ TRASH ROUTES MUST COME BEFORE {userId} ROUTES ====================
                 
                 // Display trashed personnel (must be BEFORE any {userId} routes)
                 Route::get('/trash', 'trash')->name('trash');
@@ -11666,7 +12586,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         [AdminConstructionRegistrationController::class, 'index'])
         ->name('construction-registrations.index');
     
-    // ==================== ✅ IMPORTANT: SPECIFIC ROUTES MUST COME BEFORE WILDCARD ====================
+    // ==================== âœ… IMPORTANT: SPECIFIC ROUTES MUST COME BEFORE WILDCARD ====================
     
     // Dashboard/stats for construction registrations
     Route::get('/construction-registrations/stats/overview', 
@@ -11698,7 +12618,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         [AdminConstructionRegistrationController::class, 'bulkApprove'])
         ->name('construction-registrations.bulk-approve');
     
-    // ==================== ✅ DUPLICATE MANAGEMENT ROUTES ====================
+    // ==================== âœ… DUPLICATE MANAGEMENT ROUTES ====================
     
     // View duplicate registrations
     Route::get('/construction-registrations/duplicates', 
@@ -11725,7 +12645,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('admin')->name('admin
         [AdminConstructionRegistrationController::class, 'markDuplicateStatus'])
         ->name('construction-registrations.mark-duplicate-status');
     
-    // ==================== ✅ ARCHIVE MANAGEMENT ROUTES (MUST COME BEFORE WILDCARD) ====================
+    // ==================== âœ… ARCHIVE MANAGEMENT ROUTES (MUST COME BEFORE WILDCARD) ====================
     
     /**
      * View archived registrations (GET)
@@ -12060,12 +12980,12 @@ Route::post('/admin/construction-registrations/bulk-action',
     [LandlordConstructionRegistrationController::class, 'bulkAction']
 )->name('admin.construction-registrations.bulk-action');
 
-// ✅ FIXED: Public registration status API endpoint for frontend
+// âœ… FIXED: Public registration status API endpoint for frontend
 Route::get('/api/registration-status', 
     [LandlordConstructionRegistrationController::class, 'checkRegistrationStatus'])
     ->name('api.registration.status');
 
-// ✅ ADDED: Admin route for viewing duplicate registrations
+// âœ… ADDED: Admin route for viewing duplicate registrations
 Route::get('/admin/construction-registrations/duplicates', 
     [LandlordConstructionRegistrationController::class, 'viewDuplicates'])
     ->name('admin.construction-registrations.duplicates')
@@ -12563,7 +13483,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
     Route::get('/dashboard/errors', [DashboardController::class, 'getDashboardErrors'])
         ->name('dashboard.errors');
     
-    // ✅ ADDED: Get error trends for chart
+    // âœ… ADDED: Get error trends for chart
     Route::get('/dashboard/error-trends', [DashboardController::class, 'getErrorTrends'])
         ->name('dashboard.error-trends');
     
@@ -12650,7 +13570,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
     });
     
     // =============================================
-    // ✅ DATABASE MANAGEMENT ROUTES
+    // âœ… DATABASE MANAGEMENT ROUTES
     // =============================================
     
     Route::prefix('database')->name('database.')->group(function () {
@@ -12675,15 +13595,15 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
         Route::post('/backups/create', [DashboardController::class, 'createBackup'])
             ->name('backups.create');
         
-        // ✅ Delete Backup (API)
+        // âœ… Delete Backup (API)
         Route::delete('/backups/delete', [DashboardController::class, 'deleteBackup'])
             ->name('backups.delete');
         
-        // ✅ Download Backup (API)
+        // âœ… Download Backup (API)
         Route::get('/backups/download', [DashboardController::class, 'downloadBackup'])
             ->name('backups.download');
         
-        // ✅ Cleanup Old Backups (API)
+        // âœ… Cleanup Old Backups (API)
         Route::post('/backups/cleanup', [DashboardController::class, 'cleanupOldBackups'])
             ->name('backups.cleanup');
         
@@ -12693,7 +13613,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
     });
     
     // =============================================
-    // ✅ PERFORMANCE MONITORING ROUTES
+    // âœ… PERFORMANCE MONITORING ROUTES
     // =============================================
     
     Route::prefix('performance')->name('performance.')->group(function () {
@@ -12720,102 +13640,9 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
         })->name('export');
     });
     
-    // =============================================
-    // ✅ SYSTEM HEALTH ROUTES
-    // =============================================
-    
-    Route::prefix('health')->name('health.')->group(function () {
-        // Health Dashboard View
-        Route::get('/', [App\Http\Controllers\Developer\SystemHealthController::class, 'index'])
-            ->name('index');
-        
-        // Overall Health Status
-        Route::get('/overall', [App\Http\Controllers\Developer\SystemHealthController::class, 'getOverallHealth'])
-            ->name('overall');
-        
-        // Health Status
-        Route::get('/status', [App\Http\Controllers\Developer\SystemHealthController::class, 'getHealthStatus'])
-            ->name('status');
-        
-        // System Metrics
-        Route::get('/metrics', [App\Http\Controllers\Developer\SystemHealthController::class, 'getSystemMetrics'])
-            ->name('metrics');
-        
-        // Live Metrics
-        Route::get('/live', [App\Http\Controllers\Developer\SystemHealthController::class, 'getLiveMetrics'])
-            ->name('live');
-        
-        // Server Health
-        Route::get('/server', [App\Http\Controllers\Developer\SystemHealthController::class, 'getServerHealth'])
-            ->name('server');
-        
-        // Database Health
-        Route::get('/database', [App\Http\Controllers\Developer\SystemHealthController::class, 'getDatabaseHealth'])
-            ->name('database');
-        
-        // Application Health
-        Route::get('/application', [App\Http\Controllers\Developer\SystemHealthController::class, 'getApplicationHealth'])
-            ->name('application');
-        
-        // Service Health
-        Route::get('/services', [App\Http\Controllers\Developer\SystemHealthController::class, 'getServiceHealth'])
-            ->name('services');
-        
-        // Performance Health
-        Route::get('/performance', [App\Http\Controllers\Developer\SystemHealthController::class, 'getPerformanceHealth'])
-            ->name('performance');
-        
-        // Security Health
-        Route::get('/security', [App\Http\Controllers\Developer\SystemHealthController::class, 'getSecurityHealth'])
-            ->name('security');
-        
-        // Run Diagnostics
-        Route::post('/diagnostics', [App\Http\Controllers\Developer\SystemHealthController::class, 'runDiagnostics'])
-            ->name('run-diagnostics');
-        
-        // Get Diagnostic Result
-        Route::get('/diagnostics/{id}', [App\Http\Controllers\Developer\SystemHealthController::class, 'getDiagnosticResult'])
-            ->name('diagnostics.result');
-        
-        // Generate Health Report
-        Route::post('/reports/generate', [App\Http\Controllers\Developer\SystemHealthController::class, 'generateHealthReport'])
-            ->name('generate-report');
-        
-        // Get Health Report
-        Route::get('/reports/{id}', [App\Http\Controllers\Developer\SystemHealthController::class, 'getHealthReport'])
-            ->name('report');
-        
-        // Download Health Report
-        Route::get('/reports/{id}/download', [App\Http\Controllers\Developer\SystemHealthController::class, 'downloadHealthReport'])
-            ->name('report.download');
-        
-        // Health History
-        Route::get('/history', [App\Http\Controllers\Developer\SystemHealthController::class, 'getHealthHistory'])
-            ->name('history');
-        
-        // Health Trends
-        Route::get('/trends', [App\Http\Controllers\Developer\SystemHealthController::class, 'getHealthTrends'])
-            ->name('trends');
-        
-        // Health Alerts
-        Route::get('/alerts', [App\Http\Controllers\Developer\SystemHealthController::class, 'getHealthAlerts'])
-            ->name('alerts');
-        
-        // Custom Health Check
-        Route::post('/checks/custom', [App\Http\Controllers\Developer\SystemHealthController::class, 'runCustomCheck'])
-            ->name('checks.custom');
-        
-        // List Health Checks
-        Route::get('/checks', [App\Http\Controllers\Developer\SystemHealthController::class, 'listHealthChecks'])
-            ->name('checks.list');
-        
-        // Get Specific Health Check
-        Route::get('/checks/{check}', [App\Http\Controllers\Developer\SystemHealthController::class, 'getHealthCheck'])
-            ->name('checks.show');
-    });
     
     // =============================================
-    // ✅ CACHE MANAGEMENT ROUTES
+    // âœ… CACHE MANAGEMENT ROUTES
     // =============================================
     
     Route::prefix('cache')->name('cache.')->group(function () {
@@ -12838,7 +13665,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
     });
     
     // =============================================
-    // ✅ QUEUE MANAGEMENT ROUTES
+    // âœ… QUEUE MANAGEMENT ROUTES
     // =============================================
     
     Route::prefix('queue')->name('queue.')->group(function () {
@@ -12879,21 +13706,26 @@ Route::middleware(['auth', 'multi.auth.user:5'])->prefix('developer')->name('dev
 
 
     // =============================================
-    // ✅ SECURITY PERSONNEL DASHBOARD ROUTE
-    // =============================================
+// ✅ SECURITY PERSONNEL DASHBOARD ROUTE
+// =============================================
 
 Route::middleware(['auth', 'multi.auth.user:6'])->prefix('security')->name('security.')->group(function () {
     // Main dashboard
     Route::get('/dashboard', [SecurityDashboardController::class, 'index'])->name('dashboard');
-    
+
     // Dashboard API routes
     Route::get('/dashboard/data', [SecurityDashboardController::class, 'getDashboardData'])->name('dashboard.data');
     Route::post('/dashboard/refresh', [SecurityDashboardController::class, 'refreshDashboard'])->name('dashboard.refresh');
     Route::get('/dashboard/export', [SecurityDashboardController::class, 'exportDashboard'])->name('dashboard.export');
-    
+
     // Schedule management routes (as defined above)
+    // NOTE: `security.schedules.index` MUST dispatch to @index, which itself
+    // role-dispatches to mySchedules() for guards and the supervisor blade
+    // for head-of-security / supervisor / admin. Do NOT bind it to
+    // @mySchedules directly — that bypasses the dispatcher and forces
+    // head-of-security users onto the guard view.
     Route::prefix('schedules')->name('schedules.')->group(function () {
-        Route::get('/', [SecurityScheduleController::class, 'mySchedules'])->name('index');
+        Route::get('/', [SecurityScheduleController::class, 'index'])->name('index');
         Route::get('/preferences', [SecurityScheduleController::class, 'preferences'])->name('preferences');
         Route::post('/preferences', [SecurityScheduleController::class, 'updatePreferences'])->name('preferences.update');
         Route::get('/availability', [SecurityScheduleController::class, 'availability'])->name('availability');
@@ -12910,15 +13742,14 @@ Route::middleware(['auth', 'multi.auth.user:6'])->prefix('security')->name('secu
         Route::post('/{schedule}/acknowledge', [SecurityScheduleController::class, 'acknowledgeSchedule'])->name('acknowledge');
         Route::post('/{schedule}/report-issue', [SecurityScheduleController::class, 'reportIssue'])->name('report-issue');
     });
-    
+
     // Notification routes
     Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications.index');
     Route::get('/notifications/{id}', [NotificationController::class, 'show'])->name('notifications.show');
     Route::post('/notifications/{id}/read', [NotificationController::class, 'markAsRead'])->name('notifications.mark-as-read');
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllAsRead'])->name('notifications.read-all');
     Route::delete('/notifications/{id}', [NotificationController::class, 'destroy'])->name('notifications.destroy');
-    
-    });
+});
 
 
 // ============================================
@@ -13327,7 +14158,7 @@ Route::middleware(['auth', 'multi.auth.user:8'])->group(function () {
 Route::get('/contractor/workers', [ConstructionWorkerController::class, 'globalIndex'])
     ->name('contractor.workers.global');
 
-// ✅ Toggle site assignment - Place this BEFORE the nested group
+// âœ… Toggle site assignment - Place this BEFORE the nested group
 Route::post('/contractor/contracts/{contractId}/workers/{workerId}/toggle-site', 
     [ConstructionWorkerController::class, 'toggleSiteAssignment'])
     ->name('contractor.workers.toggle-site');
@@ -13434,7 +14265,7 @@ Route::get('/api/badge-info/{code}', [BadgeVerificationController::class, 'getBa
 Route::middleware(['auth'])->prefix('email-accounts')->group(function () {
 
     // ========================================== //
-    // 📧 STATIC ROUTES - MUST COME FIRST         //
+    // ðŸ“§ STATIC ROUTES - MUST COME FIRST         //
     // ========================================== //
     Route::get('/inbox', [UserEmailAccountController::class, 'inbox'])
         ->name('email-accounts.inbox');
@@ -13446,7 +14277,7 @@ Route::middleware(['auth'])->prefix('email-accounts')->group(function () {
         ->name('email-accounts.create');
 
     // ========================================== //
-    // 📨 POST ROUTES (No Parameters)             //
+    // ðŸ“¨ POST ROUTES (No Parameters)             //
     // ========================================== //
     Route::post('/send', [UserEmailAccountController::class, 'sendEmail'])
         ->name('email-accounts.send');
@@ -13454,7 +14285,7 @@ Route::middleware(['auth'])->prefix('email-accounts')->group(function () {
         ->name('email-accounts.verify');
 
     // ========================================== //
-    // 📋 INDEX & STORE (No Parameters)           //
+    // ðŸ“‹ INDEX & STORE (No Parameters)           //
     // ========================================== //
     Route::get('/', [UserEmailAccountController::class, 'index'])
         ->name('email-accounts.index');
@@ -13462,32 +14293,32 @@ Route::middleware(['auth'])->prefix('email-accounts')->group(function () {
         ->name('email-accounts.store');
 
     // ========================================== //
-    // 🔧 PARAMETERIZED ROUTES                    //
-    // ⚠️ ORDER MATTERS: DELETE BEFORE GET        //
+    // ðŸ”§ PARAMETERIZED ROUTES                    //
+    // âš ï¸ ORDER MATTERS: DELETE BEFORE GET        //
     // ========================================== //
 
-    // ✅ DELETE - Must come before GET /{emailAccount}
+    // âœ… DELETE - Must come before GET /{emailAccount}
     Route::delete('/{emailAccount}', [UserEmailAccountController::class, 'destroy'])
         ->name('email-accounts.destroy')
         ->where('emailAccount', '[0-9]+');
 
-    // ✅ GET Show - Comes after DELETE
+    // âœ… GET Show - Comes after DELETE
     Route::get('/{emailAccount}', [UserEmailAccountController::class, 'show'])
         ->name('email-accounts.show')
         ->where('emailAccount', '[0-9]+');
 
-    // ✅ Edit
+    // âœ… Edit
     Route::get('/{emailAccount}/edit', [UserEmailAccountController::class, 'edit'])
         ->name('email-accounts.edit')
         ->where('emailAccount', '[0-9]+');
 
-    // ✅ Update
+    // âœ… Update
     Route::put('/{emailAccount}', [UserEmailAccountController::class, 'update'])
         ->name('email-accounts.update')
         ->where('emailAccount', '[0-9]+');
 
     // ========================================== //
-    // ⚡ ACCOUNT ACTIONS                         //
+    // âš¡ ACCOUNT ACTIONS                         //
     // ========================================== //
     Route::post('/{emailAccount}/sync', [UserEmailAccountController::class, 'sync'])
         ->name('email-accounts.sync')
@@ -13506,7 +14337,7 @@ Route::middleware(['auth'])->prefix('email-accounts')->group(function () {
         ->where('emailAccount', '[0-9]+');
 
     // ========================================== //
-    // 📨 EMAIL OPERATIONS                        //
+    // ðŸ“¨ EMAIL OPERATIONS                        //
     // ========================================== //
     Route::get('/{emailAccount}/emails/{email}', [UserEmailAccountController::class, 'viewEmail'])
         ->name('email-accounts.view-email')
@@ -13516,7 +14347,7 @@ Route::middleware(['auth'])->prefix('email-accounts')->group(function () {
         ->name('email-accounts.mark-read')
         ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
-    // ✅ NEW: Mark as unread
+    // âœ… NEW: Mark as unread
     Route::post('/{emailAccount}/emails/{email}/mark-unread', [UserEmailAccountController::class, 'markAsUnread'])
         ->name('email-accounts.mark-unread')
         ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
@@ -13534,7 +14365,7 @@ Route::middleware(['auth'])->prefix('email-accounts')->group(function () {
         ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
     // ========================================== //
-    // 🗑️ SOFT DELETE OPERATIONS                  //
+    // ðŸ—‘ï¸ SOFT DELETE OPERATIONS                  //
     // ========================================== //
     Route::post('/{id}/restore', [UserEmailAccountController::class, 'restore'])
         ->name('email-accounts.restore')
@@ -13546,14 +14377,14 @@ Route::middleware(['auth'])->prefix('email-accounts')->group(function () {
 });
 
 // ============================================ //
-// 🚀 SUPER ADMIN ROUTES                        //
+// ðŸš€ SUPER ADMIN ROUTES                        //
 // ============================================ //
 Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group(function () {
 
     Route::prefix('email-accounts')->group(function () {
 
         // ========================================== //
-        // 📧 STATIC ROUTES                           //
+        // ðŸ“§ STATIC ROUTES                           //
         // ========================================== //
         Route::get('/inbox', [UserEmailAccountController::class, 'inbox'])
             ->name('super-admin.email-accounts.inbox');
@@ -13565,7 +14396,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group
             ->name('super-admin.email-accounts.create');
 
         // ========================================== //
-        // 📨 POST ROUTES                             //
+        // ðŸ“¨ POST ROUTES                             //
         // ========================================== //
         Route::post('/send', [UserEmailAccountController::class, 'sendEmail'])
             ->name('super-admin.email-accounts.send');
@@ -13573,7 +14404,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group
             ->name('super-admin.email-accounts.verify');
 
         // ========================================== //
-        // 📋 INDEX & STORE                           //
+        // ðŸ“‹ INDEX & STORE                           //
         // ========================================== //
         Route::get('/', [UserEmailAccountController::class, 'index'])
             ->name('super-admin.email-accounts.index');
@@ -13581,7 +14412,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group
             ->name('super-admin.email-accounts.store');
 
         // ========================================== //
-        // ✅ CRUD ROUTES - DELETE MUST COME FIRST   //
+        // âœ… CRUD ROUTES - DELETE MUST COME FIRST   //
         // ========================================== //
         Route::delete('/{emailAccount}', [UserEmailAccountController::class, 'destroy'])
             ->name('super-admin.email-accounts.destroy')
@@ -13600,7 +14431,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // ⚡ ACCOUNT ACTIONS                         //
+        // âš¡ ACCOUNT ACTIONS                         //
         // ========================================== //
         Route::post('/{emailAccount}/sync', [UserEmailAccountController::class, 'sync'])
             ->name('super-admin.email-accounts.sync')
@@ -13619,7 +14450,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // 📨 EMAIL OPERATIONS                        //
+        // ðŸ“¨ EMAIL OPERATIONS                        //
         // ========================================== //
         Route::get('/{emailAccount}/emails/{email}', [UserEmailAccountController::class, 'viewEmail'])
             ->name('super-admin.email-accounts.view-email')
@@ -13629,7 +14460,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group
             ->name('super-admin.email-accounts.mark-read')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
-        // ✅ NEW: Mark as unread
+        // âœ… NEW: Mark as unread
         Route::post('/{emailAccount}/emails/{email}/mark-unread', [UserEmailAccountController::class, 'markAsUnread'])
             ->name('super-admin.email-accounts.mark-unread')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
@@ -13647,7 +14478,7 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
         // ========================================== //
-        // 🗑️ SOFT DELETE OPERATIONS                  //
+        // ðŸ—‘ï¸ SOFT DELETE OPERATIONS                  //
         // ========================================== //
         Route::post('/{id}/restore', [UserEmailAccountController::class, 'restore'])
             ->name('super-admin.email-accounts.restore')
@@ -13660,14 +14491,14 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])->prefix('super-admin')->group
 });
 
 // ============================================ //
-// 👨‍💼 ADMIN ROUTES - Shows all email accounts  //
+// ðŸ‘¨â€ðŸ’¼ ADMIN ROUTES - Shows all email accounts  //
 // ============================================ //
 Route::middleware(['auth', 'multi.auth.user:1'])->prefix('admin')->group(function () {
 
     Route::prefix('email-accounts')->group(function () {
 
         // ========================================== //
-        // 📧 STATIC ROUTES                           //
+        // ðŸ“§ STATIC ROUTES                           //
         // ========================================== //
         Route::get('/inbox', [UserEmailAccountController::class, 'inbox'])
             ->name('admin.email-accounts.inbox');
@@ -13676,48 +14507,48 @@ Route::middleware(['auth', 'multi.auth.user:1'])->prefix('admin')->group(functio
         Route::get('/compose', [UserEmailAccountController::class, 'compose'])
             ->name('admin.email-accounts.compose');
 
-        // ❌ Admin CANNOT create/link email accounts
+        // âŒ Admin CANNOT create/link email accounts
 
         // ========================================== //
-        // 📨 POST ROUTES                             //
+        // ðŸ“¨ POST ROUTES                             //
         // ========================================== //
         Route::post('/send', [UserEmailAccountController::class, 'sendEmail'])
             ->name('admin.email-accounts.send');
 
-        // ❌ Admin CANNOT verify credentials
+        // âŒ Admin CANNOT verify credentials
 
         // ========================================== //
-        // 📋 INDEX - Shows ALL email accounts        //
+        // ðŸ“‹ INDEX - Shows ALL email accounts        //
         // ========================================== //
         Route::get('/', [UserEmailAccountController::class, 'index'])
             ->name('admin.email-accounts.index');
 
-        // ❌ Admin CANNOT store email accounts
+        // âŒ Admin CANNOT store email accounts
 
         // ========================================== //
-        // ✅ CRUD ROUTES - View Only for Admin       //
+        // âœ… CRUD ROUTES - View Only for Admin       //
         // ========================================== //
         Route::get('/{emailAccount}', [UserEmailAccountController::class, 'show'])
             ->name('admin.email-accounts.show')
             ->where('emailAccount', '[0-9]+');
 
-        // ❌ Admin CANNOT edit, update, or delete accounts
+        // âŒ Admin CANNOT edit, update, or delete accounts
 
         // ========================================== //
-        // ⚡ ACCOUNT ACTIONS                         //
+        // âš¡ ACCOUNT ACTIONS                         //
         // ========================================== //
         Route::post('/{emailAccount}/sync', [UserEmailAccountController::class, 'sync'])
             ->name('admin.email-accounts.sync')
             ->where('emailAccount', '[0-9]+');
 
-        // ❌ Admin CANNOT reverify or set primary
+        // âŒ Admin CANNOT reverify or set primary
 
         Route::get('/{emailAccount}/stats', [UserEmailAccountController::class, 'stats'])
             ->name('admin.email-accounts.stats')
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // 📨 EMAIL OPERATIONS                        //
+        // ðŸ“¨ EMAIL OPERATIONS                        //
         // ========================================== //
         Route::get('/{emailAccount}/emails/{email}', [UserEmailAccountController::class, 'viewEmail'])
             ->name('admin.email-accounts.view-email')
@@ -13727,7 +14558,7 @@ Route::middleware(['auth', 'multi.auth.user:1'])->prefix('admin')->group(functio
             ->name('admin.email-accounts.mark-read')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
-        // ❌ Admin does NOT get a mark-unread route (kept consistent with their restricted feature set).
+        // âŒ Admin does NOT get a mark-unread route (kept consistent with their restricted feature set).
         // If you want Admins to be able to mark emails unread, uncomment the following block:
         //
         // Route::post('/{emailAccount}/emails/{email}/mark-unread', [UserEmailAccountController::class, 'markAsUnread'])
@@ -13742,12 +14573,12 @@ Route::middleware(['auth', 'multi.auth.user:1'])->prefix('admin')->group(functio
             ->name('admin.email-accounts.forward')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
-        // ❌ Admin CANNOT delete emails
+        // âŒ Admin CANNOT delete emails
     });
 });
 
 // ============================================ //
-// 💻 DEVELOPER ROUTES                          //
+// ðŸ’» DEVELOPER ROUTES                          //
 // ============================================ //
 Route::middleware(['auth', 'multi.auth.user:5'])
     ->prefix('developer')
@@ -13759,7 +14590,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])
         ->group(function () {
 
         // ========================================== //
-        // 📧 STATIC ROUTES                           //
+        // ðŸ“§ STATIC ROUTES                           //
         // ========================================== //
         Route::get('/inbox', [UserEmailAccountController::class, 'inbox'])
             ->name('inbox');
@@ -13774,7 +14605,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])
             ->name('create');
 
         // ========================================== //
-        // 📨 POST ROUTES (Form Submissions)          //
+        // ðŸ“¨ POST ROUTES (Form Submissions)          //
         // ========================================== //
         Route::post('/send', [UserEmailAccountController::class, 'sendEmail'])
             ->name('send');
@@ -13783,7 +14614,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])
             ->name('verify');
 
         // ========================================== //
-        // 📋 INDEX & STORE                           //
+        // ðŸ“‹ INDEX & STORE                           //
         // ========================================== //
         Route::get('/', [UserEmailAccountController::class, 'index'])
             ->name('index');
@@ -13792,8 +14623,8 @@ Route::middleware(['auth', 'multi.auth.user:5'])
             ->name('store');
 
         // ========================================== //
-        // 🔧 PARAMETERIZED ROUTES                    //
-        // ⚠️ ORDER MATTERS: DELETE BEFORE GET        //
+        // ðŸ”§ PARAMETERIZED ROUTES                    //
+        // âš ï¸ ORDER MATTERS: DELETE BEFORE GET        //
         // ========================================== //
         Route::delete('/{emailAccount}', [UserEmailAccountController::class, 'destroy'])
             ->name('destroy')
@@ -13812,7 +14643,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // ⚡ ACCOUNT ACTIONS                         //
+        // âš¡ ACCOUNT ACTIONS                         //
         // ========================================== //
         Route::post('/{emailAccount}/sync', [UserEmailAccountController::class, 'sync'])
             ->name('sync')
@@ -13831,7 +14662,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // 📨 EMAIL OPERATIONS                        //
+        // ðŸ“¨ EMAIL OPERATIONS                        //
         // ========================================== //
         Route::get('/{emailAccount}/emails/{email}', [UserEmailAccountController::class, 'viewEmail'])
             ->name('view-email')
@@ -13841,7 +14672,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])
             ->name('mark-read')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
-        // ✅ NEW: Mark as unread
+        // âœ… NEW: Mark as unread
         Route::post('/{emailAccount}/emails/{email}/mark-unread', [UserEmailAccountController::class, 'markAsUnread'])
             ->name('mark-unread')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
@@ -13859,7 +14690,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
         // ========================================== //
-        // 🗑️ SOFT DELETE OPERATIONS                  //
+        // ðŸ—‘ï¸ SOFT DELETE OPERATIONS                  //
         // ========================================== //
         Route::post('/{id}/restore', [UserEmailAccountController::class, 'restore'])
             ->name('restore')
@@ -13872,7 +14703,7 @@ Route::middleware(['auth', 'multi.auth.user:5'])
 });
 
 // ============================================ //
-// 💻 LANDLORD ROUTES                           //
+// ðŸ’» LANDLORD ROUTES                           //
 // ============================================ //
 Route::middleware(['auth', 'multi.auth.user:2'])
     ->prefix('landlord')
@@ -13884,7 +14715,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])
         ->group(function () {
 
         // ========================================== //
-        // 📧 STATIC ROUTES                           //
+        // ðŸ“§ STATIC ROUTES                           //
         // ========================================== //
         Route::get('/inbox', [UserEmailAccountController::class, 'inbox'])
             ->name('inbox');
@@ -13899,7 +14730,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])
             ->name('create');
 
         // ========================================== //
-        // 📨 POST ROUTES (Form Submissions)          //
+        // ðŸ“¨ POST ROUTES (Form Submissions)          //
         // ========================================== //
         Route::post('/send', [UserEmailAccountController::class, 'sendEmail'])
             ->name('send');
@@ -13908,7 +14739,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])
             ->name('verify');
 
         // ========================================== //
-        // 📋 INDEX & STORE                           //
+        // ðŸ“‹ INDEX & STORE                           //
         // ========================================== //
         Route::get('/', [UserEmailAccountController::class, 'index'])
             ->name('index');
@@ -13917,8 +14748,8 @@ Route::middleware(['auth', 'multi.auth.user:2'])
             ->name('store');
 
         // ========================================== //
-        // 🔧 PARAMETERIZED ROUTES                    //
-        // ⚠️ ORDER MATTERS: DELETE BEFORE GET        //
+        // ðŸ”§ PARAMETERIZED ROUTES                    //
+        // âš ï¸ ORDER MATTERS: DELETE BEFORE GET        //
         // ========================================== //
         Route::delete('/{emailAccount}', [UserEmailAccountController::class, 'destroy'])
             ->name('destroy')
@@ -13937,7 +14768,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // ⚡ ACCOUNT ACTIONS                         //
+        // âš¡ ACCOUNT ACTIONS                         //
         // ========================================== //
         Route::post('/{emailAccount}/sync', [UserEmailAccountController::class, 'sync'])
             ->name('sync')
@@ -13956,7 +14787,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // 📨 EMAIL OPERATIONS                        //
+        // ðŸ“¨ EMAIL OPERATIONS                        //
         // ========================================== //
         Route::get('/{emailAccount}/emails/{email}', [UserEmailAccountController::class, 'viewEmail'])
             ->name('view-email')
@@ -13966,7 +14797,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])
             ->name('mark-read')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
-        // ✅ NEW: Mark as unread
+        // âœ… NEW: Mark as unread
         Route::post('/{emailAccount}/emails/{email}/mark-unread', [UserEmailAccountController::class, 'markAsUnread'])
             ->name('mark-unread')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
@@ -13984,7 +14815,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
         // ========================================== //
-        // 🗑️ SOFT DELETE OPERATIONS                  //
+        // ðŸ—‘ï¸ SOFT DELETE OPERATIONS                  //
         // ========================================== //
         Route::post('/{id}/restore', [UserEmailAccountController::class, 'restore'])
             ->name('restore')
@@ -13997,7 +14828,7 @@ Route::middleware(['auth', 'multi.auth.user:2'])
 });
 
 // ============================================ //
-// 💻 TENANT ROUTES                             //
+// ðŸ’» TENANT ROUTES                             //
 // ============================================ //
 Route::middleware(['auth', 'multi.auth.user:3'])
     ->prefix('tenant')
@@ -14009,7 +14840,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
         ->group(function () {
 
         // ========================================== //
-        // 📧 STATIC ROUTES                           //
+        // ðŸ“§ STATIC ROUTES                           //
         // ========================================== //
         Route::get('/inbox', [UserEmailAccountController::class, 'inbox'])
             ->name('inbox');
@@ -14024,7 +14855,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
             ->name('create');
 
         // ========================================== //
-        // 📨 POST ROUTES (Form Submissions)          //
+        // ðŸ“¨ POST ROUTES (Form Submissions)          //
         // ========================================== //
         Route::post('/send', [UserEmailAccountController::class, 'sendEmail'])
             ->name('send');
@@ -14033,7 +14864,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
             ->name('verify');
 
         // ========================================== //
-        // 📋 INDEX & STORE                           //
+        // ðŸ“‹ INDEX & STORE                           //
         // ========================================== //
         Route::get('/', [UserEmailAccountController::class, 'index'])
             ->name('index');
@@ -14042,8 +14873,8 @@ Route::middleware(['auth', 'multi.auth.user:3'])
             ->name('store');
 
         // ========================================== //
-        // 🔧 PARAMETERIZED ROUTES                    //
-        // ⚠️ ORDER MATTERS: DELETE BEFORE GET        //
+        // ðŸ”§ PARAMETERIZED ROUTES                    //
+        // âš ï¸ ORDER MATTERS: DELETE BEFORE GET        //
         // ========================================== //
         Route::delete('/{emailAccount}', [UserEmailAccountController::class, 'destroy'])
             ->name('destroy')
@@ -14062,7 +14893,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // ⚡ ACCOUNT ACTIONS                         //
+        // âš¡ ACCOUNT ACTIONS                         //
         // ========================================== //
         Route::post('/{emailAccount}/sync', [UserEmailAccountController::class, 'sync'])
             ->name('sync')
@@ -14081,7 +14912,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
             ->where('emailAccount', '[0-9]+');
 
         // ========================================== //
-        // 📨 EMAIL OPERATIONS                        //
+        // ðŸ“¨ EMAIL OPERATIONS                        //
         // ========================================== //
         Route::get('/{emailAccount}/emails/{email}', [UserEmailAccountController::class, 'viewEmail'])
             ->name('view-email')
@@ -14091,7 +14922,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
             ->name('mark-read')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
-        // ✅ NEW: Mark as unread
+        // âœ… NEW: Mark as unread
         Route::post('/{emailAccount}/emails/{email}/mark-unread', [UserEmailAccountController::class, 'markAsUnread'])
             ->name('mark-unread')
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
@@ -14109,7 +14940,7 @@ Route::middleware(['auth', 'multi.auth.user:3'])
             ->where(['emailAccount' => '[0-9]+', 'email' => '[0-9]+']);
 
         // ========================================== //
-        // 🗑️ SOFT DELETE OPERATIONS                  //
+        // ðŸ—‘ï¸ SOFT DELETE OPERATIONS                  //
         // ========================================== //
         Route::post('/{id}/restore', [UserEmailAccountController::class, 'restore'])
             ->name('restore')
@@ -14156,7 +14987,7 @@ Route::prefix('/verify')
 Route::middleware(['auth'])->group(function () {
 
     // ========================================== //
-    // 📱 SMS Management - Main Routes           //
+    // ðŸ“± SMS Management - Main Routes           //
     // ========================================== //
     Route::prefix('sms')->name('sms.')->group(function () {
         
@@ -14164,25 +14995,25 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/', [SmsController::class, 'index'])->name('index');
         
         // ========================================== //
-        // 📨 COMPOSE & SEND - STATIC ROUTES FIRST   //
+        // ðŸ“¨ COMPOSE & SEND - STATIC ROUTES FIRST   //
         // ========================================== //
         Route::get('/compose', [SmsController::class, 'compose'])->name('compose');
         Route::post('/send', [SmsController::class, 'send'])->name('send');
         
         // ========================================== //
-        // 👥 USER LIST FOR SMS COMPOSER              //
+        // ðŸ‘¥ USER LIST FOR SMS COMPOSER              //
         // ========================================== //
         Route::get('/users/list', [SmsController::class, 'getUserListForSms'])
             ->name('users.list');
         
         // ========================================== //
-        // 👥 BULK SMS OPERATIONS                     //
+        // ðŸ‘¥ BULK SMS OPERATIONS                     //
         // ========================================== //
         Route::post('/bulk-send', [SmsController::class, 'bulkSend'])
             ->name('bulk-send');
         
         // ========================================== //
-        // 📋 LOGS MANAGEMENT                        //
+        // ðŸ“‹ LOGS MANAGEMENT                        //
         // ========================================== //
         Route::get('/logs', [SmsController::class, 'logs'])->name('logs');
         Route::get('/logs/{log}', [SmsController::class, 'showLog'])->name('logs.show');
@@ -14192,13 +15023,13 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/logs/cleanup', [SmsController::class, 'cleanup'])->name('logs.cleanup');
         
         // ========================================== //
-        // 📊 STATISTICS                              //
+        // ðŸ“Š STATISTICS                              //
         // ========================================== //
         Route::get('/statistics', [SmsController::class, 'statistics'])->name('statistics');
     });
 
     // ========================================== //
-    // 🔌 API Routes for SMS (AJAX calls)        //
+    // ðŸ”Œ API Routes for SMS (AJAX calls)        //
     // ========================================== //
     Route::prefix('api/sms')->name('api.sms.')->group(function () {
         Route::get('/status', [SmsController::class, 'status'])->name('status');
@@ -14206,7 +15037,7 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/test', [SmsController::class, 'testConnection'])->name('test');
         Route::get('/statistics', [SmsController::class, 'statistics'])->name('statistics');
         
-        // 👥 User list API endpoint (alternative to /sms/users/list)
+        // ðŸ‘¥ User list API endpoint (alternative to /sms/users/list)
         Route::get('/users', [SmsController::class, 'getUserListForSms'])
             ->name('users');
     });  
@@ -14255,11 +15086,11 @@ Route::prefix('developer')->name('developer.')->middleware(['auth', 'multi.auth.
     Route::prefix('whatsapp')->name('whatsapp.')->group(function () {
         
         // ============================================
-        // 💬 MESSAGE MANAGEMENT
+        // ðŸ’¬ MESSAGE MANAGEMENT
         // ============================================
         // Web Views
         Route::get('/messages', [WhatsAppMessageController::class, 'index'])->name('messages.index');
-        Route::get('/messages/compose', [WhatsAppMessageController::class, 'compose'])->name('messages.compose');  // ✅ This is whatsapp.messages.compose
+        Route::get('/messages/compose', [WhatsAppMessageController::class, 'compose'])->name('messages.compose');  // âœ… This is whatsapp.messages.compose
         Route::get('/messages/{id}', [WhatsAppMessageController::class, 'show'])->name('messages.show');
         
         // Web Actions
@@ -14269,7 +15100,7 @@ Route::prefix('developer')->name('developer.')->middleware(['auth', 'multi.auth.
         Route::post('/messages/{id}/resend', [WhatsAppMessageController::class, 'resend'])->name('messages.resend');
         
         // ============================================
-        // 📝 TEMPLATE MANAGEMENT
+        // ðŸ“ TEMPLATE MANAGEMENT
         // ============================================
         // Web Views
         Route::get('/templates', [WhatsAppTemplateController::class, 'index'])->name('templates.index');
@@ -14284,10 +15115,10 @@ Route::prefix('developer')->name('developer.')->middleware(['auth', 'multi.auth.
         Route::post('/templates/{id}/sync', [WhatsAppTemplateController::class, 'sync'])->name('templates.sync');
         
         // ============================================
-        // 📋 LOGS MANAGEMENT
+        // ðŸ“‹ LOGS MANAGEMENT
         // ============================================
         // Web Views
-        Route::get('/logs', [WhatsAppLogController::class, 'index'])->name('logs.index');  // ✅ This is whatsapp.logs.index
+        Route::get('/logs', [WhatsAppLogController::class, 'index'])->name('logs.index');  // âœ… This is whatsapp.logs.index
         Route::get('/logs/{id}', [WhatsAppLogController::class, 'show'])->name('logs.show');
         
         // Web Actions
@@ -14306,7 +15137,7 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'multi.auth.user:0,1
     Route::prefix('whatsapp')->name('whatsapp.')->group(function () {
         
         // ============================================
-        // 💬 MESSAGE MANAGEMENT
+        // ðŸ’¬ MESSAGE MANAGEMENT
         // ============================================
         // Web Views
         Route::get('/messages', [WhatsAppMessageController::class, 'index'])->name('messages.index');
@@ -14320,7 +15151,7 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'multi.auth.user:0,1
         Route::post('/messages/{id}/resend', [WhatsAppMessageController::class, 'resend'])->name('messages.resend');
         
         // ============================================
-        // 📝 TEMPLATE MANAGEMENT
+        // ðŸ“ TEMPLATE MANAGEMENT
         // ============================================
         // Web Views
         Route::get('/templates', [WhatsAppTemplateController::class, 'index'])->name('templates.index');
@@ -14335,7 +15166,7 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'multi.auth.user:0,1
         Route::post('/templates/{id}/sync', [WhatsAppTemplateController::class, 'sync'])->name('templates.sync');
         
         // ============================================
-        // 📋 LOGS MANAGEMENT
+        // ðŸ“‹ LOGS MANAGEMENT
         // ============================================
         // Web Views
         Route::get('/logs', [WhatsAppLogController::class, 'index'])->name('logs.index');
@@ -14382,18 +15213,18 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
     ->group(function () {
 
         // ============================================ //
-        // 📊 DASHBOARD                                 //
+        // ðŸ“Š DASHBOARD                                 //
         // ============================================ //
         Route::get('/dashboard', [SanitationController::class, 'dashboard'])->name('dashboard');
 
         // ============================================ //
-        // 📊 STATISTICS & REPORTS                      //
+        // ðŸ“Š STATISTICS & REPORTS                      //
         // ============================================ //
         Route::get('/statistics', [SanitationController::class, 'statistics'])->name('statistics');
         Route::get('/reports', [SanitationController::class, 'reports'])->name('reports');
 
         // ============================================ //
-        // 📋 PROPERTY MANAGEMENT                       //
+        // ðŸ“‹ PROPERTY MANAGEMENT                       //
         // ============================================ //
         Route::prefix('properties')->name('properties.')->group(function () {
 
@@ -14414,15 +15245,15 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
             Route::post('/link/{property}', [SanitationController::class, 'linkProperty'])
                 ->name('link.store');
 
-            // ✅ NEW: Bulk link selected properties from the available list
+            // âœ… NEW: Bulk link selected properties from the available list
             Route::post('/bulk-link', [SanitationController::class, 'bulkLinkProperties'])
                 ->name('bulk-link');
 
-            // ✅ NEW: Bulk approve + link landlord-submitted service requests
+            // âœ… NEW: Bulk approve + link landlord-submitted service requests
             Route::post('/bulk-approve', [SanitationController::class, 'bulkApproveLandlordRequests'])
                 ->name('bulk-approve');
 
-            // Show property details (catch-all — must be last)
+            // Show property details (catch-all â€” must be last)
             Route::get('/{property}', [SanitationController::class, 'showProperty'])
                 ->name('show');
 
@@ -14436,7 +15267,7 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
         });
 
         // ============================================ //
-        // ✅ APPROVALS                                 //
+        // âœ… APPROVALS                                 //
         // ============================================ //
         Route::prefix('approvals')->name('approvals.')->group(function () {
 
@@ -14466,7 +15297,7 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
         });
 
         // ============================================ //
-        // 📋 REQUESTS                                  //
+        // ðŸ“‹ REQUESTS                                  //
         // ============================================ //
         Route::prefix('requests')->name('requests.')->group(function () {
 
@@ -14486,13 +15317,13 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
             Route::post('/{collectionRequest}/status', [SanitationController::class, 'updateStatus'])
                 ->name('status');
 
-            // ✅ Show single request — catch-all MUST be last in this group
+            // âœ… Show single request â€” catch-all MUST be last in this group
             Route::get('/{collectionRequest}', [SanitationController::class, 'showRequest'])
                 ->name('show');
         });
 
         // ============================================ //
-        // 🗺️ MAP                                       //
+        // ðŸ—ºï¸ MAP                                       //
         // ============================================ //
         Route::get('/map/markers', [SanitationController::class, 'getMapMarkers'])
             ->name('map.markers');
@@ -14500,14 +15331,14 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
     
 
 // ============================================ //
-// 🧹 SANITATION PERSONNEL ROUTES               //
+// ðŸ§¹ SANITATION PERSONNEL ROUTES               //
 // (Matches blade naming convention)            //
 // ============================================ //
 
 Route::prefix('sanitation')->name('sanitation.')->group(function () {
 
     // ============================================ //
-    // 👥 PERSONNEL & WORKERS                        //
+    // ðŸ‘¥ PERSONNEL & WORKERS                        //
     // ============================================ //
 
     Route::prefix('personnel')->name('personnel.')->group(function () {
@@ -14525,9 +15356,9 @@ Route::prefix('sanitation')->name('sanitation.')->group(function () {
             ->name('store');
 
         // -----------------------------------------------------------------
-        // 🗑️ TRASH & BULK ENDPOINTS
+        // ðŸ—‘ï¸ TRASH & BULK ENDPOINTS
         //
-        // ⚠️ These MUST come before the `/{personnel}` wildcard routes
+        // âš ï¸ These MUST come before the `/{personnel}` wildcard routes
         //    below, otherwise `/personnel/trash` would be routed to
         //    `show($personnel = 'trash')` and 404.
         // -----------------------------------------------------------------
@@ -14549,7 +15380,7 @@ Route::prefix('sanitation')->name('sanitation.')->group(function () {
             ->name('force-delete');
 
         // -----------------------------------------------------------------
-        // AJAX — static endpoints (must also precede the wildcard)
+        // AJAX â€” static endpoints (must also precede the wildcard)
         // -----------------------------------------------------------------
         Route::get('/available', [PersonnelController::class, 'getAvailable'])
             ->name('available');
@@ -14590,7 +15421,7 @@ Route::prefix('sanitation')->name('sanitation.')->group(function () {
 
     
     // ============================================ //
-    // 👷 WORKERS                                   //
+    // ðŸ‘· WORKERS                                   //
     // ============================================ //
     
     Route::prefix('workers')->name('workers.')->group(function () {
@@ -14627,7 +15458,7 @@ Route::prefix('sanitation')->name('sanitation.')->group(function () {
 });
 
 // ============================================ //
-// 👥 PERSONNEL & WORKERS (Original)            //
+// ðŸ‘¥ PERSONNEL & WORKERS (Original)            //
 // ============================================ //
 
 Route::prefix('personnel')->name('personnel.')->group(function () {
@@ -14678,7 +15509,7 @@ Route::prefix('personnel')->name('personnel.')->group(function () {
 });
 
 // ============================================ //
-// 👷 WORKERS (Separate - if needed)            //
+// ðŸ‘· WORKERS (Separate - if needed)            //
 // ============================================ //
 
 Route::prefix('workers')->name('workers.')->group(function () {
@@ -14714,7 +15545,7 @@ Route::prefix('workers')->name('workers.')->group(function () {
 });
 
 // ============================================ //
-// 📍 LOCATION (General)                        //
+// ðŸ“ LOCATION (General)                        //
 // ============================================ //
 
 // This route is for the current user's location update (mobile app)
@@ -14729,7 +15560,7 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
     ->group(function () {
 
         // -----------------------------------------------------------------
-        // 1. STATIC routes first — these MUST come before /{zone}
+        // 1. STATIC routes first â€” these MUST come before /{zone}
         // -----------------------------------------------------------------
         Route::get('/',        [CollectionZoneController::class, 'index'])->name('index');
         Route::get('/create',  [CollectionZoneController::class, 'create'])->name('create');
@@ -14743,7 +15574,7 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
         Route::get('/export', [CollectionZoneController::class, 'export'])->name('export');
 
         // -----------------------------------------------------------------
-        // 2. DYNAMIC routes — after all static ones
+        // 2. DYNAMIC routes â€” after all static ones
         // -----------------------------------------------------------------
         Route::get('/{zone}',      [CollectionZoneController::class, 'show'])->name('show');
         Route::get('/{zone}/edit', [CollectionZoneController::class, 'edit'])->name('edit');
@@ -14758,9 +15589,9 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
 
 
 // ============================================ //
-// 🏢 SANITATION SETTINGS ROUTES                //
+// ðŸ¢ SANITATION SETTINGS ROUTES                //
 // ============================================ //
-// ✅ Only accessible to:
+// âœ… Only accessible to:
 //    - Admins & Super Admins (bypass via middleware)
 //    - The ROOT sanitation supervisor (top of the personnel tree)
 //    Everyone else gets a 403 before hitting the controller.
@@ -14768,7 +15599,7 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
 Route::middleware([
         'auth',
         'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL,
-        // ✅ FIX: use class reference, not alias, because MultiAuthUser
+        // âœ… FIX: use class reference, not alias, because MultiAuthUser
         //         resolves middleware via app() and doesn't consult aliases.
         \App\Http\Middleware\EnsureRootSanitationAccess::class,
     ])
@@ -14786,7 +15617,7 @@ Route::middleware([
         Route::post('/', [SanitationSettingController::class, 'store'])->name('store');
         Route::put('/', [SanitationSettingController::class, 'update'])->name('update');
 
-        // Toggle active status — both aliases for compatibility
+        // Toggle active status â€” both aliases for compatibility
         Route::post('/toggle-active', [SanitationSettingController::class, 'toggleActive'])->name('toggle-active');
         Route::post('/toggle', [SanitationSettingController::class, 'toggleActive'])->name('toggle');
 
@@ -14798,11 +15629,11 @@ Route::middleware([
         Route::post('/import', [SanitationSettingController::class, 'import'])->name('import');
 
         // ============================================================ //
-        // ✅ NEW: Environment-file (.env) writer for Google Maps /     //
+        // âœ… NEW: Environment-file (.env) writer for Google Maps /     //
         //         Ghana Post GPS credentials.                          //
         //                                                              //
         //   POST /sanitation/settings/environment                      //
-        //   → SanitationSettingController::updateEnvironment()         //
+        //   â†’ SanitationSettingController::updateEnvironment()         //
         //                                                              //
         // Writes whitelisted keys to `.env`, clears config + option    //
         // caches, and returns to the settings index.                   //
@@ -14821,7 +15652,7 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
     ->group(function () {
         
         // ============================================ //
-        // 📋 PROFILE ROUTES                           //
+        // ðŸ“‹ PROFILE ROUTES                           //
         // ============================================ //
         
         Route::prefix('profile')->name('profile.')->group(function () {
@@ -14886,291 +15717,299 @@ Route::middleware(['auth', 'multi.auth.user:' . User::TYPE_SANITATION_PERSONNEL]
     });
 
 
-// ============================================
-// THEME MANAGEMENT ROUTES - FULL IMPLEMENTATION
-// ============================================
 
+/*
+|--------------------------------------------------------------------------
+| Theme Routes
+|--------------------------------------------------------------------------
+|
+| Authenticated theme management, previews, admin tooling, public assets,
+| and webhooks. All authenticated routes are throttled and most are
+| cacheable — the caching headers are deliberately conservative because
+| theme data is per-user and changes infrequently.
+|
+*/
+
+// ============================================
+// 1. AUTHENTICATED THEME ROUTES
+// ============================================
 Route::middleware(['web', 'auth'])->prefix('theme')->name('theme.')->group(function () {
-    
+
     // ============================================
-    // 1. CORE THEME ROUTES
+    // 1.1 CORE THEME SETTINGS
     // ============================================
     Route::prefix('settings')->name('settings.')->group(function () {
-        // Get user's theme settings
         Route::get('/', [ThemeController::class, 'getSettings'])
             ->name('get')
             ->middleware(['throttle:60,1']);
-        
-        // Update theme settings
+
+        // POST is the canonical verb (frontend form posts). PUT/PATCH
+        // aliases are provided for REST-compliant clients.
         Route::post('/update', [ThemeController::class, 'update'])
             ->name('update')
             ->middleware(['throttle:30,1']);
-        
-        // Reset theme to default
+
+        Route::match(['put', 'patch'], '/update', [ThemeController::class, 'update'])
+            ->name('update.rest')
+            ->middleware(['throttle:30,1']);
+
         Route::post('/reset', [ThemeController::class, 'reset'])
             ->name('reset')
             ->middleware(['throttle:10,1']);
     });
 
     // ============================================
-    // 2. THEME OPTIONS ROUTES
+    // 1.2 THEME OPTIONS
     // ============================================
     Route::prefix('options')->name('options.')->group(function () {
-        // Get all available options
         Route::get('/', [ThemeController::class, 'getOptions'])
             ->name('all')
-            ->middleware(['throttle:120,1', 'cache.headers:public;max_age=3600;etag']);
-        
-        // Get sidebar theme previews
-        Route::get('/sidebar-previews', function () {
-            return response()->json([
-                'success' => true,
-                'data' => app(ThemeController::class)->getSidebarThemePreviews()
-            ]);
-        })->name('sidebar-previews')
-        ->middleware(['throttle:120,1', 'cache.headers:public;max_age=3600;etag']);
+            ->middleware(['throttle:120,1']);
+
+        // Delegates to the controller method (DI-resolved), not a
+        // manually instantiated controller via app().
+        Route::get('/sidebar-previews', [ThemeController::class, 'getSidebarThemePreviews'])
+            ->name('sidebar-previews')
+            ->middleware(['throttle:120,1']);
     });
 
     // ============================================
-    // 3. COLOR PICKER ROUTES
+    // 1.3 COLOR PICKER
     // ============================================
     Route::prefix('colors')->name('colors.')->group(function () {
-        // Get custom colors
         Route::get('/', [ThemeController::class, 'getColors'])
             ->name('get')
-            ->middleware(['throttle:60,1', 'cache.headers:private;max_age=3600']);
-        
-        // Update custom colors
+            ->middleware(['throttle:60,1']);
+
         Route::post('/update', [ThemeController::class, 'updateColors'])
             ->name('update')
             ->middleware(['throttle:30,1']);
-        
-        // Reset colors to default
+
+        Route::match(['put', 'patch'], '/update', [ThemeController::class, 'updateColors'])
+            ->name('update.rest')
+            ->middleware(['throttle:30,1']);
+
         Route::post('/reset', [ThemeController::class, 'resetColors'])
             ->name('reset')
             ->middleware(['throttle:10,1']);
-        
-        // Get default colors (public)
+
+        // Default colors — service-backed, not a static controller call.
         Route::get('/default', function () {
             return response()->json([
                 'success' => true,
-                'data' => ThemeController::getDefaultColors()
+                'data'    => ThemeColorsDTO::default()->toArray(),
             ]);
         })->name('default')
-        ->middleware(['throttle:120,1', 'cache.headers:public;max_age=86400;etag;immutable']);
+          ->middleware(['throttle:120,1']);
     });
 
     // ============================================
-    // 4. THEME APPLICATION ROUTES
+    // 1.4 THEME APPLICATION
     // ============================================
     Route::prefix('apply')->name('apply.')->group(function () {
-        // Apply theme to current session
         Route::post('/', [ThemeController::class, 'applyTheme'])
             ->name('current')
             ->middleware(['throttle:30,1']);
-        
-        // Apply theme to specific user (admin only)
-        Route::post('/user/{user}', [ThemeController::class, 'applyThemeToUser'])
-            ->name('user')
-            ->middleware(['can:admin', 'throttle:10,1']);
+
+        // Admin-only: apply a theme on behalf of another user.
+        // NOTE: ThemeController does not currently expose this method.
+        // Either add `applyThemeToUser(User $user)` to the controller or
+        // remove this route. Left commented so the intent is preserved.
+        //
+        // Route::post('/user/{user}', [ThemeController::class, 'applyThemeToUser'])
+        //     ->name('user')
+        //     ->middleware(['can:manage-developer', 'throttle:10,1']);
     });
 
     // ============================================
-    // 5. CSS GENERATION ROUTES
+    // 1.5 CSS GENERATION
     // ============================================
     Route::prefix('css')->name('css.')->group(function () {
-        // Get theme CSS
         Route::get('/', [ThemeController::class, 'getThemeCss'])
             ->name('get')
-            ->middleware(['throttle:120,1', 'cache.headers:public;max_age=3600;etag;immutable']);
-        
-        // Get CSS with custom parameters
+            ->middleware(['throttle:120,1']);
+
+        // Preview CSS with overrides — does not persist anything.
         Route::get('/preview', function (Request $request) {
-            $settings = $request->validate([
-                'appearance' => 'sometimes|in:light,dark,system',
-                'sidebar_theme' => 'sometimes|in:default,dark,light,blue,green,custom',
-                'density' => 'sometimes|in:comfortable,compact,spacious'
+            $overrides = $request->validate([
+                'appearance'       => 'sometimes|in:light,dark,system',
+                'sidebar_theme'    => 'sometimes|in:default,dark,light,blue,green,custom',
+                'font_size'        => 'sometimes|in:small,medium,large',
+                'layout'           => 'sometimes|in:compact,comfortable',
+                'animations'       => 'sometimes|in:enabled,disabled',
+                'sidebar_position' => 'sometimes|in:left,right',
+                'header_style'     => 'sometimes|in:default,glass,solid',
+                'density'          => 'sometimes|in:comfortable,compact,spacious',
             ]);
-            
-            $user = auth()->user();
-            $service = app(\App\Contracts\Theme\ThemeServiceInterface::class);
-            
-            // Merge with current settings
-            $currentSettings = $service->getSettings($user);
-            $mergedSettings = array_merge($currentSettings['settings'], $settings);
-            
+
+            $user    = $request->user();
+            $service = app(ThemeServiceInterface::class);
+
+            $current = $service->getSettings($user);
+            $merged  = array_merge($current['settings'] ?? [], $overrides);
+
             $colors = $service->getColors($user);
-            $css = $service->generateThemeCss(
-                \App\DTOs\Theme\ThemeSettingsDTO::fromArray($mergedSettings),
-                \App\DTOs\Theme\ThemeColorsDTO::fromArray($colors['colors'])
-            );
-            
+
+            $settingsDto = ThemeSettingsDTO::fromArray($merged);
+            $colorsDto   = ThemeColorsDTO::fromArray($colors['colors'] ?? []);
+
+            if (! $settingsDto->isValid() || ! $colorsDto->isValid()) {
+                return response('/* Invalid theme preview parameters */', 422)
+                    ->header('Content-Type', 'text/css; charset=UTF-8');
+            }
+
+            $css = $service->generateThemeCss($settingsDto, $colorsDto);
+
             return response($css, 200)
-                ->header('Content-Type', 'text/css');
+                ->header('Content-Type', 'text/css; charset=UTF-8')
+                ->header('Cache-Control', 'private, max-age=300, must-revalidate')
+                ->header('Vary', 'Accept-Encoding, Cookie')
+                ->header('X-Content-Type-Options', 'nosniff');
         })->name('preview')
-        ->middleware(['throttle:60,1', 'cache.headers:public;max_age=300;must_revalidate']);
+          ->middleware(['throttle:60,1']);
     });
 
     // ============================================
-    // 6. PREVIEW ROUTES
+    // 1.6 PREVIEW ENDPOINTS
     // ============================================
     Route::prefix('preview')->name('preview.')->group(function () {
-        // Get sidebar theme preview
+        // Order matters: the "all" route must come BEFORE the {theme}
+        // route, otherwise "all" would be captured as a theme name.
+        Route::get('/sidebars', [ThemePreviewController::class, 'allSidebarPreviews'])
+            ->name('sidebars')
+            ->middleware(['throttle:60,1']);
+
         Route::get('/sidebar/{theme}', [ThemePreviewController::class, 'sidebarPreview'])
             ->name('sidebar')
             ->where('theme', 'default|dark|light|blue|green|custom')
-            ->middleware(['throttle:60,1', 'cache.headers:public;max_age=3600;etag']);
-        
-        // Get all sidebar previews
-        Route::get('/sidebar/all', [ThemePreviewController::class, 'allSidebarPreviews'])
-            ->name('sidebar-all')
-            ->middleware(['throttle:60,1', 'cache.headers:public;max_age=3600;etag']);
-        
-        // Get color preview
+            ->middleware(['throttle:60,1']);
+
         Route::get('/colors', [ThemePreviewController::class, 'colorPreview'])
             ->name('colors')
-            ->middleware(['throttle:60,1', 'cache.headers:public;max_age=3600;etag']);
-        
-        // Get live preview with current theme
+            ->middleware(['throttle:60,1']);
+
         Route::get('/live', [ThemePreviewController::class, 'livePreview'])
             ->name('live')
-            ->middleware(['throttle:30,1', 'cache.headers:private;max_age=300;must_revalidate']);
+            ->middleware(['throttle:30,1']);
     });
 
     // ============================================
-    // 7. ADMIN ROUTES
+    // 1.7 ADMIN ROUTES
     // ============================================
-    Route::prefix('admin')->name('admin.')->middleware(['can:admin'])->group(function () {
-        // System-wide theme settings
+    // NOTE: `can:admin` in the original file is invalid — the `can`
+    // middleware expects a Gate ability or policy, not a role name.
+    // Using `can:manage-developer` (a Gate defined in AppServiceProvider)
+    // as the closest existing ability. Swap for a dedicated `admin`
+    // Gate if you prefer.
+    Route::prefix('admin')->name('admin.')->middleware(['can:manage-developer'])->group(function () {
         Route::get('/system', [ThemeController::class, 'getSystemSettings'])
-            ->name('system.get')
-            ->middleware(['cache.headers:private;max_age=3600']);
-        
-        Route::post('/system', [ThemeController::class, 'updateSystemSettings'])
-            ->name('system.update');
-        
-        Route::post('/system/reset', [ThemeController::class, 'resetSystemSettings'])
-            ->name('system.reset');
-        
-        // User theme management
-        Route::get('/users', [ThemeController::class, 'getUserThemes'])
-            ->name('users.list')
-            ->middleware(['cache.headers:private;max_age=3600']);
-        
-        Route::get('/user/{user}', [ThemeController::class, 'getUserTheme'])
-            ->name('user.get')
-            ->middleware(['cache.headers:private;max_age=3600']);
-        
-        Route::post('/user/{user}/reset', [ThemeController::class, 'resetUserTheme'])
-            ->name('user.reset');
-        
-        // Theme statistics
+            ->name('system.get');
+
         Route::get('/statistics', [ThemeController::class, 'getThemeStatistics'])
             ->name('statistics')
-            ->middleware(['throttle:30,1', 'cache.headers:private;max_age=3600']);
+            ->middleware(['throttle:30,1']);
+
+        // NOTE: The original file referenced updateSystemSettings,
+        // resetSystemSettings, getUserThemes, getUserTheme, and
+        // resetUserTheme — none of which exist on ThemeController.
+        // Either implement them or leave them out. Removing them here
+        // prevents 500s at runtime from missing methods.
     });
 
     // ============================================
-    // 8. API COMPATIBILITY ROUTES
+    // 1.8 API COMPATIBILITY LAYER
     // ============================================
+    // Kept for legacy clients. Prefer the non-/api routes above.
     Route::prefix('api')->name('api.')->group(function () {
-        // Backward compatibility for API routes
         Route::get('/settings', [ThemeController::class, 'getSettings'])
             ->name('settings')
-            ->middleware(['throttle:60,1', 'cache.headers:private;max_age=3600']);
-        
+            ->middleware(['throttle:60,1']);
+
         Route::post('/settings/update', [ThemeController::class, 'update'])
             ->name('settings.update')
             ->middleware(['throttle:30,1']);
-        
+
         Route::post('/settings/reset', [ThemeController::class, 'reset'])
             ->name('settings.reset')
             ->middleware(['throttle:10,1']);
-        
+
         Route::get('/colors', [ThemeController::class, 'getColors'])
             ->name('colors')
-            ->middleware(['throttle:60,1', 'cache.headers:private;max_age=3600']);
-        
+            ->middleware(['throttle:60,1']);
+
         Route::post('/colors/update', [ThemeController::class, 'updateColors'])
             ->name('colors.update')
             ->middleware(['throttle:30,1']);
-        
+
         Route::post('/colors/reset', [ThemeController::class, 'resetColors'])
             ->name('colors.reset')
             ->middleware(['throttle:10,1']);
-        
+
         Route::get('/css', [ThemeController::class, 'getThemeCss'])
             ->name('css')
-            ->middleware(['throttle:120,1', 'cache.headers:public;max_age=3600;etag;immutable']);
+            ->middleware(['throttle:120,1']);
     });
 });
 
 // ============================================
-// 9. PUBLIC ROUTES (No Authentication Required)
+// 2. PUBLIC THEME ROUTES (No Authentication)
 // ============================================
 Route::prefix('theme')->name('theme.')->group(function () {
-    // Public CSS (with caching)
+    // Public CSS — safe defaults, aggressively cached.
     Route::get('/public/css', function () {
-        $css = Cache::remember('theme_public_css', 3600, function () {
-            $service = app(\App\Contracts\Theme\ThemeServiceInterface::class);
-            $settings = \App\DTOs\Theme\ThemeSettingsDTO::fromArray([
-                'appearance' => 'system',
-                'sidebar_theme' => 'default',
-                'font_size' => 'medium',
-                'layout' => 'comfortable',
-                'animations' => 'enabled',
-                'sidebar_position' => 'left',
-                'header_style' => 'default',
-                'density' => 'comfortable'
-            ]);
-            $colors = \App\DTOs\Theme\ThemeColorsDTO::default();
-            
+        // Version the cache key so a config/defaults change invalidates it.
+        $version = config('theme.cache.prefix', 'theme_') . 'v1';
+        $key     = "theme_public_css:{$version}";
+
+        $css = Cache::remember($key, 86400, function () {
+            $service = app(ThemeServiceInterface::class);
+
+            $settings = ThemeSettingsDTO::fromArray(config('theme.defaults', []));
+            $colors   = ThemeColorsDTO::default();
+
+            if (! $settings->isValid() || ! $colors->isValid()) {
+                return '/* invalid public theme defaults */';
+            }
+
             return $service->generateThemeCss($settings, $colors);
         });
-        
+
         return response($css, 200)
-            ->header('Content-Type', 'text/css')
-            ->header('Cache-Control', 'public, max-age=86400, immutable');
+            ->header('Content-Type', 'text/css; charset=UTF-8')
+            ->header('Cache-Control', 'public, max-age=86400, immutable')
+            ->header('X-Content-Type-Options', 'nosniff');
     })->name('public.css')
-    ->middleware(['throttle:120,1']);
-    
-    // Public theme options
+      ->middleware(['throttle:120,1']);
+
+    // Public options — pulled from config, not hard-coded.
     Route::get('/public/options', function () {
-        $options = Cache::remember('theme_public_options', 86400, function () {
-            return [
-                'appearance' => ['light', 'dark', 'system'],
-                'sidebar_themes' => ['default', 'dark', 'light', 'blue', 'green', 'custom'],
-                'font_sizes' => ['small', 'medium', 'large'],
-                'layout' => ['compact', 'comfortable'],
-                'animations' => ['enabled', 'disabled'],
-                'sidebar_position' => ['left', 'right'],
-                'header_style' => ['default', 'glass', 'solid'],
-                'density' => ['comfortable', 'compact', 'spacious']
-            ];
+        $options = Cache::remember('theme_public_options:v1', 86400, function () {
+            return config('theme.options', []);
         });
-        
+
         return response()->json([
             'success' => true,
-            'data' => $options
+            'data'    => $options,
         ])->header('Cache-Control', 'public, max-age=86400, immutable');
     })->name('public.options')
-    ->middleware(['throttle:120,1']);
+      ->middleware(['throttle:120,1']);
 });
 
 // ============================================
-// 10. WEBHOOKS AND CALLBACKS
+// 3. WEBHOOKS / CALLBACKS
 // ============================================
+// These are placeholders. In production:
+//   - verify a shared secret / HMAC signature
+//   - validate the payload shape
+//   - dispatch a job rather than doing work inline
 Route::prefix('theme/webhooks')->name('theme.webhooks.')->group(function () {
-    // Theme changed webhook
     Route::post('/theme-changed', function (Request $request) {
-        // Handle theme change webhook
-        // This can be used by external services
+        // TODO: verify signature, validate payload, dispatch job.
         return response()->json(['success' => true]);
     })->name('theme-changed');
-    
-    // Colors changed webhook
+
     Route::post('/colors-changed', function (Request $request) {
-        // Handle colors change webhook
+        // TODO: verify signature, validate payload, dispatch job.
         return response()->json(['success' => true]);
     })->name('colors-changed');
 });
@@ -15183,7 +16022,7 @@ Route::get('/developer/users/list-email', [App\Http\Controllers\Admin\UserManage
 
 
 // ============================================ //
-// ♻️ LANDLORD WASTE COLLECTION ROUTES          //
+// â™»ï¸ LANDLORD WASTE COLLECTION ROUTES          //
 // ============================================ //
 
 Route::middleware(['auth', 'verified'])
@@ -15197,10 +16036,10 @@ Route::middleware(['auth', 'verified'])
             ->group(function () {
 
                 // --------------------------------------------------------- //
-                // 📋 LISTING                                               //
+                // ðŸ“‹ LISTING                                               //
                 // --------------------------------------------------------- //
 
-                // Pending Approvals — landlord approves/rejects waste collection requests
+                // Pending Approvals â€” landlord approves/rejects waste collection requests
                 Route::get('/approvals', [WasteCollectionController::class, 'pendingApprovals'])
                     ->name('approvals');
 
@@ -15213,36 +16052,36 @@ Route::middleware(['auth', 'verified'])
                     ->name('history');
 
                 // --------------------------------------------------------- //
-                // 🔍 SINGLE REQUEST                                        //
+                // ðŸ” SINGLE REQUEST                                        //
                 // --------------------------------------------------------- //
 
                 // View a specific request
-                // ✅ Constrained to numeric IDs so it never collides with other routes
+                // âœ… Constrained to numeric IDs so it never collides with other routes
                 Route::get('/request/{wasteCollectionRequest}', [WasteCollectionController::class, 'showRequest'])
                     ->whereNumber('wasteCollectionRequest')
                     ->name('request.show');
 
                 // --------------------------------------------------------- //
-                // ✅ APPROVE / ❌ REJECT                                   //
+                // âœ… APPROVE / âŒ REJECT                                   //
                 // --------------------------------------------------------- //
 
-                // Approve a request (POST) — throttled to prevent spam
+                // Approve a request (POST) â€” throttled to prevent spam
                 Route::post('/request/{wasteCollectionRequest}/approve', [WasteCollectionController::class, 'approveRequest'])
                     ->whereNumber('wasteCollectionRequest')
                     ->middleware('throttle:30,1')     // 30 per minute
                     ->name('request.approve');
 
-                // Reject a request (POST) — throttled
+                // Reject a request (POST) â€” throttled
                 Route::post('/request/{wasteCollectionRequest}/reject', [WasteCollectionController::class, 'rejectRequest'])
                     ->whereNumber('wasteCollectionRequest')
                     ->middleware('throttle:30,1')
                     ->name('request.reject');
 
                 // --------------------------------------------------------- //
-                // ⚡ BULK ACTIONS                                          //
+                // âš¡ BULK ACTIONS                                          //
                 // --------------------------------------------------------- //
 
-                // Bulk Approve — throttled harder since it touches many records
+                // Bulk Approve â€” throttled harder since it touches many records
                 Route::post('/bulk-approve', [WasteCollectionController::class, 'bulkApprove'])
                     ->middleware('throttle:10,1')     // 10 per minute
                     ->name('bulk.approve');
@@ -15253,7 +16092,7 @@ Route::middleware(['auth', 'verified'])
                 //     ->name('bulk.reject');
 
                 // --------------------------------------------------------- //
-                // 🗑️ BIN FULL                                              //
+                // ðŸ—‘ï¸ BIN FULL                                              //
                 // --------------------------------------------------------- //
 
                 Route::post('/bin-full', [WasteCollectionController::class, 'reportBinFull'])
@@ -15261,12 +16100,12 @@ Route::middleware(['auth', 'verified'])
                     ->name('bin.full');
 
                 // --------------------------------------------------------- //
-                // 🆕 REQUEST SANITATION SERVICE                            //
+                // ðŸ†• REQUEST SANITATION SERVICE                            //
                 // --------------------------------------------------------- //
                 // Landlord asks a sanitation supervisor (created by admin)
                 // to link one of their unlinked properties for collection.
 
-                // Submit a service request — throttled to stop dropdown spam
+                // Submit a service request â€” throttled to stop dropdown spam
                 Route::post('/request-service', [WasteCollectionController::class, 'requestSanitationService'])
                     ->middleware('throttle:10,1')     // 10 per minute
                     ->name('request.service');
@@ -15326,7 +16165,7 @@ Route::middleware(['auth', 'web', 'multi.auth.user:8'])->prefix('contractor')->n
 |
 | Serves files from `storage/app/public/*` through Laravel so the CORS
 | middleware in `config/cors.php` applies. This is required for Flutter
-| Web clients, which load images via the browser — and the browser
+| Web clients, which load images via the browser â€” and the browser
 | enforces CORS on every cross-origin request, including images.
 |
 | Why /files instead of /storage:
@@ -15342,7 +16181,7 @@ Route::middleware(['auth', 'web', 'multi.auth.user:8'])->prefix('contractor')->n
 |   route MUST be outside any auth middleware or it will 302-redirect
 |   to /login before it can serve the file.
 |
-| ⚠️  IMPORTANT — DO NOT run `php artisan storage:link` in this project.
+| âš ï¸  IMPORTANT â€” DO NOT run `php artisan storage:link` in this project.
 |     The `public/storage` symlink (or Windows junction) shadows this
 |     route. When it exists, the web server serves the file directly,
 |     bypassing CORS middleware, and Flutter Web images break with a
@@ -15356,7 +16195,7 @@ Route::middleware(['auth', 'web', 'multi.auth.user:8'])->prefix('contractor')->n
 */
 
 Route::get('/files/{path}', function (string $path) {
-    // Path traversal guard — reject anything with `..` in it.
+    // Path traversal guard â€” reject anything with `..` in it.
     if (str_contains($path, '..')) {
         abort(400);
     }
@@ -15385,14 +16224,14 @@ Route::get('/files/{path}', function (string $path) {
 
 /*
 |--------------------------------------------------------------------------
-| SEARCH ROUTES — Role-aware (Super Admin + Admin + Developer)
+| SEARCH ROUTES â€” Role-aware (Super Admin + Admin + Developer)
 |--------------------------------------------------------------------------
 */
 Route::middleware(['auth', 'multi.auth.user:0,1'])
     ->prefix('admin')
     ->name('admin.')
     ->group(function () {
-        // Fast AJAX suggest — top 5 per category, 30s cache
+        // Fast AJAX suggest â€” top 5 per category, 30s cache
         Route::get('/search/suggest', [SearchController::class, 'suggest'])
             ->name('search.suggest')
             ->middleware('throttle:60,1');
@@ -15403,6 +16242,304 @@ Route::middleware(['auth', 'multi.auth.user:0,1'])
             ->middleware('throttle:30,1');
     });
 
+
+/*
+|--------------------------------------------------------------------------
+| Admin — Homepage Content Manager
+|--------------------------------------------------------------------------
+| Super Admin (type 0) and Admin (type 1) can edit the public homepage.
+| Developer (type 5) is intentionally excluded — homepage is a product
+| concern, not an infrastructure concern.
+*/
+
+Route::middleware(['auth', 'multi.auth.user:0,1'])
+    ->prefix('admin/homepage-content')
+    ->name('admin.homepage-content.')
+    ->group(function () {
+
+        Route::get('/',          [HomepageContentController::class, 'index'])  ->name('index');
+        Route::put('/',          [HomepageContentController::class, 'update']) ->name('update');
+
+        Route::post('/background',   [HomepageContentController::class, 'uploadBackground']) ->name('background.upload');
+        Route::delete('/background', [HomepageContentController::class, 'removeBackground']) ->name('background.remove');
+
+        Route::post('/reset',        [HomepageContentController::class, 'reset'])            ->name('reset');
+        Route::get('/preview',       [HomepageContentController::class, 'preview'])          ->name('preview');
+
+        // 🎨 Homepage theme endpoints
+        Route::post('/theme/preset', [HomepageContentController::class, 'applyThemePreset']) ->name('theme.preset');
+        Route::post('/theme/reset',  [HomepageContentController::class, 'resetTheme'])       ->name('theme.reset');
+
+        // 🔐 Login page — background image
+        Route::post('/login/background',   [HomepageContentController::class, 'uploadLoginBackground'])
+            ->name('login.background.upload');
+        Route::delete('/login/background', [HomepageContentController::class, 'removeLoginBackground'])
+            ->name('login.background.remove');
+
+        // 🔐 Login page — content save + reset + preview
+        Route::put('/login',         [HomepageContentController::class, 'updateLoginPage'])  ->name('login.update');
+        Route::post('/login/reset',  [HomepageContentController::class, 'resetLoginPage'])   ->name('login.reset');
+        Route::get('/login/preview', [HomepageContentController::class, 'previewLogin'])     ->name('login.preview');
+
+        // 🎨 Login page — theme endpoints
+        Route::post('/login/theme/preset', [HomepageContentController::class, 'applyLoginThemePreset'])
+            ->name('login.theme.preset');
+        Route::post('/login/theme/reset',  [HomepageContentController::class, 'resetLoginTheme'])
+            ->name('login.theme.reset');
+
+        // ============================================================
+        // 📢 AD SPACE — settings, pricing plans, campaign review, shares
+        // ============================================================
+        // All admin AD routes live here. Admin middleware is inherited
+        // from the outer group. No ad.enabled gate — the admin must be
+        // able to reach these routes even when the feature is disabled,
+        // because that's how they re-enable it.
+        Route::prefix('ads')->name('ads.')->group(function () {
+
+            // ── Global settings ─────────────────────────────────
+            Route::get('/',         [HomepageContentController::class, 'adSettings'])       ->name('settings');
+            Route::put('/settings', [HomepageContentController::class, 'updateAdSettings']) ->name('settings.update');
+
+            // ── Pricing plans ───────────────────────────────────
+            Route::post('/plans',              [HomepageContentController::class, 'storeAdPlan'])  ->name('plans.store');
+            Route::patch('/plans/{id}',        [HomepageContentController::class, 'updateAdPlan']) ->name('plans.update');
+            Route::post('/plans/{id}/toggle',  [HomepageContentController::class, 'toggleAdPlan']) ->name('plans.toggle');
+            Route::delete('/plans/{id}',       [HomepageContentController::class, 'deleteAdPlan']) ->name('plans.destroy');
+
+            // ── Campaign review ─────────────────────────────────
+            Route::get('/campaigns',                      [HomepageContentController::class, 'adCampaigns'])         ->name('campaigns');
+            Route::post('/campaigns/{id}/approve-rented', [HomepageContentController::class, 'approveRentedCampaign'])->name('campaigns.approve-rented');
+            Route::post('/campaigns/{id}/cancel',         [HomepageContentController::class, 'cancelAdCampaign'])    ->name('campaigns.cancel');
+
+            // ✅ Admin delete of a campaign.
+            //    Controller re-checks all three guards (no paid invoices,
+            //    no invoices at all, not active/pending) — the blade's
+            //    disabled state is UI convenience only.
+            Route::delete('/campaigns/{id}', [HomepageContentController::class, 'destroyAdCampaign'])
+                ->name('campaigns.destroy');
+
+            // ✅ Record a social share.
+            //    Called via fetch() from the "Post to Social" dropdown
+            //    when the admin clicks a share button. Returns JSON.
+            Route::post('/campaigns/{id}/track-share', [HomepageContentController::class, 'trackShare'])
+                ->name('campaigns.track-share');
+
+            // ✅ Fetch share history for a campaign (JSON).
+            //    Used by the campaign detail page and any future analytics.
+            Route::get('/campaigns/{id}/shares', [HomepageContentController::class, 'listShares'])
+                ->name('campaigns.shares');
+
+            // ── Invoices (revenue view) ─────────────────────────
+            Route::get('/invoices', [HomepageContentController::class, 'adInvoices']) ->name('invoices');
+        });
+    });
+
+
+/*
+|--------------------------------------------------------------------------
+| Admin — Unit Inquiries
+|--------------------------------------------------------------------------
+| Admin + Super Admin view every inquiry across the platform. The
+| landlord-scoped view lives further down under the landlord group.
+|
+| Multi-tenancy note: `landlord_id` is denormalized onto the inquiry,
+| so scoping is a simple where() — no joins required.
+*/
+
+Route::middleware(['auth', 'multi.auth.user:0'])
+    ->prefix('admin/inquiries')
+    ->name('admin.inquiries.')
+    ->group(function () {
+
+        Route::get('/',                [\App\Http\Controllers\Admin\AdminInquiryController::class, 'index'])  ->name('index');
+        Route::get('/{uuid}',          [\App\Http\Controllers\Admin\AdminInquiryController::class, 'show'])   ->name('show');
+        Route::post('/{uuid}/reply',   [\App\Http\Controllers\Admin\AdminInquiryController::class, 'reply'])  ->name('reply');
+        Route::patch('/{uuid}/status', [\App\Http\Controllers\Admin\AdminInquiryController::class, 'status']) ->name('status');
+        Route::delete('/{uuid}',       [\App\Http\Controllers\Admin\AdminInquiryController::class, 'destroy'])->name('destroy');
+        Route::get('/export',          [\App\Http\Controllers\Admin\AdminInquiryController::class, 'export']) ->name('export');
+    });
+
+
+/*
+|--------------------------------------------------------------------------
+| Public — AD click tracking + public unit page
+|--------------------------------------------------------------------------
+| These run WITHOUT authentication. The `ad.enabled` middleware 404s
+| the request when the AD subsystem is disabled (defense-in-depth).
+|
+| The public unit page runs `ad.enabled` + `ad.track.view` so
+| views_count increments on campaigns whose click was tracked.
+| Non-ad visits are a no-op.
+|
+| ⚠️  Inline the two middleware — there is no `ad.public` composite.
+*/
+
+Route::middleware('ad.enabled')
+    ->get('/ads/{uuid}/click', [AdPublicController::class, 'click'])
+    ->name('ads.click')
+    ->where('uuid', '[a-f0-9-]{36}');
+
+Route::middleware(['ad.enabled', 'ad.track.view'])
+    ->get('/properties/units/{id}', [PropertyUnitPublicController::class, 'show'])
+    ->name('property-units.public-show')
+    ->where('id', '[0-9]+');
+
+
+/*
+|--------------------------------------------------------------------------
+| Public — Guest inquiry for a specific unit
+|--------------------------------------------------------------------------
+| No auth required. The visitor (a prospective tenant) submits their
+| name, phone, optional email, and a message. The platform delivers
+| the inquiry to the landlord via SMS, Email, and WhatsApp — the
+| visitor NEVER sees the landlord's contact details.
+|
+| Rate limited to 3 inquiries per hour per IP (enforced in the
+| controller via RateLimiter). A honeypot field ("website") catches
+| most bots. The inquiry row is persisted BEFORE attempting delivery,
+| so a failed SMS doesn't lose the lead.
+|
+| The `id` constraint prevents `/units/abc` from hitting the
+| controller with a non-numeric id (would throw TypeError → 500).
+*/
+
+Route::post('/properties/units/{unit}/inquiry', [UnitInquiryController::class, 'store'])
+    ->where('unit', '[0-9]+')
+    ->name('property-units.inquiry.store');
+
+
+/*
+|--------------------------------------------------------------------------
+| Public — Listing report / flag
+|--------------------------------------------------------------------------
+| Anyone (guest or logged in) can flag a listing as suspicious, spam,
+| or fraudulent. Admin reviews the flag queue.
+|
+| Throttled by IP at the controller level. No auth required so a guest
+| can report a scam listing they encountered.
+*/
+
+Route::post('/properties/units/{unit}/report', [UnitInquiryController::class, 'report'])
+    ->where('unit', '[0-9]+')
+    ->name('property-units.report.store');
+
+Route::get('/properties/units/{unit}/report', [UnitInquiryController::class, 'reportForm'])
+    ->where('unit', '[0-9]+')
+    ->name('property-units.report.form');
+
+
+/*
+|--------------------------------------------------------------------------
+| Landlord — AD campaign management
+|--------------------------------------------------------------------------
+| `ad.enabled` is inlined on the outer group. Routes that take {uuid}
+| layer `ad.campaign.owner` so a landlord cannot enumerate other
+| landlords' campaigns via UUID guessing.
+|
+| Auth: `multi.auth.user:2` = landlord type (matches app convention).
+|
+| ⚠️  Inline `ad.enabled` — there is no `ad.landlord` composite.
+|
+| ⚠️  PAYMENT ROUTES:
+|     GET  /{uuid}/pay  → AdPaymentController@pay         (shows the form)
+|     POST /{uuid}/pay  → AdPaymentController@payProcess  (initiates payment)
+|
+|     Both must point to DIFFERENT methods. If POST points to `pay()`,
+|     clicking "Pay" just re-renders the form and looks like nothing
+|     happened — which was the Paystack bug we fixed.
+*/
+
+Route::middleware(['auth', 'multi.auth.user:2', 'ad.enabled'])
+    ->prefix('landlord')
+    ->name('landlord.')
+    ->group(function () {
+
+        Route::prefix('ads')->name('ads.')->group(function () {
+
+            Route::get('/',       [AdCampaignController::class, 'index']) ->name('index');
+            Route::get('/create', [AdCampaignController::class, 'create'])->name('create');
+            Route::post('/',      [AdCampaignController::class, 'store']) ->name('store');
+
+            Route::middleware('ad.campaign.owner')->group(function () {
+                Route::get('/{uuid}',              [AdCampaignController::class, 'show'])       ->name('show');
+                Route::post('/{uuid}/mark-rented', [AdCampaignController::class, 'markRented']) ->name('mark-rented');
+                Route::post('/{uuid}/cancel',      [AdCampaignController::class, 'cancel'])     ->name('cancel');
+
+                // ✅ Landlord delete — narrower than admin delete
+                Route::delete('/{uuid}',           [AdCampaignController::class, 'destroy'])    ->name('destroy');
+
+                Route::get('/{uuid}/pay',  [AdPaymentController::class, 'pay'])        ->name('pay');
+                Route::post('/{uuid}/pay', [AdPaymentController::class, 'payProcess']) ->name('pay.process');
+            });
+        });
+    });
+
+
+/*
+|--------------------------------------------------------------------------
+| Landlord — Unit Inquiries
+|--------------------------------------------------------------------------
+| The landlord sees inquiries that were routed to them. `landlord_id` is
+| denormalized on the inquiry row, so scoping is `where('landlord_id',
+| auth()->id())` — no joins, no N+1.
+|
+| The detail page auto-flips status from `new` → `read` on first view,
+| and the reply form appends to a threaded conversation stored on the
+| same row (`replied_at` timestamp + `reply_message` column).
+|
+| The landlord can also mark inquiries as spam / closed to keep the
+| inbox clean. Spam marks feed the admin's abuse dashboard.
+*/
+
+Route::middleware(['auth', 'multi.auth.user:2'])
+    ->prefix('landlord/inquiries')
+    ->name('landlord.inquiries.')
+    ->group(function () {
+
+        Route::get('/',                [\App\Http\Controllers\Landlord\LandlordInquiryController::class, 'index'])  ->name('index');
+        Route::get('/{uuid}',          [\App\Http\Controllers\Landlord\LandlordInquiryController::class, 'show'])   ->name('show');
+        Route::post('/{uuid}/reply',   [\App\Http\Controllers\Landlord\LandlordInquiryController::class, 'reply'])  ->name('reply');
+        Route::patch('/{uuid}/status', [\App\Http\Controllers\Landlord\LandlordInquiryController::class, 'status']) ->name('status');
+
+        // Optional: allow landlord to archive (soft-delete) an inquiry
+        Route::delete('/{uuid}',       [\App\Http\Controllers\Landlord\LandlordInquiryController::class, 'destroy'])->name('destroy');
+
+        // Badge counts for the top nav (JSON, polled every 60s)
+        Route::get('/unread-count',    [\App\Http\Controllers\Landlord\LandlordInquiryController::class, 'unreadCount'])
+            ->name('unread-count');
+    });
+
+
+/*
+|--------------------------------------------------------------------------
+| Landlord — Reply to inquiry (shortcut from email / SMS / WhatsApp)
+|--------------------------------------------------------------------------
+| Every notification sent to the landlord contains a link to
+| /landlord/inquiries/{uuid}, which is the full reply form. No
+| separate shortcut route is needed — but if you ever want a one-click
+| reply link (e.g. from a WhatsApp reply button that doesn't open a
+| browser), add it here.
+|
+| Note: the guest does NOT receive a link — the platform forwards the
+| landlord's reply to the guest's email/phone on the landlord's behalf.
+*/
+
+
+/*
+|--------------------------------------------------------------------------
+| Payment callback — public
+|--------------------------------------------------------------------------
+| Gateways redirect here after payment. Must be reachable WITHOUT auth
+| because the gateway's redirect is a GET from their server, not the
+| user's browser session.
+|
+| Security is enforced INSIDE the controller (verifyPayment before
+| marking an invoice paid), not by route middleware.
+*/
+
+Route::get('/ads/payment/callback/{gateway}', [AdPaymentController::class, 'callback'])
+    ->name('ads.payment.callback')
+    ->where('gateway', '[a-z]+');
 
 Route::middleware('auth')->get('/{any}', function () {
     return redirect()->route('dashboard');

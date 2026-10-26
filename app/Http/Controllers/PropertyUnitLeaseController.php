@@ -3,10 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Models\PropertyUnit;
+use App\Models\PropertyFamilyLink;
 use App\Models\RentalAgreement;
 use App\Models\User;
 use App\Models\TenantInvitation;
-use App\Models\PropertyUnitInvoice;            // ✅ INVOICE: was App\Models\Invoice
+use App\Models\PropertyUnitInvoice;
 use App\Mail\LeaseInvitationMail;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -42,28 +43,24 @@ class PropertyUnitLeaseController extends Controller
 
         $user = auth()->user();
 
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-        $isTenant        = $user->isTenant()   || $user->hasRole('tenant');
-        $isAdmin         = $user->isAdmin()    || $user->hasRole('admin');
-        $isSuperAdmin    = $user->isSuperAdmin() || $user->hasRole('super-admin');
+        // ✅ FIX: use the policy, not the ownership check.
+        $flags             = $this->familyLinkFlagsFor($unit->property, $user);
+        $isPropertyOwner   = $flags['isOwner'];
+        $canManageLeases   = $user->can('manageLeases', $unit->property);
 
-        $isPropertyOwner = $hasLandlordRole && $unit->property->landlord_id === $user->id;
+        $canCreateLease = $canManageLeases
+            && $unit->tenant_status === PropertyUnit::TENANT_STATUS_APPROVED
+            && (!$unit->currentLease || $unit->currentLease->status !== 'active');
 
-        $canCreateLease = $isPropertyOwner &&
-                         $unit->tenant_status === PropertyUnit::TENANT_STATUS_APPROVED &&
-                         (!$unit->currentLease || $unit->currentLease->status !== 'active');
+        $canRenewLease = $canManageLeases
+            && $unit->currentLease
+            && $unit->currentLease->status === 'active'
+            && $unit->currentLease->end_date
+            && $unit->currentLease->end_date->diffInDays(now()) <= 60;
 
-        $canRenewLease = $hasLandlordRole &&
-                        $unit->property->landlord_id === $user->id &&
-                        $unit->currentLease &&
-                        $unit->currentLease->status === 'active' &&
-                        $unit->currentLease->end_date &&
-                        $unit->currentLease->end_date->diffInDays(now()) <= 60;
-
-        $canTerminateLease = $hasLandlordRole &&
-                            $unit->property->landlord_id === $user->id &&
-                            $unit->currentLease &&
-                            $unit->currentLease->status === 'active';
+        $canTerminateLease = $canManageLeases
+            && $unit->currentLease
+            && $unit->currentLease->status === 'active';
 
         // ✅ GHANA: Expose current phase + advance info + invoice summary
         $currentPhase = null;
@@ -83,7 +80,6 @@ class PropertyUnitLeaseController extends Controller
                 'is_compliant'               => $unit->currentLease->advance_rent_compliance_status === 'compliant',
             ];
 
-            // ✅ INVOICE: Pull invoice summary via the new model
             $invoiceSummary = [
                 'total_invoiced' => PropertyUnitInvoice::where('lease_id', $unit->currentLease->id)->sum('amount'),
                 'total_paid'     => PropertyUnitInvoice::where('lease_id', $unit->currentLease->id)->sum('amount_paid'),
@@ -101,12 +97,13 @@ class PropertyUnitLeaseController extends Controller
             'canCreateLease',
             'canRenewLease',
             'canTerminateLease',
-            'hasLandlordRole',
             'isPropertyOwner',
             'currentPhase',
             'advanceInfo',
             'invoiceSummary'
-        ));
+        ) + [
+            'hasLandlordRole' => $user->isLandlord() || $user->hasRole('landlord'),
+        ]);
     }
 
     public function showCreateLeaseForm($id)
@@ -114,16 +111,10 @@ class PropertyUnitLeaseController extends Controller
         $unit = PropertyUnit::with(['property', 'tenant'])->findOrFail($id);
         $user = auth()->user();
 
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-
-        if ($hasLandlordRole) {
-            if ($unit->property->landlord_id !== $user->id) {
-                return redirect()->route('property-units.show', $id)
-                    ->with('error', 'Only the property owner can create leases.');
-            }
-        } else {
+        // ✅ FIX: policy check instead of ownership check.
+        if (!$user->can('manageLeases', $unit->property)) {
             return redirect()->route('property-units.show', $id)
-                ->with('error', 'Only property owners can create leases. Administrators have view-only access.');
+                ->with('error', 'You do not have permission to create leases on this property.');
         }
 
         if ($unit->tenant_status !== PropertyUnit::TENANT_STATUS_APPROVED) {
@@ -141,7 +132,6 @@ class PropertyUnitLeaseController extends Controller
         $penaltyTerms       = $this->getPenaltyTerms();
         $maintenanceTerms   = $this->getMaintenanceTerms();
 
-        // ✅ GHANA: Advance-rent guidance for the form
         $advanceRentOptions = $this->getAdvanceRentOptions();
         $legalMaxAdvance    = self::LEGAL_MAX_ADVANCE_MONTHS_NEW_TENANCY;
         $monthlyRentDefault = $unit->current_rent_amount ?? $unit->monthly_rent;
@@ -163,17 +153,10 @@ class PropertyUnitLeaseController extends Controller
         $unit = PropertyUnit::with(['property', 'tenant'])->findOrFail($id);
         $user = auth()->user();
 
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-
-        if ($hasLandlordRole) {
-            if ($unit->property->landlord_id !== $user->id) {
-                return redirect()->back()
-                    ->with('error', 'Only the property owner can create leases.')
-                    ->withInput();
-            }
-        } else {
+        // ✅ FIX
+        if (!$user->can('manageLeases', $unit->property)) {
             return redirect()->back()
-                ->with('error', 'Only property owners can create leases. Administrators have view-only access.')
+                ->with('error', 'You do not have permission to create leases on this property.')
                 ->withInput();
         }
 
@@ -183,45 +166,36 @@ class PropertyUnitLeaseController extends Controller
                 ->withInput();
         }
 
-        // ========== VALIDATION ==========
         $validator = Validator::make($request->all(), [
-            // Lease term
             'lease_type'      => 'required|in:fixed,month_to_month',
             'start_date'      => 'required|date|after_or_equal:today',
             'end_date'        => 'required_if:lease_type,fixed|nullable|date|after:start_date',
             'duration_months' => 'required_if:lease_type,fixed|nullable|integer|min:1|max:60',
 
-            // ✅ GHANA: Advance rent fields
             'payment_frequency'         => 'required|in:monthly,advance_only',
             'advance_rent_months'       => 'required|integer|min:1|max:60',
             'advance_rent_acknowledged' => 'sometimes|boolean',
 
-            // Financial
             'monthly_rent' => 'required|numeric|min:0.01|max:999999.99',
 
-            // Security deposit
             'enable_security_deposit'    => 'sometimes|boolean',
             'security_deposit'           => 'nullable|required_if:enable_security_deposit,1|numeric|min:0|max:999999.99',
             'deposit_payment_method'     => 'nullable|required_if:enable_security_deposit,1|in:upfront,installment',
             'deposit_installment_months' => 'nullable|required_if:deposit_payment_method,installment|integer|min:2|max:12',
             'utility_deposit'            => 'nullable|numeric|min:0|max:999999.99',
 
-            // Late payment
             'late_fee_percentage' => 'nullable|numeric|min:0|max:50',
             'late_fee_fixed'      => 'nullable|numeric|min:0|max:999999.99',
             'grace_period_days'   => 'nullable|integer|min:0|max:15',
             'payment_due_day'     => 'required|integer|min:1|max:28',
 
-            // Termination
             'notice_period_days'    => 'required|integer|min:15|max:90',
             'early_termination_fee' => 'nullable|numeric|min:0|max:999999.99',
 
-            // Additional
             'renewal_terms'          => 'nullable|string|max:2000',
             'special_terms'          => 'nullable|string|max:5000',
             'include_standard_terms' => 'boolean',
 
-            // Invitation
             'send_to_tenant'            => 'boolean',
             'invitation_channels'       => 'nullable|required_if:send_to_tenant,true|array|min:1',
             'invitation_channels.*'     => 'in:sms,email,whatsapp',
@@ -234,7 +208,6 @@ class PropertyUnitLeaseController extends Controller
             'advance_rent_months.required'    => 'Please specify how many months of advance rent apply.',
         ]);
 
-        // ✅ GHANA: Business-rule validation (advance rent vs legal cap)
         $validator->after(function ($validator) use ($request) {
             $advanceMonths  = (int) $request->advance_rent_months;
             $leaseType      = $request->lease_type;
@@ -273,7 +246,6 @@ class PropertyUnitLeaseController extends Controller
 
         DB::beginTransaction();
         try {
-            // ========== DERIVE DATES ==========
             $startDate = Carbon::parse($request->start_date);
 
             $endDate = null;
@@ -287,7 +259,6 @@ class PropertyUnitLeaseController extends Controller
                 }
             }
 
-            // ✅ GHANA: Advance rent period + first monthly payment date
             $advanceMonths      = (int) $request->advance_rent_months;
             $monthlyRent        = (float) $request->monthly_rent;
             $advanceRentAmount  = $monthlyRent * $advanceMonths;
@@ -300,7 +271,6 @@ class PropertyUnitLeaseController extends Controller
                     ->setDay((int) $request->payment_due_day);
             }
 
-            // ✅ GHANA: Compliance status
             $isShortTenancy = $request->lease_type === 'fixed' && ($request->duration_months ?? 0) <= 6;
             $legalMax       = $isShortTenancy
                 ? self::LEGAL_MAX_ADVANCE_MONTHS_SHORT_TENANCY
@@ -309,7 +279,6 @@ class PropertyUnitLeaseController extends Controller
 
             $leaseTerms = $this->generateLeaseTerms($request, $unit);
 
-            // ========== SECURITY DEPOSIT ==========
             $securityDeposit           = 0;
             $depositPaymentMethod      = null;
             $depositInstallmentMonths  = null;
@@ -325,21 +294,18 @@ class PropertyUnitLeaseController extends Controller
                 }
             }
 
-            // ========== LATE FEES ==========
             $lateFeePercentage = $request->filled('late_fee_percentage') ? floatval($request->late_fee_percentage) : 0;
             $lateFeeFixed      = $request->filled('late_fee_fixed') ? floatval($request->late_fee_fixed) : 0;
             $gracePeriodDays   = $request->filled('grace_period_days') ? intval($request->grace_period_days) : 0;
 
-            // ========== CREATE LEASE ==========
             $lease = RentalAgreement::create([
                 'unit_id'      => $unit->id,
                 'tenant_id'    => $unit->tenant_id,
                 'property_id'  => $unit->property_id,
-                'landlord_id'  => $user->id,
+                'landlord_id'  => $unit->property->landlord_id,
                 'lease_type'   => $request->lease_type,
                 'monthly_rent' => $monthlyRent,
 
-                // ✅ GHANA: Advance rent
                 'advance_rent_months'            => $advanceMonths,
                 'advance_rent_amount'            => $advanceRentAmount,
                 'advance_rent_paid_at'           => now(),
@@ -350,7 +316,6 @@ class PropertyUnitLeaseController extends Controller
                 'advance_rent_compliance_status' => $complianceStatus,
                 'advance_rent_acknowledged_at'   => $request->boolean('advance_rent_acknowledged') ? now() : null,
 
-                // Deposit
                 'security_deposit'            => $securityDeposit,
                 'deposit_payment_method'      => $depositPaymentMethod,
                 'deposit_installment_months'  => $depositInstallmentMonths,
@@ -359,36 +324,30 @@ class PropertyUnitLeaseController extends Controller
                 'deposit_fully_paid_at'       => null,
                 'utility_deposit'             => $request->utility_deposit ?? 0,
 
-                // Late fees
                 'late_fee_percentage' => $lateFeePercentage,
                 'late_fee_fixed'      => $lateFeeFixed,
                 'grace_period_days'   => $gracePeriodDays,
                 'payment_due_day'     => $request->payment_due_day,
 
-                // Termination
                 'notice_period_days'    => $request->notice_period_days,
                 'early_termination_fee' => $request->early_termination_fee ?? 0,
 
-                // Term
                 'start_date'      => $startDate,
                 'end_date'        => $endDate,
                 'duration_months' => $request->duration_months ?? null,
 
-                // Terms
                 'terms'         => $leaseTerms,
                 'renewal_terms' => $request->renewal_terms,
                 'special_terms' => $request->special_terms,
 
-                // Meta
                 'status'          => 'draft',
                 'created_by'      => $user->id,
-                'created_by_type' => 'landlord',
-                'notes'           => 'Lease created by landlord ' . $user->name
+                'created_by_type' => $flags ?? ($user->can('manageLeases', $unit->property) ? 'linked_family' : 'landlord'),
+                'notes'           => 'Lease created by ' . $user->name
                                      . ' | Advance: ' . $advanceMonths . ' months (GHS '
                                      . number_format($advanceRentAmount, 2) . ')',
             ]);
 
-            // ========== UPDATE UNIT ==========
             $unit->current_lease_id    = $lease->id;
             $unit->current_rent_amount = $monthlyRent;
             $unit->security_deposit    = $securityDeposit;
@@ -396,10 +355,8 @@ class PropertyUnitLeaseController extends Controller
             $unit->lease_end_date      = $endDate;
             $unit->save();
 
-            // ========== ✅ INVOICE: GENERATE INVOICES ==========
             $this->generateLeaseInvoices($lease, $unit);
 
-            // ========== SEND INVITATION ==========
             $invitationResult = null;
             if ($request->boolean('send_to_tenant')) {
                 $invitationResult = $this->sendLeaseToTenant($lease, $unit, $request->invitation_channels);
@@ -408,7 +365,6 @@ class PropertyUnitLeaseController extends Controller
                 }
             }
 
-            // ========== LOG ==========
             $this->logActivity(
                 $user->id,
                 'lease_created',
@@ -454,7 +410,7 @@ class PropertyUnitLeaseController extends Controller
             return redirect()->route('property-units.lease-management', $unit->id)
                 ->with('success', $successMessage);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error creating lease: ' . $e->getMessage(), [
                 'trace'        => $e->getTraceAsString(),
@@ -477,22 +433,22 @@ class PropertyUnitLeaseController extends Controller
         $this->checkUnitAccessWithError($unit);
 
         $user = auth()->user();
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-        $isTenant        = $user->isTenant()   || $user->hasRole('tenant');
 
-        if ($hasLandlordRole && $unit->property->landlord_id !== $user->id) {
-            abort(403, 'You can only view leases for your own properties.');
+        // ✅ FIX: use viewLeases policy for family members; tenant
+        //         self-check stays as-is.
+        $isTenant = $user->isTenant() || $user->hasRole('tenant');
+
+        if (!$user->can('viewLeases', $unit->property) && !$isTenant) {
+            abort(403, 'You do not have permission to view leases on this property.');
         }
         if ($isTenant && $lease->tenant_id !== $user->id) {
             abort(403, 'You can only view your own leases.');
         }
 
-        // ✅ GHANA: Phase + next payment info
         $currentPhase       = $lease->current_phase;
         $nextPaymentDue     = $lease->next_payment_due_date;
         $nextPaymentAmount  = $lease->next_payment_amount;
 
-        // ✅ INVOICE: Load invoices + summary
         $invoices = PropertyUnitInvoice::where('lease_id', $lease->id)
             ->orderBy('due_date', 'asc')
             ->get();
@@ -516,123 +472,122 @@ class PropertyUnitLeaseController extends Controller
 
     public function landlordSignLease(Request $request, $unitId, $leaseId)
     {
-        $unit  = PropertyUnit::findOrFail($unitId);
+        $unit  = PropertyUnit::with('property')->findOrFail($unitId);
         $lease = RentalAgreement::where('unit_id', $unitId)->findOrFail($leaseId);
         $user  = auth()->user();
 
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-
-        if ($hasLandlordRole && $unit->property->landlord_id === $user->id) {
-            $validator = Validator::make($request->all(), [
-                'signature_data'         => 'required|string',
-                'signature_type'         => 'required|in:digital,upload',
-                'signed_at'              => 'required|date|before_or_equal:now',
-                'witness_name'           => 'nullable|string|max:255',
-                'witness_signature_data' => 'nullable|required_with:witness_name|string',
-                'witness_signature_type' => 'nullable|required_with:witness_name|in:digital,upload',
-                'witness_relationship'   => 'nullable|required_with:witness_name|string|max:100',
-                'witness_email'          => 'nullable|email|max:255',
-                'witness_phone'          => 'nullable|string|max:20',
-                'witness_role'           => 'nullable|string|max:100',
-            ]);
-
-            if ($validator->fails()) {
-                return redirect()->back()->withErrors($validator)->withInput();
-            }
-
-            DB::beginTransaction();
-            try {
-                $lease->signAsLandlord(
-                    user: $user,
-                    signatureData: $request->signature_data,
-                    signatureType: $request->signature_type
-                );
-
-                $witnessSignatureData = null;
-                if ($request->filled('witness_name') && $request->filled('witness_signature_data')) {
-                    $witnessSignatureData = [
-                        'name'                   => $request->witness_name,
-                        'relationship'           => $request->witness_relationship,
-                        'role'                   => $request->witness_role,
-                        'email'                  => $request->witness_email,
-                        'phone'                  => $request->witness_phone,
-                        'signature'              => $request->witness_signature_data,
-                        'signature_type'         => $request->witness_signature_type,
-                        'signed_at'              => now(),
-                        'witness_for'            => 'landlord',
-                        'witnessed_by_user_id'   => $user->id,
-                        'witnessed_by_user_name' => $user->name,
-                    ];
-
-                    $lease->update([
-                        'landlord_witness_signature' => $witnessSignatureData,
-                        'landlord_witness_signed_at' => now(),
-                    ]);
-
-                    $this->logActivity($user->id, 'landlord_witness_signed',
-                        'Landlord witness signed lease agreement', $unit->id,
-                        ['lease_id' => $lease->id, 'witness_name' => $witnessSignatureData['name'],
-                         'witness_role' => $witnessSignatureData['role']]);
-                }
-
-                $this->logActivity($user->id, 'landlord_signed_lease',
-                    'Landlord signed lease agreement' . ($witnessSignatureData ? ' with witness' : ''),
-                    $unit->id,
-                    ['lease_id' => $lease->id, 'has_witness' => !empty($witnessSignatureData),
-                     'witness_name' => $witnessSignatureData['name'] ?? null]);
-
-                if ($lease->tenant) {
-                    $notificationData = [
-                        'type'        => 'landlord_signed_lease',
-                        'unit_id'     => $unit->id,
-                        'lease_id'    => $lease->id,
-                        'landlord_id' => $user->id,
-                        'signed_at'   => $request->signed_at,
-                        'has_witness' => !empty($witnessSignatureData),
-                    ];
-                    if ($witnessSignatureData) {
-                        $notificationData['witness_name'] = $witnessSignatureData['name'];
-                        $notificationData['witness_role'] = $witnessSignatureData['role'];
-                    }
-
-                    $lease->tenant->notify(new \App\Notifications\GeneralNotification(
-                        title: 'Lease Signed by Landlord',
-                        message: "Landlord {$user->name} has signed the lease for Unit {$unit->unit_number}."
-                                 . ($witnessSignatureData ? " Witnessed by {$witnessSignatureData['name']} ({$witnessSignatureData['role']})." : ""),
-                        icon: 'fas fa-signature text-success',
-                        category: 'lease_signed',
-                        actionUrl: route('tenant.property-units.lease-details', [$unit->id, $lease->id]),
-                        priority: 1,
-                        data: $notificationData
-                    ));
-                }
-
-                if ($witnessSignatureData && !empty($witnessSignatureData['email'])) {
-                    try {
-                        Mail::to($witnessSignatureData['email'])->send(new \App\Mail\WitnessConfirmationMail(
-                            $witnessSignatureData['name'], $user->name, $unit, $lease,
-                            'landlord', $witnessSignatureData['role']
-                        ));
-                    } catch (\Exception $e) {
-                        Log::warning('Failed to send landlord witness confirmation email: ' . $e->getMessage());
-                    }
-                }
-
-                DB::commit();
-
-                return redirect()->route('property-units.lease-details', [$unit->id, $lease->id])
-                    ->with('success', 'Lease signed successfully.'
-                        . ($witnessSignatureData ? ' Witness signature recorded.' : '') . ' '
-                        . ($lease->tenant_signed_at ? 'Lease is now active.' : 'Waiting for tenant signature.'));
-
-            } catch (\Exception $e) {
-                DB::rollBack();
-                Log::error('Error signing lease as landlord: ' . $e->getMessage());
-                return redirect()->back()->with('error', 'Failed to sign lease: ' . $e->getMessage());
-            }
+        // ✅ FIX: manageLeases gates signing on behalf of the landlord.
+        if (!$user->can('manageLeases', $unit->property)) {
+            abort(403, 'You do not have permission to sign leases for this property.');
         }
 
-        abort(403, 'Only the property owner can sign leases.');
+        $validator = Validator::make($request->all(), [
+            'signature_data'         => 'required|string',
+            'signature_type'         => 'required|in:digital,upload',
+            'signed_at'              => 'required|date|before_or_equal:now',
+            'witness_name'           => 'nullable|string|max:255',
+            'witness_signature_data' => 'nullable|required_with:witness_name|string',
+            'witness_signature_type' => 'nullable|required_with:witness_name|in:digital,upload',
+            'witness_relationship'   => 'nullable|required_with:witness_name|string|max:100',
+            'witness_email'          => 'nullable|email|max:255',
+            'witness_phone'          => 'nullable|string|max:20',
+            'witness_role'           => 'nullable|string|max:100',
+        ]);
+
+        if ($validator->fails()) {
+            return redirect()->back()->withErrors($validator)->withInput();
+        }
+
+        DB::beginTransaction();
+        try {
+            $lease->signAsLandlord(
+                user: $user,
+                signatureData: $request->signature_data,
+                signatureType: $request->signature_type
+            );
+
+            $witnessSignatureData = null;
+            if ($request->filled('witness_name') && $request->filled('witness_signature_data')) {
+                $witnessSignatureData = [
+                    'name'                   => $request->witness_name,
+                    'relationship'           => $request->witness_relationship,
+                    'role'                   => $request->witness_role,
+                    'email'                  => $request->witness_email,
+                    'phone'                  => $request->witness_phone,
+                    'signature'              => $request->witness_signature_data,
+                    'signature_type'         => $request->witness_signature_type,
+                    'signed_at'              => now(),
+                    'witness_for'            => 'landlord',
+                    'witnessed_by_user_id'   => $user->id,
+                    'witnessed_by_user_name' => $user->name,
+                ];
+
+                $lease->update([
+                    'landlord_witness_signature' => $witnessSignatureData,
+                    'landlord_witness_signed_at' => now(),
+                ]);
+
+                $this->logActivity($user->id, 'landlord_witness_signed',
+                    'Landlord witness signed lease agreement', $unit->id,
+                    ['lease_id' => $lease->id, 'witness_name' => $witnessSignatureData['name'],
+                     'witness_role' => $witnessSignatureData['role']]);
+            }
+
+            $this->logActivity($user->id, 'landlord_signed_lease',
+                'Landlord signed lease agreement' . ($witnessSignatureData ? ' with witness' : ''),
+                $unit->id,
+                ['lease_id' => $lease->id, 'has_witness' => !empty($witnessSignatureData),
+                 'witness_name' => $witnessSignatureData['name'] ?? null]);
+
+            if ($lease->tenant) {
+                $notificationData = [
+                    'type'        => 'landlord_signed_lease',
+                    'unit_id'     => $unit->id,
+                    'lease_id'    => $lease->id,
+                    'landlord_id' => $user->id,
+                    'signed_at'   => $request->signed_at,
+                    'has_witness' => !empty($witnessSignatureData),
+                ];
+                if ($witnessSignatureData) {
+                    $notificationData['witness_name'] = $witnessSignatureData['name'];
+                    $notificationData['witness_role'] = $witnessSignatureData['role'];
+                }
+
+                $lease->tenant->notify(new \App\Notifications\GeneralNotification(
+                    title: 'Lease Signed by Landlord',
+                    message: "Landlord {$user->name} has signed the lease for Unit {$unit->unit_number}."
+                             . ($witnessSignatureData ? " Witnessed by {$witnessSignatureData['name']} ({$witnessSignatureData['role']})." : ""),
+                    icon: 'fas fa-signature text-success',
+                    category: 'lease_signed',
+                    actionUrl: route('tenant.property-units.lease-details', [$unit->id, $lease->id]),
+                    priority: 1,
+                    data: $notificationData
+                ));
+            }
+
+            if ($witnessSignatureData && !empty($witnessSignatureData['email'])) {
+                try {
+                    Mail::to($witnessSignatureData['email'])->send(new \App\Mail\WitnessConfirmationMail(
+                        $witnessSignatureData['name'], $user->name, $unit, $lease,
+                        'landlord', $witnessSignatureData['role']
+                    ));
+                } catch (\Throwable $e) {
+                    Log::warning('Failed to send landlord witness confirmation email: ' . $e->getMessage());
+                }
+            }
+
+            DB::commit();
+
+            return redirect()->route('property-units.lease-details', [$unit->id, $lease->id])
+                ->with('success', 'Lease signed successfully.'
+                    . ($witnessSignatureData ? ' Witness signature recorded.' : '') . ' '
+                    . ($lease->tenant_signed_at ? 'Lease is now active.' : 'Waiting for tenant signature.'));
+
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('Error signing lease as landlord: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Failed to sign lease: ' . $e->getMessage());
+        }
     }
 
     public function tenantSignLease(Request $request, $unitId, $leaseId)
@@ -733,7 +688,7 @@ class PropertyUnitLeaseController extends Controller
                     Mail::to($witnessSignatureData['email'])->send(new \App\Mail\WitnessConfirmationMail(
                         $witnessSignatureData['name'], $user->name, $unit, $lease, 'tenant'
                     ));
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     Log::warning('Failed to send witness confirmation email: ' . $e->getMessage());
                 }
             }
@@ -745,7 +700,7 @@ class PropertyUnitLeaseController extends Controller
                     . ($witnessSignatureData ? ' Witness signature recorded.' : '')
                     . ($lease->landlord_signed_at ? ' Lease is now active.' : ' Waiting for landlord signature.'));
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error signing lease as tenant: ' . $e->getMessage());
             return redirect()->back()->with('error', 'Failed to sign lease: ' . $e->getMessage());
@@ -756,17 +711,14 @@ class PropertyUnitLeaseController extends Controller
 
     public function renewLease(Request $request, $unitId)
     {
-        $unit = PropertyUnit::with(['currentLease'])->findOrFail($unitId);
+        $unit = PropertyUnit::with(['currentLease', 'property'])->findOrFail($unitId);
         $user = auth()->user();
 
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-
-        if ($hasLandlordRole) {
-            if ($unit->property->landlord_id !== $user->id) {
-                return redirect()->back()->with('error', 'Only the property owner can renew leases.')->withInput();
-            }
-        } else {
-            return redirect()->back()->with('error', 'Only property owners can renew leases.')->withInput();
+        // ✅ FIX
+        if (!$user->can('manageLeases', $unit->property)) {
+            return redirect()->back()
+                ->with('error', 'You do not have permission to renew leases on this property.')
+                ->withInput();
         }
 
         if (!$unit->currentLease || $unit->currentLease->status !== 'active') {
@@ -778,7 +730,6 @@ class PropertyUnitLeaseController extends Controller
             'renewal_duration_months' => 'required|integer|min:1|max:60',
             'new_monthly_rent'        => 'required|numeric|min:' . ($unit->current_rent_amount * 0.9) . '|max:' . ($unit->current_rent_amount * 1.2),
 
-            // ✅ GHANA: Renewal advance rent
             'renewal_advance_rent_months'  => 'required|integer|min:1|max:12',
             'renewal_payment_frequency'    => 'required|in:monthly,advance_only',
             'renewal_advance_acknowledged' => 'sometimes|boolean',
@@ -821,7 +772,6 @@ class PropertyUnitLeaseController extends Controller
                 ? $request->new_security_deposit
                 : $unit->security_deposit;
 
-            // ✅ GHANA: Renewal advance period
             $renewalStart       = Carbon::parse($request->renewal_start_date);
             $advanceMonths      = (int) $request->renewal_advance_rent_months;
             $advanceAmount      = $newMonthlyRent * $advanceMonths;
@@ -842,7 +792,6 @@ class PropertyUnitLeaseController extends Controller
                 'lease_type'   => $oldLease->lease_type,
                 'monthly_rent' => $newMonthlyRent,
 
-                // ✅ GHANA: Renewal advance rent
                 'advance_rent_months'            => $advanceMonths,
                 'advance_rent_amount'            => $advanceAmount,
                 'advance_rent_paid_at'           => now(),
@@ -873,7 +822,7 @@ class PropertyUnitLeaseController extends Controller
                 'special_terms'               => $oldLease->special_terms,
                 'status'                      => 'draft',
                 'created_by'                  => $user->id,
-                'created_by_type'             => 'landlord',
+                'created_by_type'             => $user->id === $unit->property->landlord_id ? 'landlord' : 'linked_family',
                 'notes'                       => 'Lease renewal | Advance: ' . $advanceMonths
                                                  . ' months (GHS ' . number_format($advanceAmount, 2) . ')',
                 'previous_lease_id'           => $oldLease->id,
@@ -888,7 +837,6 @@ class PropertyUnitLeaseController extends Controller
             }
             $unit->save();
 
-            // ✅ INVOICE: Generate renewal invoices
             $this->generateLeaseInvoices($newLease, $unit);
 
             if ($request->send_for_signature) {
@@ -925,7 +873,7 @@ class PropertyUnitLeaseController extends Controller
 
             return redirect()->route('property-units.lease-management', $unit->id)->with('success', $msg);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error renewing lease: ' . $e->getMessage());
             return redirect()->back()->with('error', 'Failed to renew lease: ' . $e->getMessage())->withInput();
@@ -939,16 +887,14 @@ class PropertyUnitLeaseController extends Controller
         $unit = PropertyUnit::with(['currentLease', 'property', 'tenant'])->findOrFail($unitId);
         $user = auth()->user();
 
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-        $isAdmin         = $user->isAdmin()    || $user->hasRole('admin');
-        $isSuperAdmin    = $user->isSuperAdmin() || $user->hasRole('super-admin');
-
-        if ($hasLandlordRole) {
-            if ($unit->property->landlord_id !== $user->id) {
-                return redirect()->back()->with('error', 'Only the property owner can terminate leases.')->withInput();
-            }
-        } elseif (!$isAdmin && !$isSuperAdmin) {
-            return redirect()->back()->with('error', 'Only property owners and administrators can terminate leases.')->withInput();
+        // ✅ FIX: manageLeases covers termination. If you want to
+        //         restrict termination to the actual owner, change
+        //         this to a stricter check — see discussion above.
+        if (!$user->can('manageLeases', $unit->property)
+            && !$user->isAdmin() && !$user->isSuperAdmin()) {
+            return redirect()->back()
+                ->with('error', 'You do not have permission to terminate leases on this property.')
+                ->withInput();
         }
 
         if (!$unit->currentLease || $unit->currentLease->status !== 'active') {
@@ -977,7 +923,6 @@ class PropertyUnitLeaseController extends Controller
             $terminationDate = Carbon::parse($request->termination_date);
             $lease = $unit->currentLease;
 
-            // ✅ GHANA: Advance-rent refund for unused period
             $advanceRefund = 0;
             if ($lease->advance_rent_period_end && $terminationDate->lt($lease->advance_rent_period_end)) {
                 $unusedMonths  = $terminationDate->diffInMonths($lease->advance_rent_period_end);
@@ -995,7 +940,7 @@ class PropertyUnitLeaseController extends Controller
                 'terminated_at'              => $terminationDate,
                 'termination_reason'         => $request->termination_reason,
                 'terminated_by'              => $user->id,
-                'terminated_by_type'         => $user->getRole(),
+                'terminated_by_type'         => $user->id === $unit->property->landlord_id ? 'landlord' : 'linked_family',
                 'prorated_rent_amount'       => $proratedRent,
                 'advance_rent_refund_amount' => $advanceRefund,
                 'security_deposit_refunded'  => $request->boolean('refund_deposit') ? $request->deposit_refund_amount : 0,
@@ -1033,7 +978,6 @@ class PropertyUnitLeaseController extends Controller
                      'termination_date' => $terminationDate->toDateString()]);
             }
 
-            // ✅ INVOICE: Void any pending future invoices
             PropertyUnitInvoice::where('lease_id', $lease->id)
                 ->whereIn('status', ['pending', 'overdue', 'partial'])
                 ->where('due_date', '>', $terminationDate)
@@ -1096,7 +1040,7 @@ class PropertyUnitLeaseController extends Controller
                         $request->boolean('refund_deposit') ? $request->deposit_refund_amount : 0,
                         $proratedRent
                     ));
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     Log::warning('Failed to send lease termination email: ' . $e->getMessage());
                 }
             }
@@ -1112,7 +1056,7 @@ class PropertyUnitLeaseController extends Controller
                         actionUrl: route('property-units.lease-details', [$unit->id, $lease->id]),
                         priority: 1,
                         data: [
-                            'type'             => 'lease_terminated_by_admin',
+                            'type'             => 'lease_terminated_by_linked_member',
                             'terminated_by'    => $user->name,
                             'termination_date' => $terminationDate->toDateString(),
                         ]
@@ -1129,7 +1073,6 @@ class PropertyUnitLeaseController extends Controller
                 'advance_refund'     => $advanceRefund,
                 'prorated_rent'      => $proratedRent,
                 'terminated_by'      => $user->name,
-                'terminated_by_role' => $user->getRole(),
                 'tenant_id'          => $unit->tenant_id,
                 'tenant_name'        => $unit->tenant ? $unit->tenant->name : null,
             ]);
@@ -1154,7 +1097,7 @@ class PropertyUnitLeaseController extends Controller
 
             return redirect()->route('property-units.show', $unit->id)->with('success', $successMessage);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error terminating lease: ' . $e->getMessage(), [
                 'trace'        => $e->getTraceAsString(),
@@ -1166,19 +1109,11 @@ class PropertyUnitLeaseController extends Controller
         }
     }
 
-    // ========== ✅ INVOICE: INVOICE GENERATION ==========
+    // ========== INVOICE: INVOICE GENERATION ==========
 
-    /**
-     * Generate the advance-rent invoice and schedule monthly invoices
-     * for the post-advance phase (if payment_frequency = 'monthly').
-     * Also creates the security deposit invoice when paid upfront.
-     *
-     * Uses App\Models\PropertyUnitInvoice.
-     */
     private function generateLeaseInvoices(RentalAgreement $lease, PropertyUnit $unit): void
     {
         try {
-            // 1) Advance rent invoice — immediately due, marked paid
             PropertyUnitInvoice::create([
                 'lease_id'      => $lease->id,
                 'unit_id'       => $unit->id,
@@ -1197,7 +1132,6 @@ class PropertyUnitLeaseController extends Controller
                 'paid_at'       => now(),
             ]);
 
-            // 2) Monthly invoices for the post-advance phase
             if ($lease->payment_frequency === 'monthly'
                 && $lease->first_monthly_payment_date
                 && $lease->end_date) {
@@ -1226,7 +1160,6 @@ class PropertyUnitLeaseController extends Controller
                 }
             }
 
-            // 3) Security deposit invoice (if upfront)
             if ($lease->security_deposit > 0 && $lease->deposit_payment_method === 'upfront') {
                 PropertyUnitInvoice::create([
                     'lease_id'     => $lease->id,
@@ -1250,176 +1183,141 @@ class PropertyUnitLeaseController extends Controller
                 'advance'   => $lease->advance_rent_amount,
             ]);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to generate lease invoices: ' . $e->getMessage(), [
                 'lease_id' => $lease->id ?? null,
             ]);
-            // Non-fatal — do not rethrow
         }
     }
 
     // ========== PDF GENERATION ==========
 
-/**
- * ✅ INVOICE + GHANA: Generate and download the lease agreement PDF.
- *
- * Permission matrix:
- *   - Super admin / Admin      → any lease
- *   - Landlord (owner)         → any lease on their own properties
- *   - Tenant                   → only their own lease
- *   - Anyone else              → 403
- */
-public function generateLeasePdf($unitId, $leaseId)
-{
-    // ========== LOAD WITH RELATIONSHIPS ==========
-    $unit = PropertyUnit::with(['property.landlord'])
-        ->findOrFail($unitId);
+    public function generateLeasePdf($unitId, $leaseId)
+    {
+        $unit = PropertyUnit::with(['property.landlord'])->findOrFail($unitId);
 
-    $lease = RentalAgreement::with([
-            'tenant',
-            'landlord',
-            'unit.property',
-            // ✅ INVOICE: optional — included so the template can show a
-            // summary if it ever grows that way
-            'invoices' => function ($q) {
-                $q->orderBy('due_date');
-            },
-        ])
-        ->where('unit_id', $unitId)
-        ->findOrFail($leaseId);
+        $lease = RentalAgreement::with([
+                'tenant',
+                'landlord',
+                'unit.property',
+                'invoices' => function ($q) {
+                    $q->orderBy('due_date');
+                },
+            ])
+            ->where('unit_id', $unitId)
+            ->findOrFail($leaseId);
 
-    // ========== ACCESS CONTROL ==========
-    $this->checkUnitAccessWithError($unit);
+        $this->checkUnitAccessWithError($unit);
 
-    $user = auth()->user();
+        $user = auth()->user();
 
-    $isSuperAdmin    = $user->isSuperAdmin() || $user->hasRole('super-admin');
-    $isAdmin         = $user->isAdmin()      || $user->hasRole('admin');
-    $hasLandlordRole = $user->isLandlord()   || $user->hasRole('landlord');
-    $isTenant        = $user->isTenant()     || $user->hasRole('tenant');
+        $isTenant = $user->isTenant() || $user->hasRole('tenant');
 
-    // Non-admin users: scope to ownership / assignment
-    if (!$isSuperAdmin && !$isAdmin) {
-        if ($hasLandlordRole && $unit->property->landlord_id !== $user->id) {
-            abort(403, 'You can only view leases for your own properties.');
+        // ✅ FIX: viewLeases policy for non-tenant callers.
+        if (!$user->can('viewLeases', $unit->property) && !$isTenant) {
+            abort(403, 'You do not have permission to view this lease.');
         }
         if ($isTenant && $lease->tenant_id !== $user->id) {
             abort(403, 'You can only view your own leases.');
         }
+
+        $currencySymbol = config('leases.ghana.currency.symbol', 'GH₵');
+        $governingLaw   = config('leases.ghana.governing_law', 'Rent Act, 1963 (Act 220)');
+
+        $advanceInfo = [
+            'has_advance_rent'      => (bool) ($lease->has_advance_rent ?? false),
+            'months'                => (int)  ($lease->advance_rent_months ?? 0),
+            'amount'                => (float)($lease->advance_rent_amount ?? 0),
+            'period_start'          => $lease->advance_rent_period_start,
+            'period_end'            => $lease->advance_rent_period_end,
+            'frequency'             => $lease->payment_frequency ?? 'monthly',
+            'is_advance_only'       => ($lease->payment_frequency ?? 'monthly') === 'advance_only',
+            'first_monthly_payment' => $lease->first_monthly_payment_date,
+            'is_compliant'          => (bool) ($lease->is_advance_rent_compliant ?? true),
+            'compliance_status'     => $lease->advance_rent_compliance_status ?? 'compliant',
+            'acknowledged_at'       => $lease->advance_rent_acknowledged_at,
+            'legal_max_months'      => (int) config('leases.ghana.legal_max_advance_months.new_tenancy', 6),
+        ];
+
+        $invoices = $lease->invoices ?? collect();
+
+        $invoiceSummary = [
+            'total_invoiced' => (float) $invoices->sum('amount'),
+            'total_paid'     => (float) $invoices->sum('amount_paid'),
+            'outstanding'    => (float) $invoices
+                ->whereIn('status', ['pending', 'partial', 'overdue'])
+                ->sum(fn ($i) => max(0, $i->amount - $i->amount_paid)),
+            'overdue_count'  => $invoices->where('status', 'overdue')->count(),
+            'paid_count'     => $invoices->where('status', 'paid')->count(),
+            'invoices'       => $invoices,
+        ];
+
+        $data = [
+            'lease'          => $lease,
+            'unit'           => $unit,
+            'property'       => $unit->property,
+            'tenant'         => $lease->tenant,
+            'landlord'       => $lease->landlord,
+            'generated_date' => now()->format('F j, Y'),
+            'generated_at'   => now(),
+            'currency_symbol' => $currencySymbol,
+            'governing_law'   => $governingLaw,
+            'advance_info'    => $advanceInfo,
+            'invoices'        => $invoices,
+            'invoice_summary' => $invoiceSummary,
+        ];
+
+        try {
+            $pdf = Pdf::loadView('pdf.lease-agreement', $data);
+
+            $pdf->setPaper('A4', 'portrait');
+            $pdf->setOption('isRemoteEnabled', false);
+            $pdf->setOption('isHtml5ParserEnabled', true);
+
+            $safeName = Str::slug($unit->property->property_name . '-' . $unit->unit_number);
+            $filename = "Lease-{$safeName}-{$lease->id}.pdf";
+
+            $this->logActivity(
+                $user->id,
+                'lease_pdf_downloaded',
+                'Lease agreement PDF downloaded',
+                $unit->id,
+                [
+                    'lease_id'     => $lease->id,
+                    'reference'    => $lease->agreement_number ?? null,
+                    'filename'     => $filename,
+                    'downloaded_at'=> now()->toIso8601String(),
+                ]
+            );
+
+            return $pdf->download($filename);
+
+        } catch (\Throwable $e) {
+            Log::error('Failed to generate lease PDF', [
+                'unit_id'  => $unitId,
+                'lease_id' => $leaseId,
+                'user_id'  => $user->id,
+                'error'    => $e->getMessage(),
+                'trace'    => $e->getTraceAsString(),
+            ]);
+
+            return redirect()->back()
+                ->with('error', 'Failed to generate the lease PDF. Please try again or contact support.');
+        }
     }
 
-    // ========== ✅ GHANA: CONFIG SNAPSHOT ==========
-    $currencySymbol = config('leases.ghana.currency.symbol', 'GH₵');
-    $governingLaw   = config('leases.ghana.governing_law', 'Rent Act, 1963 (Act 220)');
-
-    // ========== ✅ GHANA: ADVANCE-RENT PAYLOAD ==========
-    // Pass Carbon instances — the template formats them; no data loss.
-    $advanceInfo = [
-        'has_advance_rent'      => (bool) ($lease->has_advance_rent ?? false),
-        'months'                => (int)  ($lease->advance_rent_months ?? 0),
-        'amount'                => (float)($lease->advance_rent_amount ?? 0),
-        'period_start'          => $lease->advance_rent_period_start,
-        'period_end'            => $lease->advance_rent_period_end,
-        'frequency'             => $lease->payment_frequency ?? 'monthly',
-        'is_advance_only'       => ($lease->payment_frequency ?? 'monthly') === 'advance_only',
-        'first_monthly_payment' => $lease->first_monthly_payment_date,
-        'is_compliant'          => (bool) ($lease->is_advance_rent_compliant ?? true),
-        'compliance_status'     => $lease->advance_rent_compliance_status ?? 'compliant',
-        'acknowledged_at'       => $lease->advance_rent_acknowledged_at,
-        'legal_max_months'      => (int) config('leases.ghana.legal_max_advance_months.new_tenancy', 6),
-    ];
-
-    // ========== ✅ INVOICE: SUMMARY PAYLOAD (optional) ==========
-    $invoices = $lease->invoices ?? collect();
-
-    $invoiceSummary = [
-        'total_invoiced' => (float) $invoices->sum('amount'),
-        'total_paid'     => (float) $invoices->sum('amount_paid'),
-        'outstanding'    => (float) $invoices
-            ->whereIn('status', ['pending', 'partial', 'overdue'])
-            ->sum(fn ($i) => max(0, $i->amount - $i->amount_paid)),
-        'overdue_count'  => $invoices->where('status', 'overdue')->count(),
-        'paid_count'     => $invoices->where('status', 'paid')->count(),
-        'invoices'       => $invoices,
-    ];
-
-    // ========== PDF DATA PAYLOAD ==========
-    $data = [
-        'lease'          => $lease,
-        'unit'           => $unit,
-        'property'       => $unit->property,
-        'tenant'         => $lease->tenant,
-        'landlord'       => $lease->landlord,
-        'generated_date' => now()->format('F j, Y'),
-        'generated_at'   => now(),
-
-        // ✅ GHANA context
-        'currency_symbol' => $currencySymbol,
-        'governing_law'   => $governingLaw,
-        'advance_info'    => $advanceInfo,
-
-        // ✅ INVOICE context (only used if the template references it)
-        'invoices'         => $invoices,
-        'invoice_summary'  => $invoiceSummary,
-    ];
-
-    // ========== GENERATE ==========
-    try {
-        $pdf = Pdf::loadView('pdf.lease-agreement', $data);
-
-        // Optional: tune paper + default font for consistency
-        $pdf->setPaper('A4', 'portrait');
-        $pdf->setOption('isRemoteEnabled', false);   // security: no remote fetches
-        $pdf->setOption('isHtml5ParserEnabled', true);
-
-        // ========== FILENAME ==========
-        $safeName = \Illuminate\Support\Str::slug(
-            $unit->property->property_name . '-' . $unit->unit_number
-        );
-        $filename = "Lease-{$safeName}-{$lease->id}.pdf";
-
-        // ========== AUDIT ==========
-        $this->logActivity(
-            $user->id,
-            'lease_pdf_downloaded',
-            'Lease agreement PDF downloaded',
-            $unit->id,
-            [
-                'lease_id'     => $lease->id,
-                'reference'    => $lease->agreement_number ?? null,
-                'filename'     => $filename,
-                'downloaded_at'=> now()->toIso8601String(),
-            ]
-        );
-
-        return $pdf->download($filename);
-
-    } catch (\Throwable $e) {
-        Log::error('Failed to generate lease PDF', [
-            'unit_id'  => $unitId,
-            'lease_id' => $leaseId,
-            'user_id'  => $user->id,
-            'error'    => $e->getMessage(),
-            'trace'    => $e->getTraceAsString(),
-        ]);
-
-        return redirect()->back()
-            ->with('error', 'Failed to generate the lease PDF. Please try again or contact support.');
-    }
-}
     // ========== DEPOSIT TRACKING ==========
 
     public function recordDepositPayment(Request $request, $leaseId)
     {
         $lease = RentalAgreement::findOrFail($leaseId);
+        $unit  = PropertyUnit::find($lease->unit_id);
         $user  = auth()->user();
 
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-        $isAdmin         = $user->isAdmin()    || $user->hasRole('admin');
-        $isSuperAdmin    = $user->isSuperAdmin() || $user->hasRole('super-admin');
-
-        if (!$hasLandlordRole && !$isAdmin && !$isSuperAdmin) {
-            abort(403, 'Only landlords or administrators can record deposit payments.');
+        // ✅ FIX: manageLeases (or admin) gates deposit recording.
+        if (!$user->can('manageLeases', $unit->property)
+            && !$user->isAdmin() && !$user->isSuperAdmin()) {
+            abort(403, 'You do not have permission to record deposit payments on this property.');
         }
 
         $validator = Validator::make($request->all(), [
@@ -1444,7 +1342,6 @@ public function generateLeasePdf($unitId, $leaseId)
                 $lease->update(['deposit_fully_paid_at' => now()]);
             }
 
-            // ✅ INVOICE: Record payment against the security deposit invoice
             $depositInvoice = PropertyUnitInvoice::where('lease_id', $lease->id)
                 ->where('invoice_type', PropertyUnitInvoice::TYPE_SECURITY_DEPOSIT)
                 ->whereIn('status', [
@@ -1483,7 +1380,7 @@ public function generateLeasePdf($unitId, $leaseId)
 
             return redirect()->back()->with('success', $message);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error recording deposit payment: ' . $e->getMessage());
             return redirect()->back()->with('error', 'Failed to record deposit payment: ' . $e->getMessage());
@@ -1493,6 +1390,11 @@ public function generateLeasePdf($unitId, $leaseId)
     public function getDepositStatus($leaseId)
     {
         $lease = RentalAgreement::findOrFail($leaseId);
+        $unit  = PropertyUnit::find($lease->unit_id);
+
+        if (!$unit || !auth()->user()->can('viewLeases', $unit->property)) {
+            abort(403, 'You do not have permission to view deposit status.');
+        }
 
         return response()->json([
             'total_deposit'       => $lease->security_deposit,
@@ -1508,111 +1410,150 @@ public function generateLeasePdf($unitId, $leaseId)
 
     // ========== HELPER METHODS ==========
 
-    private function sendLeaseToTenant(RentalAgreement $lease, PropertyUnit $unit, array $channels): array
-{
-    $tenant = $unit->tenant;
+    /**
+     * Three-way family-link flags for a property.
+     *
+     * @return array{isOwner: bool, isLinkedFamilyMember: bool, hasManageUnitsAccess: bool}
+     */
+    private function familyLinkFlagsFor(?Property $property, ?User $user = null): array
+    {
+        $user = $user ?? auth()->user();
 
-    if (!$tenant) {
-        return ['success' => false, 'message' => 'No tenant assigned to this unit'];
-    }
+        $isOwner = $property && (int) $property->landlord_id === (int) $user->id;
 
-    try {
-        // ✅ Use the dedicated factory so unit_id, lease_id and
-        //    invitation_type are always set consistently.
-        $invitation = TenantInvitation::createForLease(
-            lease:      $lease,
-            unit:       $unit,
-            channels:   $channels,
-            invitedBy:  auth()->user(),
-            metadata:   [
-                'property_name'       => $unit->property->property_name,
-                'unit_number'         => $unit->unit_number,
-                'landlord_name'       => $unit->property->landlord->name,
-                'monthly_rent'        => $lease->monthly_rent,
-                'advance_rent_months' => $lease->advance_rent_months,
-                'advance_rent_amount' => $lease->advance_rent_amount,
-                'lease_start_date'    => $lease->start_date->format('Y-m-d'),
-                'lease_end_date'      => $lease->end_date ? $lease->end_date->format('Y-m-d') : 'Month-to-Month',
-                'purpose'             => 'lease_review_and_signature',
-            ],
-            expiresInDays: 14,
-        );
-
-        $results            = [];
-        $successCount       = 0;
-        $channelsSuccessful = [];
-
-        foreach ($channels as $channel) {
-            try {
-                $result = $this->sendLeaseInvitationViaChannel($tenant, $unit, $lease, $invitation, $channel);
-                $results[$channel] = $result;
-                if ($result['success']) {
-                    $successCount++;
-                    $channelsSuccessful[] = $channel;
-                }
-            } catch (\Exception $e) {
-                Log::error("Error sending lease invitation via {$channel}: " . $e->getMessage());
-                $results[$channel] = ['success' => false, 'message' => "Failed to send via {$channel}: " . $e->getMessage()];
-            }
+        if ($isOwner || !$property) {
+            return [
+                'isOwner'              => $isOwner,
+                'isLinkedFamilyMember' => false,
+                'hasManageUnitsAccess' => false,
+            ];
         }
 
-        if ($successCount > 0) {
-            $invitation->markAsSent($channelsSuccessful);
-        } else {
-            $invitation->markAsFailed('All communication channels failed');
+        $link = PropertyFamilyLink::query()
+            ->where('property_id', $property->id)
+            ->where('linked_user_id', $user->id)
+            ->where('status', PropertyFamilyLink::STATUS_APPROVED)
+            ->first();
+
+        if (!$link) {
+            return [
+                'isOwner'              => false,
+                'isLinkedFamilyMember' => false,
+                'hasManageUnitsAccess' => false,
+            ];
         }
 
-        $this->logActivity(auth()->id(), 'lease_sent_for_signature',
-            'Lease sent to tenant for signature', $unit->id, [
-                'lease_id'      => $lease->id,
-                'tenant_id'     => $tenant->id,
-                'channels'      => $channelsSuccessful,
-                'success_count' => $successCount,
-            ]);
+        $perms = is_array($link->permissions) ? $link->permissions : [];
 
         return [
-            'success'             => $successCount > 0,
-            'invitation_id'       => $invitation->id,
-            'token'               => $invitation->token,
-            'invitation_url'      => $invitation->getInvitationUrl(),
-            'channels_successful' => $channelsSuccessful,
-            'results'             => $results,
+            'isOwner'              => false,
+            'isLinkedFamilyMember' => true,
+            'hasManageUnitsAccess' => in_array('manage_units', $perms, true),
         ];
-
-    } catch (\Exception $e) {
-        Log::error('Failed to send lease to tenant: ' . $e->getMessage());
-        return ['success' => false, 'message' => 'Failed to send lease: ' . $e->getMessage()];
     }
-}
+
+    private function sendLeaseToTenant(RentalAgreement $lease, PropertyUnit $unit, array $channels): array
+    {
+        $tenant = $unit->tenant;
+
+        if (!$tenant) {
+            return ['success' => false, 'message' => 'No tenant assigned to this unit'];
+        }
+
+        try {
+            $invitation = TenantInvitation::createForLease(
+                lease:      $lease,
+                unit:       $unit,
+                channels:   $channels,
+                invitedBy:  auth()->user(),
+                metadata:   [
+                    'property_name'       => $unit->property->property_name,
+                    'unit_number'         => $unit->unit_number,
+                    'landlord_name'       => $unit->property->landlord->name,
+                    'monthly_rent'        => $lease->monthly_rent,
+                    'advance_rent_months' => $lease->advance_rent_months,
+                    'advance_rent_amount' => $lease->advance_rent_amount,
+                    'lease_start_date'    => $lease->start_date->format('Y-m-d'),
+                    'lease_end_date'      => $lease->end_date ? $lease->end_date->format('Y-m-d') : 'Month-to-Month',
+                    'purpose'             => 'lease_review_and_signature',
+                ],
+                expiresInDays: 14,
+            );
+
+            $results            = [];
+            $successCount       = 0;
+            $channelsSuccessful = [];
+
+            foreach ($channels as $channel) {
+                try {
+                    $result = $this->sendLeaseInvitationViaChannel($tenant, $unit, $lease, $invitation, $channel);
+                    $results[$channel] = $result;
+                    if ($result['success']) {
+                        $successCount++;
+                        $channelsSuccessful[] = $channel;
+                    }
+                } catch (\Throwable $e) {
+                    Log::error("Error sending lease invitation via {$channel}: " . $e->getMessage());
+                    $results[$channel] = ['success' => false, 'message' => "Failed to send via {$channel}: " . $e->getMessage()];
+                }
+            }
+
+            if ($successCount > 0) {
+                $invitation->markAsSent($channelsSuccessful);
+            } else {
+                $invitation->markAsFailed('All communication channels failed');
+            }
+
+            $this->logActivity(auth()->id(), 'lease_sent_for_signature',
+                'Lease sent to tenant for signature', $unit->id, [
+                    'lease_id'      => $lease->id,
+                    'tenant_id'     => $tenant->id,
+                    'channels'      => $channelsSuccessful,
+                    'success_count' => $successCount,
+                ]);
+
+            return [
+                'success'             => $successCount > 0,
+                'invitation_id'       => $invitation->id,
+                'token'               => $invitation->token,
+                'invitation_url'      => $invitation->getInvitationUrl(),
+                'channels_successful' => $channelsSuccessful,
+                'results'             => $results,
+            ];
+
+        } catch (\Throwable $e) {
+            Log::error('Failed to send lease to tenant: ' . $e->getMessage());
+            return ['success' => false, 'message' => 'Failed to send lease: ' . $e->getMessage()];
+        }
+    }
 
     private function sendLeaseInvitationViaChannel(User $tenant, PropertyUnit $unit, RentalAgreement $lease, TenantInvitation $invitation, string $channel): array
     {
-        switch ($channel) {
-            case 'email':    return $this->sendLeaseEmailInvitation($tenant, $unit, $lease, $invitation);
-            case 'sms':      return $this->sendLeaseSmsInvitation($tenant, $unit, $lease, $invitation);
-            case 'whatsapp': return $this->sendLeaseWhatsAppInvitation($tenant, $unit, $lease, $invitation);
-            default:         return ['success' => false, 'message' => "Unknown channel: {$channel}"];
-        }
+        return match ($channel) {
+            'email'    => $this->sendLeaseEmailInvitation($tenant, $unit, $lease, $invitation),
+            'sms'      => $this->sendLeaseSmsInvitation($tenant, $unit, $lease, $invitation),
+            'whatsapp' => $this->sendLeaseWhatsAppInvitation($tenant, $unit, $lease, $invitation),
+            default    => ['success' => false, 'message' => "Unknown channel: {$channel}"],
+        };
     }
 
     private function sendLeaseEmailInvitation(User $tenant, PropertyUnit $unit, RentalAgreement $lease, TenantInvitation $invitation): array
-{
-    try {
-        // ✅ No `invitation_token` write — the model already guarantees `token` exists
-        if (empty($invitation->token)) {
-            $invitation->token = Str::random(60);
-            $invitation->save();
+    {
+        try {
+            if (empty($invitation->token)) {
+                $invitation->token = Str::random(60);
+                $invitation->save();
+            }
+
+            $landlord = $unit->property->landlord ?? null;
+            Mail::to($tenant->email)->send(new LeaseInvitationMail($tenant, $unit, $lease, $invitation, $landlord));
+
+            return ['success' => true, 'message' => 'Email sent successfully'];
+        } catch (\Throwable $e) {
+            Log::error('Failed to send lease email invitation: ' . $e->getMessage());
+            return ['success' => false, 'message' => 'Failed to send email: ' . $e->getMessage()];
         }
-
-        $landlord = $unit->property->landlord ?? null;
-        Mail::to($tenant->email)->send(new LeaseInvitationMail($tenant, $unit, $lease, $invitation, $landlord));
-
-        return ['success' => true, 'message' => 'Email sent successfully'];
-    } catch (\Exception $e) {
-        Log::error('Failed to send lease email invitation: ' . $e->getMessage());
-        return ['success' => false, 'message' => 'Failed to send email: ' . $e->getMessage()];
     }
-}
 
     private function sendLeaseSmsInvitation(User $tenant, PropertyUnit $unit, RentalAgreement $lease, TenantInvitation $invitation): array
     {
@@ -1622,7 +1563,7 @@ public function generateLeasePdf($unitId, $leaseId)
                 'invitation_url' => $invitation->getInvitationUrl(),
             ]);
             return ['success' => true, 'message' => 'SMS sent successfully'];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to send lease SMS invitation: ' . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to send SMS: ' . $e->getMessage()];
         }
@@ -1636,13 +1577,12 @@ public function generateLeasePdf($unitId, $leaseId)
                 'invitation_url' => $invitation->getInvitationUrl(),
             ]);
             return ['success' => true, 'message' => 'WhatsApp message sent successfully'];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to send lease WhatsApp invitation: ' . $e->getMessage());
             return ['success' => false, 'message' => 'Failed to send WhatsApp message: ' . $e->getMessage()];
         }
     }
 
-    // ✅ GHANA: generateLeaseTerms includes advance-rent + monthly clauses
     private function generateLeaseTerms(Request $request, PropertyUnit $unit): string
     {
         $terms = [];
@@ -1668,7 +1608,6 @@ public function generateLeasePdf($unitId, $leaseId)
                 $terms[count($terms)-1] .= " and continue on a month-to-month basis until terminated with {$request->notice_period_days} days notice.";
             }
 
-            // ✅ GHANA: Advance rent clause
             $terms[] = "4. ADVANCE RENT: The Tenant has paid GHS " . number_format($advanceRentAmount, 2)
                 . " representing {$advanceMonths} month(s) of advance rent, covering the period from "
                 . "{$startDate->format('F j, Y')} to {$advanceEndDate->format('F j, Y')}. "
@@ -1676,7 +1615,6 @@ public function generateLeasePdf($unitId, $leaseId)
                 . "exceeding six (6) months shall not exceed six (6) months. Where the advance exceeds this limit, "
                 . "the Tenant acknowledges that the payment was made voluntarily and without demand by the Landlord.";
 
-            // ✅ GHANA: Monthly rent clause
             $terms[] = "5. MONTHLY RENT: Following the advance rent period, the Tenant shall pay GHS "
                 . number_format($monthlyRent, 2) . " per month, due on the "
                 . "{$request->payment_due_day}" . $this->getDaySuffix($request->payment_due_day)
@@ -1792,7 +1730,6 @@ public function generateLeasePdf($unitId, $leaseId)
         }
     }
 
-    // ✅ GHANA: Advance rent dropdown options
     private function getAdvanceRentOptions(): array
     {
         return [
@@ -1854,20 +1791,25 @@ public function generateLeasePdf($unitId, $leaseId)
     {
         $user = auth()->user();
 
-        $isSuperAdmin    = $user->isSuperAdmin() || $user->hasRole('super-admin');
-        $isAdmin         = $user->isAdmin()    || $user->hasRole('admin');
-        $hasLandlordRole = $user->isLandlord() || $user->hasRole('landlord');
-        $isTenant        = $user->isTenant()   || $user->hasRole('tenant');
-
-        if ($isSuperAdmin || $isAdmin) return;
-
-        if ($hasLandlordRole) {
-            if ($unit->property->landlord_id === $user->id) return;
-            abort(403, 'You can only view units in your own properties.');
+        if ($user->isSuperAdmin() || $user->isAdmin()) {
+            return;
         }
 
-        if ($isTenant) {
-            if ($unit->tenant_id === $user->id && $unit->tenant_status === PropertyUnit::TENANT_STATUS_APPROVED) return;
+        if ($user->isLandlord()) {
+            $flags = $this->familyLinkFlagsFor($unit->property, $user);
+
+            if ($flags['isOwner'] || $flags['isLinkedFamilyMember']) {
+                return;
+            }
+
+            abort(403, 'You can only view units in properties you own or are linked to.');
+        }
+
+        if ($user->isTenant()) {
+            if ((int) $unit->tenant_id === (int) $user->id
+                && $unit->tenant_status === PropertyUnit::TENANT_STATUS_APPROVED) {
+                return;
+            }
             abort(403, 'You can only view your assigned unit.');
         }
 
@@ -1886,7 +1828,7 @@ public function generateLeasePdf($unitId, $leaseId)
                 'ip_address'  => request()->ip(),
                 'user_agent'  => request()->userAgent(),
             ]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to log activity: ' . $e->getMessage());
         }
     }
@@ -1900,7 +1842,7 @@ public function generateLeasePdf($unitId, $leaseId)
 
     public function showLandlordWitnessSignForm($unitId, $leaseId)
     {
-        $unit  = PropertyUnit::findOrFail($unitId);
+        $unit  = PropertyUnit::with('property')->findOrFail($unitId);
         $lease = RentalAgreement::where('unit_id', $unitId)->findOrFail($leaseId);
 
         if (!$lease->landlord_signed_at) {
@@ -1910,12 +1852,18 @@ public function generateLeasePdf($unitId, $leaseId)
             return redirect()->route('property-units.lease-details', [$unit->id, $lease->id])
                 ->with('info', 'Landlord witness signature already recorded.');
         }
+
+        // ✅ FIX: manageLeases gates access to the witness form.
+        if (!auth()->user()->can('manageLeases', $unit->property)) {
+            abort(403, 'You do not have permission to view this page.');
+        }
+
         return view('property_units.witness-sign-landlord', compact('unit', 'lease'));
     }
 
     public function showTenantWitnessSignForm($unitId, $leaseId)
     {
-        $unit  = PropertyUnit::findOrFail($unitId);
+        $unit  = PropertyUnit::with('property')->findOrFail($unitId);
         $lease = RentalAgreement::where('unit_id', $unitId)->findOrFail($leaseId);
 
         if (!$lease->tenant_signed_at) {
@@ -1930,8 +1878,12 @@ public function generateLeasePdf($unitId, $leaseId)
 
     public function landlordWitnessSign(Request $request, $unitId, $leaseId)
     {
-        $unit  = PropertyUnit::findOrFail($unitId);
+        $unit  = PropertyUnit::with('property')->findOrFail($unitId);
         $lease = RentalAgreement::where('unit_id', $unitId)->findOrFail($leaseId);
+
+        if (!auth()->user()->can('manageLeases', $unit->property)) {
+            abort(403, 'You do not have permission to record witness signatures.');
+        }
 
         $validator = Validator::make($request->all(), [
             'witness_name'           => 'required|string|max:255',
@@ -1980,7 +1932,7 @@ public function generateLeasePdf($unitId, $leaseId)
                         $witnessSignatureData['name'], $lease->landlord->name, $unit, $lease,
                         'landlord', $witnessSignatureData['role']
                     ));
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     Log::warning('Failed to send landlord witness confirmation email: ' . $e->getMessage());
                 }
             }
@@ -2006,7 +1958,7 @@ public function generateLeasePdf($unitId, $leaseId)
             return redirect()->route('property-units.lease-details', [$unit->id, $lease->id])
                 ->with('success', 'Witness signature recorded successfully.');
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error recording landlord witness signature: ' . $e->getMessage());
             return redirect()->back()->with('error', 'Failed to record witness signature: ' . $e->getMessage());
@@ -2061,7 +2013,7 @@ public function generateLeasePdf($unitId, $leaseId)
                     Mail::to($witnessSignatureData['email'])->send(new \App\Mail\WitnessConfirmationMail(
                         $witnessSignatureData['name'], $lease->tenant->name, $unit, $lease, 'tenant'
                     ));
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     Log::warning('Failed to send tenant witness confirmation email: ' . $e->getMessage());
                 }
             }
@@ -2086,7 +2038,7 @@ public function generateLeasePdf($unitId, $leaseId)
             return redirect()->route('tenant.property-units.lease-details', [$unit->id, $lease->id])
                 ->with('success', 'Witness signature recorded successfully.');
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error recording tenant witness signature: ' . $e->getMessage());
             return redirect()->back()->with('error', 'Failed to record witness signature: ' . $e->getMessage());

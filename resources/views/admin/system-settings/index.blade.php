@@ -2,6 +2,92 @@
 
 @section('title', 'System Settings')
 
+@php
+    // ============================================================
+    // ✅ NEW (2026-10-13): 2FA state for the index card
+    // ------------------------------------------------------------
+    // Two pieces of information surface here:
+    //
+    //   1. Whether the CURRENTLY-LOGGED-IN user has 2FA enabled
+    //      (reads `users.two_factor_enabled`, the real DB column).
+    //
+    //   2. What the SYSTEM-WIDE policy is (reads DeveloperSetting).
+    //
+    // Wrapped in try/catch so a missing DeveloperSetting row or
+    // an unrun migration never breaks the index page — this is the
+    // most-visited admin page, so it must never 500.
+    // ============================================================
+    $currentUser = auth()->user();
+    $currentUser2FAEnabled = (bool) ($currentUser->two_factor_enabled ?? false);
+    $currentUserIsPrivileged = $currentUser && in_array($currentUser->type, [0, 5], true);
+
+    try {
+        $developerSetting = \App\Models\DeveloperSetting::current();
+        $twoFactorPolicy = $developerSetting?->twoFactorPolicy() ?? 'optional';
+        $twoFactorRequiredRoles = $developerSetting?->twoFactorRequiredRoles() ?? [];
+    } catch (\Throwable $e) {
+        $developerSetting = null;
+        $twoFactorPolicy = 'optional';
+        $twoFactorRequiredRoles = [];
+    }
+
+    $twoFactorRoleLabels = [
+        0 => 'Super Admin',
+        1 => 'Admin',
+        5 => 'Developer',
+    ];
+
+    // ============================================================
+    // 🆕 HOMEPAGE CONFIG — read once, defensively, so the card can
+    // show current customisations at a glance and never 500 if the
+    // migration hasn't run or the model method doesn't exist yet.
+    // ============================================================
+    $homeConfig = [];
+    $homeHasCustom = false;
+    $homeHeroUrl = null;
+    try {
+        if ($settings->exists && method_exists($settings, 'getHomepageConfig')) {
+            $homeConfig   = $settings->getHomepageConfig();
+            $homeHasCustom = method_exists($settings, 'hasCustomHomepage')
+                ? (bool) $settings->hasCustomHomepage()
+                : !empty($settings->homepage_config);
+            $homeHeroUrl  = method_exists($settings, 'getHomepageHeroImageUrl')
+                ? $settings->getHomepageHeroImageUrl()
+                : null;
+        }
+    } catch (\Throwable $e) {
+        $homeConfig = [];
+        $homeHasCustom = false;
+        $homeHeroUrl = null;
+    }
+
+    $homeSections     = $homeConfig['sections'] ?? [];
+    $homeSocial       = $homeConfig['social']   ?? [];
+    $homeContact      = $homeConfig['contact']  ?? [];
+    $homeHero         = $homeConfig['hero']     ?? [];
+
+    $homeSectionsOn   = collect($homeSections)->filter()->count();
+    $homeSectionsTotal= count($homeSections) ?: 9;
+    $homeSocialSet    = collect($homeSocial)->filter()->count();
+    $homeSocialTotal  = count($homeSocial) ?: 7;
+    $homeContactCustom= collect($homeContact)->filter()->count() > 0;
+
+    $homeHeroTitle    = $homeHero['title'] ?? null;
+    $homeHeroSubtitle = $homeHero['subtitle'] ?? null;
+
+    // Routes may or may not be registered yet — guard with Route::has().
+    $homeEditorRouteExists    = Route::has('admin.homepage-content.index');
+    $homeResetRouteExists     = Route::has('admin.homepage-content.reset');
+    $homePreviewRouteExists   = Route::has('admin.homepage-content.preview');
+
+    // ⭐ Preview URL: prefer the admin preview route (renders welcome
+    //    directly, bypassing HomeController's auth-redirect). Fall back
+    //    to /?preview=1 only if the admin route isn't registered yet.
+    $homePreviewUrl = $homePreviewRouteExists
+        ? route('admin.homepage-content.preview')
+        : url('/') . '?preview=1';
+@endphp
+
 @section('content')
 <div class="grid grid-cols-1 gap-6 mb-6">
     <!-- Header Card -->
@@ -31,6 +117,21 @@
                                 </span>
                             @endif
                         @endif
+
+                        {{-- ✅ NEW: 2FA policy pill — visible at a glance --}}
+                        @if($currentUserIsPrivileged)
+                            @if($twoFactorPolicy === 'required')
+                                <span class="px-3 py-1 rounded-full text-xs font-medium badge-warning"
+                                      title="Two-factor authentication is required for selected roles">
+                                    <i class="fas fa-shield-alt mr-1"></i> 2FA Required
+                                </span>
+                            @elseif($twoFactorPolicy === 'encouraged')
+                                <span class="px-3 py-1 rounded-full text-xs font-medium badge-info"
+                                      title="Two-factor authentication is encouraged but not enforced">
+                                    <i class="fas fa-shield-alt mr-1"></i> 2FA Encouraged
+                                </span>
+                            @endif
+                        @endif
                     </h2>
                     <div class="text-sm flex items-center flex-wrap gap-2 mt-1" style="color: var(--text-secondary);">
                         <i class="fas fa-sliders-h mr-2"></i>
@@ -55,6 +156,93 @@
             </div>
         </div>
     </div>
+
+    {{-- ============================================================
+         ✅ NEW: YOUR ACCOUNT SECURITY (compact card for
+         privileged users only)
+    ============================================================ --}}
+    @if($currentUserIsPrivileged)
+    <div class="card">
+        <div class="p-6"
+             style="border-top: 4px solid {{ $currentUser2FAEnabled ? 'var(--success)' : 'var(--warning)' }};">
+            <div class="flex justify-between items-start flex-wrap gap-3">
+                <div class="flex items-start gap-3 flex-1 min-w-[240px]">
+                    <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center"
+                         style="background-color: {{ $currentUser2FAEnabled ? 'rgba(var(--success-rgb), 0.15)' : 'rgba(var(--warning-rgb), 0.15)' }};">
+                        <i class="fas fa-shield-alt"
+                           style="color: {{ $currentUser2FAEnabled ? 'var(--success)' : 'var(--warning)' }};"></i>
+                    </div>
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2 flex-wrap mb-1">
+                            <h3 class="font-semibold" style="color: var(--text-primary);">Your Account Security</h3>
+                            @if($currentUser2FAEnabled)
+                                <span class="px-2 py-0.5 text-xs rounded-full"
+                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                    <i class="fas fa-check mr-1"></i>2FA Enabled
+                                </span>
+                            @else
+                                <span class="px-2 py-0.5 text-xs rounded-full"
+                                      style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                                    <i class="fas fa-exclamation-triangle mr-1"></i>2FA Not Enabled
+                                </span>
+                            @endif
+                        </div>
+                        <p class="text-sm" style="color: var(--text-secondary);">
+                            @if($currentUser2FAEnabled)
+                                Your {{ $currentUser->type === 5 ? 'developer' : 'super admin' }} account is
+                                protected with {{ ucfirst($currentUser->two_factor_method ?? 'email') }}-based 2FA.
+                            @else
+                                Protect your {{ $currentUser->type === 5 ? 'developer' : 'super admin' }} account
+                                with two-factor authentication. Recommended for all privileged users.
+                            @endif
+                        </p>
+
+                        <div class="mt-2 p-2 rounded"
+                             style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.15);">
+                            <p class="text-xs" style="color: var(--text-secondary);">
+                                <i class="fas fa-info-circle mr-1" style="color: var(--info);"></i>
+                                System 2FA policy:
+                                <strong style="color: var(--text-primary);">{{ ucfirst($twoFactorPolicy) }}</strong>
+                                @if($twoFactorPolicy === 'required' && !empty($twoFactorRequiredRoles))
+                                    — required for
+                                    @foreach($twoFactorRequiredRoles as $roleType)
+                                        {{ $twoFactorRoleLabels[$roleType] ?? "Type {$roleType}" }}@if(!$loop->last), @endif
+                                    @endforeach
+                                @endif
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex gap-2 flex-wrap">
+                    @if($currentUser2FAEnabled)
+                        <a href="{{ route('2fa.recovery-codes') }}"
+                           class="btn-secondary px-3 py-1.5 rounded-lg font-medium inline-flex items-center text-sm">
+                            <i class="fas fa-key mr-1"></i>Recovery Codes
+                        </a>
+                        <a href="{{ route('2fa.setup') }}"
+                           class="btn-info px-3 py-1.5 rounded-lg font-medium inline-flex items-center text-sm">
+                            <i class="fas fa-cog mr-1"></i>Manage
+                        </a>
+                    @else
+                        <a href="{{ route('2fa.setup') }}"
+                           class="btn-warning px-4 py-2 rounded-lg font-medium inline-flex items-center">
+                            <i class="fas fa-shield-alt mr-2"></i>Enable 2FA Now
+                        </a>
+                    @endif
+
+                    @if(Route::has('developer.settings.index'))
+                        <a href="{{ route('developer.settings.index', ['section' => 'api']) }}"
+                           class="btn-outline px-3 py-1.5 rounded-lg font-medium inline-flex items-center text-sm"
+                           style="background-color: transparent; color: var(--primary); border: 1px solid var(--primary);">
+                            <i class="fas fa-sliders-h mr-1"></i>Manage Policy
+                        </a>
+                    @endif
+                </div>
+            </div>
+        </div>
+    </div>
+    @endif
 
     <!-- ============================================================ -->
     <!-- LIVE BACKGROUND UPDATE STATUS BANNER -->
@@ -330,10 +518,198 @@
     </div>
     @endif
 
-    <!-- ============================================================ -->
-    <!-- OFFICE PAYMENT COLLECTION CARD (NEW)                         -->
-    <!-- Controls whether admins can mark invoices as paid manually    -->
-    <!-- ============================================================ -->
+    {{-- ============================================================ --}}
+    {{-- 🆕 HOMEPAGE CONTENT MANAGER CARD                              --}}
+    {{-- ============================================================ --}}
+    @if($settings->exists && method_exists($settings, 'getHomepageConfig'))
+    <div class="card">
+        <div class="p-6"
+             style="border-top: 4px solid {{ $homeHasCustom ? 'var(--success)' : 'var(--info)' }};">
+
+            {{-- Header row --}}
+            <div class="flex items-center justify-between mb-6 flex-wrap gap-4">
+                <div class="flex items-center">
+                    <div class="w-10 h-10 rounded-full flex items-center justify-center mr-3"
+                         style="background-color: rgba(var({{ $homeHasCustom ? '--success-rgb' : '--info-rgb' }}), 0.1);">
+                        <i class="fas fa-home text-xl"
+                           style="color: {{ $homeHasCustom ? 'var(--success)' : 'var(--info)' }};"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
+                            Homepage Content
+                        </h3>
+                        <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                            Manage the public homepage — hero image, sections, social links & contact info
+                        </p>
+                    </div>
+                </div>
+
+                @if($homeHasCustom)
+                    <span class="px-3 py-1 rounded-full text-xs font-medium badge-success">
+                        <i class="fas fa-check-circle mr-1"></i> Custom Content Active
+                    </span>
+                @else
+                    <span class="px-3 py-1 rounded-full text-xs font-medium badge-info">
+                        <i class="fas fa-info-circle mr-1"></i> Using Defaults
+                    </span>
+                @endif
+            </div>
+
+            {{-- Hero preview + stat summary --}}
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                {{-- Thumbnail preview --}}
+                <div class="md:col-span-2">
+                    <div class="rounded-lg overflow-hidden border-2"
+                         style="border-color: var(--border-color); height: 180px; position: relative;">
+                        <img src="{{ $homeHeroUrl ?? 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=70' }}"
+                             alt="Hero preview"
+                             style="width: 100%; height: 100%; object-fit: cover;">
+                        <div style="position: absolute; inset: 0;
+                                    background: linear-gradient(135deg, rgba(0,0,0,0.55), rgba(0,0,0,0.75));"></div>
+                        <div style="position: absolute; bottom: 12px; left: 16px; right: 16px; color: white;">
+                            <div class="font-semibold text-base">
+                                {{ $homeHeroTitle ?: $settings->system_name }}
+                            </div>
+                            @if($homeHeroSubtitle)
+                                <div class="text-xs opacity-90" style="margin-top: 4px;">
+                                    {{ \Illuminate\Support\Str::limit($homeHeroSubtitle, 100) }}
+                                </div>
+                            @endif
+                        </div>
+                        @if(!$homeHeroUrl)
+                            <span class="px-2 py-1 rounded text-xs"
+                                  style="position: absolute; top: 12px; right: 12px;
+                                         background: rgba(var(--warning-rgb), 0.9); color: white;">
+                                <i class="fas fa-image mr-1"></i> Default Image
+                            </span>
+                        @else
+                            <span class="px-2 py-1 rounded text-xs"
+                                  style="position: absolute; top: 12px; right: 12px;
+                                         background: rgba(var(--success-rgb), 0.9); color: white;">
+                                <i class="fas fa-check mr-1"></i> Custom Image
+                            </span>
+                        @endif
+                    </div>
+                    <p class="text-xs mt-2" style="color: var(--text-secondary);">
+                        <i class="fas fa-eye mr-1"></i>
+                        This is how the hero section currently appears on the homepage.
+                    </p>
+                </div>
+
+                {{-- Stat summary --}}
+                <div class="flex flex-col justify-center gap-3">
+                    <div class="flex items-center justify-between text-sm p-2 rounded"
+                         style="background: rgba(var(--primary-rgb), 0.05);">
+                        <span style="color: var(--text-secondary);">
+                            <i class="fas fa-th-large mr-1" style="color: var(--primary);"></i>
+                            Sections visible
+                        </span>
+                        <span class="font-semibold" style="color: var(--primary);">
+                            {{ $homeSectionsOn }} / {{ $homeSectionsTotal }}
+                        </span>
+                    </div>
+                    <div class="flex items-center justify-between text-sm p-2 rounded"
+                         style="background: rgba(var(--info-rgb), 0.05);">
+                        <span style="color: var(--text-secondary);">
+                            <i class="fas fa-share-alt mr-1" style="color: var(--info);"></i>
+                            Social links set
+                        </span>
+                        <span class="font-semibold" style="color: var(--info);">
+                            {{ $homeSocialSet }} / {{ $homeSocialTotal }}
+                        </span>
+                    </div>
+                    <div class="flex items-center justify-between text-sm p-2 rounded"
+                         style="background: rgba(var(--success-rgb), 0.05);">
+                        <span style="color: var(--text-secondary);">
+                            <i class="fas fa-address-card mr-1" style="color: var(--success);"></i>
+                            Custom contact
+                        </span>
+                        <span class="font-semibold" style="color: {{ $homeContactCustom ? 'var(--success)' : 'var(--text-secondary)' }};">
+                            {{ $homeContactCustom ? 'Yes' : 'Using defaults' }}
+                        </span>
+                    </div>
+                    <div class="flex items-center justify-between text-sm p-2 rounded"
+                         style="background: rgba(var(--warning-rgb), 0.05);">
+                        <span style="color: var(--text-secondary);">
+                            <i class="fas fa-heading mr-1" style="color: var(--warning);"></i>
+                            Hero title
+                        </span>
+                        <span class="font-semibold" style="color: {{ $homeHeroTitle ? 'var(--warning)' : 'var(--text-secondary)' }};">
+                            {{ $homeHeroTitle ? 'Custom' : 'System name' }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            {{-- Warning if routes aren't registered yet --}}
+            @unless($homeEditorRouteExists)
+                <div class="mb-4 p-3 rounded-lg"
+                     style="background-color: rgba(var(--warning-rgb), 0.1); border-left: 4px solid var(--warning);">
+                    <p class="text-xs" style="color: var(--warning);">
+                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                        Homepage content routes are not registered yet. Please add them to
+                        <code>routes/web.php</code> to enable the editor.
+                    </p>
+                </div>
+            @endunless
+
+            {{-- Action buttons --}}
+            <div class="flex flex-wrap gap-3 pt-4 border-t" style="border-color: var(--border-color);">
+
+                {{-- Primary: Edit --}}
+                @if($homeEditorRouteExists)
+                    <a href="{{ route('admin.homepage-content.index') }}"
+                       class="btn-primary px-4 py-2 rounded-lg font-medium inline-flex items-center">
+                        <i class="fas fa-edit mr-2"></i> Edit Homepage Content
+                    </a>
+                @else
+                    <button type="button" disabled
+                            class="btn-primary px-4 py-2 rounded-lg font-medium inline-flex items-center"
+                            style="opacity: 0.5; cursor: not-allowed;"
+                            title="Register admin.homepage-content.* routes to enable">
+                        <i class="fas fa-edit mr-2"></i> Edit Homepage Content
+                    </button>
+                @endif
+
+                {{-- ⭐ Preview: uses the ADMIN preview route so an authenticated
+                     admin never gets bounced to /dashboard. Falls back to the
+                     public homepage with ?preview=1 if the admin route is missing. --}}
+                <a href="{{ $homePreviewUrl }}"
+                   target="_blank"
+                   rel="noopener"
+                   class="btn-info px-4 py-2 rounded-lg font-medium inline-flex items-center"
+                   title="Preview the homepage in a new tab">
+                    <i class="fas fa-eye mr-2"></i> Preview Homepage
+                </a>
+
+                {{-- Reset to defaults (only if customised) --}}
+                @if($homeHasCustom && $homeResetRouteExists)
+                    <form action="{{ route('admin.homepage-content.reset') }}"
+                          method="POST"
+                          class="inline"
+                          onsubmit="return confirm('Reset homepage to defaults?\n\nThis will remove the custom hero image, text, section toggles, social links, and contact overrides.\n\nThe current configuration will be discarded.')">
+                        @csrf
+                        <button type="submit"
+                                class="btn-secondary px-4 py-2 rounded-lg font-medium inline-flex items-center">
+                            <i class="fas fa-undo mr-2"></i> Reset to Defaults
+                        </button>
+                    </form>
+                @endif
+
+                {{-- Quick open public homepage (logged-out view) --}}
+                <a href="{{ route('home') }}"
+                   target="_blank"
+                   rel="noopener"
+                   class="btn-outline px-4 py-2 rounded-lg font-medium inline-flex items-center"
+                   style="background-color: transparent; color: var(--primary); border: 1px solid var(--primary);">
+                    <i class="fas fa-external-link-alt mr-2"></i> View Live Site
+                </a>
+            </div>
+        </div>
+    </div>
+    @endif
+
+    <!-- OFFICE PAYMENT COLLECTION CARD -->
     @if($settings->exists)
     <div class="card">
         <div class="p-6" style="border-top: 4px solid {{ $settings->isOfflinePaymentAllowed() ? 'var(--success)' : 'var(--danger)' }};">
@@ -580,7 +956,6 @@
                                 <i class="fas fa-phone mr-2" style="color: var(--warning);"></i>
                                 {{ $settings->system_phone }}
                             </p>
-                            <!-- SMS SENDER ID -->
                             <p class="text-sm flex items-center" style="color: var(--text-primary);">
                                 <i class="fas fa-comment-dots mr-2" style="color: var(--primary);"></i>
                                 @if($settings->sms_sender_id)
@@ -649,11 +1024,29 @@
                                     {{ $settings->enable_bulk_payments ? 'Enabled' : 'Disabled' }}
                                 </span>
                             </div>
-                            {{-- New row: Office Payments status --}}
+                            {{-- Office Payments status --}}
                             <div class="flex items-center justify-between">
                                 <span class="text-sm" style="color: var(--text-primary);">Office Payments</span>
                                 <span class="px-2 py-1 rounded-full text-xs font-medium badge-{{ $settings->isOfflinePaymentAllowed() ? 'success' : 'danger' }}">
                                     {{ $settings->isOfflinePaymentAllowed() ? 'Allowed' : 'Blocked' }}
+                                </span>
+                            </div>
+
+                            {{-- 🆕 Homepage Content status row --}}
+                            @if(method_exists($settings, 'getHomepageConfig'))
+                                <div class="flex items-center justify-between">
+                                    <span class="text-sm" style="color: var(--text-primary);">Homepage</span>
+                                    <span class="px-2 py-1 rounded-full text-xs font-medium badge-{{ $homeHasCustom ? 'success' : 'info' }}">
+                                        {{ $homeHasCustom ? 'Custom' : 'Default' }}
+                                    </span>
+                                </div>
+                            @endif
+
+                            {{-- ✅ NEW: 2FA status row --}}
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm" style="color: var(--text-primary);">Your 2FA</span>
+                                <span class="px-2 py-1 rounded-full text-xs font-medium badge-{{ $currentUser2FAEnabled ? 'success' : 'warning' }}">
+                                    {{ $currentUser2FAEnabled ? 'Enabled' : 'Not Set' }}
                                 </span>
                             </div>
                         </div>
@@ -1054,7 +1447,6 @@
                             </div>
                             <p class="text-sm flex-1" style="color: var(--text-secondary);">{{ $settings->system_phone }}</p>
                         </div>
-                        <!-- SMS SENDER ID -->
                         <div class="flex items-start">
                             <div class="w-32">
                                 <p class="font-medium" style="color: var(--text-primary);">SMS Sender ID</p>
@@ -1410,7 +1802,7 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     // ============================================================
-    // BACKGROUND UPDATE POLLING
+    // BACKGROUND UPDATE POLLING (unchanged)
     // ============================================================
     const banner       = document.getElementById('bg-update-banner');
     const bannerInner  = document.getElementById('bg-update-banner-inner');
@@ -1425,14 +1817,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let pollTimer      = null;
     let pollAttempts   = 0;
-    const MAX_ATTEMPTS = 40;   // ~2 minutes at 3s intervals
+    const MAX_ATTEMPTS = 40;
     const POLL_MS      = 3000;
 
     function showBanner(state, title, message, meta) {
         if (!banner) return;
         banner.classList.remove('hidden');
 
-        // Reset border color for the inner block
         bannerInner.style.borderTop = '';
 
         if (state === 'processing') {
@@ -1506,8 +1897,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Completed after ' + pollAttempts + ' checks'
                 );
                 stopPolling();
-
-                // Reload once so all rendered values (config('app.name') etc.) refresh.
                 setTimeout(() => window.location.reload(), 1500);
                 return;
             }
@@ -1567,13 +1956,10 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Auto-start polling if the controller just told us an update is in-flight,
-    // or if any job is already pending.
     if (justDispatched) {
         pollAttempts = 0;
         pollStatus();
     } else {
-        // Quiet background check: if there are pending/failed jobs, surface the banner.
         fetch(STATUS_URL, {
             headers: { 'Accept': 'application/json' },
             cache: 'no-store',
@@ -1700,7 +2086,6 @@ document.addEventListener('DOMContentLoaded', function() {
         showToast('{{ session('info') }}', 'info');
     @endif
 
-    // Expose showToast to window so other snippets can use it
     window.showToast = showToast;
 });
 </script>

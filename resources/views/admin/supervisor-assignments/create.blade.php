@@ -1,6 +1,6 @@
 @extends('layouts.app')
 
-@section('title', 'Assign Supervisor')
+@section('title', 'Appoint Head of Security')
 
 @section('content')
 <div class="grid grid-cols-1 gap-6 mb-6">
@@ -11,24 +11,32 @@
                 <div class="mr-4">
                     <div class="w-16 h-16 rounded-full flex items-center justify-center border-2"
                          style="background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%); color: white; font-weight: 600; border-color: var(--primary);">
-                        <i class="fas fa-user-tie text-xl"></i>
+                        <i class="fas fa-user-shield text-xl"></i>
                     </div>
                 </div>
                 <div>
                     <h2 class="text-xl font-semibold flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-user-tie mr-2" style="color: var(--primary);"></i>
-                        Assign Supervisor to Security Post
+                        <i class="fas fa-user-shield mr-2" style="color: var(--primary);"></i>
+                        Appoint Head of Security
                     </h2>
                     <div class="text-sm flex items-center mt-1" style="color: var(--text-secondary);">
                         <i class="fas fa-info-circle mr-2"></i>
-                        <span>Create a new supervisor assignment with permissions and scope</span>
+                        <span>Appoint an eligible officer as Head of Security</span>
                         <span class="mx-2">•</span>
                         <i class="fas fa-users mr-1"></i>
-                        <span>{{ $supervisors->count() ?? 0 }} available supervisors</span>
+                        <span>{{ $supervisors->count() ?? 0 }} eligible officer(s)</span>
                         <span class="mx-2">•</span>
-                        <span class="px-2 py-0.5 rounded-full text-xs" style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
-                            <i class="fas fa-user-shield mr-1"></i> Admin
-                        </span>
+                        @if($currentHead ?? null)
+                            <span class="px-2 py-0.5 rounded-full text-xs"
+                                  style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                                <i class="fas fa-crown mr-1"></i> Current head: {{ $currentHead->user->name }}
+                            </span>
+                        @else
+                            <span class="px-2 py-0.5 rounded-full text-xs"
+                                  style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                <i class="fas fa-check-circle mr-1"></i> No active head
+                            </span>
+                        @endif
                     </div>
                 </div>
             </div>
@@ -40,6 +48,37 @@
             </div>
         </div>
     </div>
+
+    <!-- Current Head Banner -->
+    @if($currentHead ?? null)
+    <div class="card p-4"
+         style="background-color: rgba(var(--warning-rgb), 0.08); border-left: 4px solid var(--warning);">
+        <div class="flex items-start">
+            <i class="fas fa-exclamation-triangle mt-1 mr-3" style="color: var(--warning);"></i>
+            <div>
+                <h4 class="font-semibold" style="color: var(--text-primary);">
+                    {{ $currentHead->user->name }} is currently Head of Security
+                </h4>
+                <p class="text-sm mt-1" style="color: var(--text-secondary);">
+                    Appointed {{ $currentHead->start_date?->format('M j, Y') }}
+                    @if($currentHead->end_date)
+                        · Ends {{ $currentHead->end_date->format('M j, Y') }}
+                    @else
+                        · Ongoing
+                    @endif
+                    @if($currentHead->assignedBy)
+                        · Appointed by {{ $currentHead->assignedBy->name }}
+                    @endif
+                </p>
+                <p class="text-sm mt-2" style="color: var(--text-secondary);">
+                    <i class="fas fa-info-circle mr-1" style="color: var(--info);"></i>
+                    To replace them, tick <strong>"Replace current head"</strong> below.
+                    Their appointment will end the day before the new head's start date.
+                </p>
+            </div>
+        </div>
+    </div>
+    @endif
 
     <!-- Error Alert -->
     @if($errors->any())
@@ -64,123 +103,86 @@
 
     <form action="{{ route('admin.supervisor-assignments.store') }}" method="POST" id="assignmentForm">
         @csrf
-        
-        <!-- Basic Information Section -->
+
+        <!-- Officer & Dates -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <!-- Supervisor Selection -->
+            <!-- Officer Selection -->
             <div class="card">
                 <div class="p-6 border-b" style="border-color: var(--border-color);">
                     <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-user-tie mr-2" style="color: var(--primary);"></i>
-                        Supervisor Information
+                        <i class="fas fa-user-shield mr-2" style="color: var(--primary);"></i>
+                        Officer
                     </h3>
                 </div>
                 <div class="p-6 space-y-4">
                     <div>
                         <label for="user_id" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
-                            <i class="fas fa-user-tie mr-1" style="color: var(--primary);"></i>
-                            Select Supervisor <span class="text-danger" style="color: var(--danger);">*</span>
+                            <i class="fas fa-user-shield mr-1" style="color: var(--primary);"></i>
+                            Select Head of Security <span style="color: var(--danger);">*</span>
                         </label>
-                        <select name="user_id" id="user_id" 
-                                class="index-custom-dropdown w-full @error('user_id') is-invalid @enderror" 
+                        <select name="user_id" id="user_id"
+                                class="index-custom-dropdown w-full @error('user_id') is-invalid @enderror"
                                 style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                 required>
-                            <option value="">-- Select Supervisor --</option>
+                            <option value="">-- Select Officer --</option>
                             @foreach($supervisors as $supervisor)
-                                <option value="{{ $supervisor->id }}" 
-                                        data-eligible="{{ $supervisor->can_be_supervisor ? 'true' : 'false' }}"
-                                        data-email="{{ $supervisor->email }}"
+                                <option value="{{ $supervisor->id }}"
                                         data-name="{{ $supervisor->name }}"
+                                        data-email="{{ $supervisor->email }}"
                                         {{ old('user_id') == $supervisor->id ? 'selected' : '' }}>
-                                    {{ $supervisor->name }} 
-                                    @if($supervisor->can_be_supervisor)
-                                        <span class="text-xs text-green-500">(Eligible)</span>
-                                    @else
-                                        <span class="text-xs text-yellow-500">(Not Eligible)</span>
+                                    {{ $supervisor->name }}
+                                    @if($supervisor->email)
+                                        ({{ $supervisor->email }})
                                     @endif
                                 </option>
                             @endforeach
                         </select>
-                        
-                        <!-- Supervisor Preview -->
-                        <div id="supervisorPreview" class="mt-3 p-3 rounded-lg hidden" 
+
+                        <!-- Officer Preview -->
+                        <div id="supervisorPreview" class="mt-3 p-3 rounded-lg hidden"
                              style="background-color: rgba(var(--info-rgb), 0.05); border-left: 3px solid var(--info);">
                             <div class="flex items-center justify-between">
-                                <span class="text-xs font-medium" style="color: var(--text-secondary);">Selected Supervisor:</span>
+                                <span class="text-xs font-medium" style="color: var(--text-secondary);">Selected officer:</span>
                                 <div class="flex space-x-2">
                                     <span class="px-2 py-1 text-xs rounded-full badge-info" id="previewName"></span>
-                                    <span class="px-2 py-1 text-xs rounded-full badge-success" id="previewEligibility"></span>
-                                    <span class="px-2 py-1 text-xs rounded-full badge-primary" id="previewEmail"></span>
+                                    <span class="px-2 py-1 text-xs rounded-full badge-success" id="previewEmail"></span>
                                 </div>
                             </div>
                         </div>
-                        
-                        <!-- Info about eligibility -->
+
                         <div class="mt-2 text-xs" style="color: var(--text-secondary);">
                             <i class="fas fa-info-circle mr-1"></i>
-                            Only users with <strong>can_be_supervisor = true</strong> can be assigned as supervisors.
-                            Manage eligibility in <a href="{{ route('admin.users.index') }}" class="text-primary hover:underline">User Management</a>.
+                            Only active security officers with <strong>"Can be appointed Head of Security"</strong> enabled appear here.
+                            Manage eligibility in
+                            <a href="{{ route('admin.users.index') }}" class="text-primary hover:underline">User Management</a>.
                         </div>
                     </div>
 
-                    <!-- Security Post Selection -->
+                    <!-- Title (optional override) -->
                     <div>
-                        <label for="security_post_id" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
-                            <i class="fas fa-building mr-1" style="color: var(--primary);"></i>
-                            Security Post
+                        <label for="title" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
+                            <i class="fas fa-tag mr-1" style="color: var(--primary);"></i>
+                            Title
+                            <span class="text-xs" style="color: var(--text-secondary);">(optional)</span>
                         </label>
-                        <select name="security_post_id" id="security_post_id" 
-                                class="index-custom-dropdown w-full @error('security_post_id') is-invalid @enderror" 
-                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
-                            <option value="">-- Role Only (No Post Assignment) --</option>
-                            @foreach($posts as $post)
-                                <option value="{{ $post->id }}" 
-                                        data-max="{{ $post->max_personnel }}"
-                                        data-code="{{ $post->code }}"
-                                        data-name="{{ $post->name }}"
-                                        {{ old('security_post_id') == $post->id ? 'selected' : '' }}>
-                                    {{ $post->name }} ({{ $post->code }})
-                                    @if(isset($post->max_personnel))
-                                        <span class="text-xs text-gray-500">- Max: {{ $post->max_personnel }}</span>
-                                    @endif
-                                </option>
-                            @endforeach
-                        </select>
+                        <input type="text" name="title" id="title"
+                               class="index-custom-input w-full @error('title') is-invalid @enderror"
+                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                               value="{{ old('title', 'Head of Security') }}"
+                               placeholder="Head of Security">
                         <p class="mt-1 text-xs" style="color: var(--text-secondary);">
-                            <i class="fas fa-info-circle mr-1"></i>
-                            Select <strong>"Role Only"</strong> to assign the supervisor role without assigning to a specific post.
-                            Select a post to assign the supervisor to that specific post.
+                            Default: <strong>Head of Security</strong>. Override to use a different label (e.g., <em>Acting Head</em>).
                         </p>
-                        
-                        <!-- Post Preview -->
-                        <div id="postPreview" class="mt-3 p-3 rounded-lg hidden" 
-                             style="background-color: rgba(var(--warning-rgb), 0.05); border-left: 3px solid var(--warning);">
-                            <div class="flex items-center justify-between">
-                                <span class="text-xs font-medium" style="color: var(--text-secondary);">Post Details:</span>
-                                <span class="px-2 py-1 text-xs rounded-full badge-warning" id="postCapacity"></span>
-                                <span class="px-2 py-1 text-xs rounded-full badge-secondary" id="postCode"></span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Admin Only - Additional Info -->
-                    <div class="mt-2 p-3 rounded-lg" style="background-color: rgba(var(--primary-rgb), 0.05); border: 1px solid var(--border-color);">
-                        <div class="flex items-center">
-                            <i class="fas fa-shield-alt mr-2" style="color: var(--primary);"></i>
-                            <span class="text-xs" style="color: var(--text-secondary);">
-                                <strong>Admin Access:</strong> You can assign any supervisor type including Area Supervisors
-                            </span>
-                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Assignment Duration -->
+            <!-- Assignment Period -->
             <div class="card">
                 <div class="p-6 border-b" style="border-color: var(--border-color);">
                     <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
                         <i class="fas fa-calendar-alt mr-2" style="color: var(--primary);"></i>
-                        Assignment Duration
+                        Assignment Period
                     </h3>
                 </div>
                 <div class="p-6 space-y-4">
@@ -188,12 +190,12 @@
                         <div>
                             <label for="start_date" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
                                 <i class="fas fa-play-circle mr-1" style="color: var(--success);"></i>
-                                Start Date <span class="text-danger" style="color: var(--danger);">*</span>
+                                Start Date <span style="color: var(--danger);">*</span>
                             </label>
-                            <input type="date" name="start_date" id="start_date" 
-                                   class="index-custom-input w-full @error('start_date') is-invalid @enderror" 
+                            <input type="date" name="start_date" id="start_date"
+                                   class="index-custom-input w-full @error('start_date') is-invalid @enderror"
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                   value="{{ old('start_date', now()->format('Y-m-d')) }}" 
+                                   value="{{ old('start_date', now()->format('Y-m-d')) }}"
                                    required>
                         </div>
                         <div>
@@ -201,8 +203,8 @@
                                 <i class="fas fa-stop-circle mr-1" style="color: var(--warning);"></i>
                                 End Date
                             </label>
-                            <input type="date" name="end_date" id="end_date" 
-                                   class="index-custom-input w-full @error('end_date') is-invalid @enderror" 
+                            <input type="date" name="end_date" id="end_date"
+                                   class="index-custom-input w-full @error('end_date') is-invalid @enderror"
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                    value="{{ old('end_date') }}"
                                    min="{{ old('start_date', now()->format('Y-m-d')) }}">
@@ -210,7 +212,6 @@
                         </div>
                     </div>
 
-                    <!-- Duration Display -->
                     <div class="mt-4 p-3 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid var(--border-color);">
                         <div class="flex items-center">
                             <i class="fas fa-info-circle mr-2" style="color: var(--info);"></i>
@@ -218,10 +219,9 @@
                         </div>
                     </div>
 
-                    <!-- Quick Duration Presets -->
                     <div class="flex flex-wrap gap-2 mt-2">
                         <span class="text-xs" style="color: var(--text-secondary);">Quick set:</span>
-                        <button type="button" class="px-2 py-1 text-xs rounded duration-preset" data-days="7" 
+                        <button type="button" class="px-2 py-1 text-xs rounded duration-preset" data-days="7"
                                 style="background-color: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color);">
                             1 Week
                         </button>
@@ -246,273 +246,94 @@
             </div>
         </div>
 
-        <!-- Supervisor Type & Scope Section -->
+        <!-- Replacement & Notes -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <!-- Type & Scope -->
+            <!-- Replacement -->
             <div class="card">
                 <div class="p-6 border-b" style="border-color: var(--border-color);">
                     <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-tag mr-2" style="color: var(--primary);"></i>
-                        Supervisor Type & Scope
+                        <i class="fas fa-exchange-alt mr-2" style="color: var(--primary);"></i>
+                        Replacement
                     </h3>
                 </div>
                 <div class="p-6 space-y-4">
-                    <!-- Supervisor Type -->
-                    <div>
-                        <label for="supervisor_type" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
-                            <i class="fas fa-user-tag mr-1" style="color: var(--primary);"></i>
-                            Supervisor Type <span class="text-danger" style="color: var(--danger);">*</span>
-                        </label>
-                        <select name="supervisor_type" id="supervisor_type" 
-                                class="index-custom-dropdown w-full @error('supervisor_type') is-invalid @enderror" 
-                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                required>
-                            @foreach($supervisorTypes as $value => $label)
-                                @php
-                                    // Determine if this option should be selected
-                                    $isSelected = false;
-                                    
-                                    // If there's old input, use that
-                                    if (old('supervisor_type')) {
-                                        $isSelected = old('supervisor_type') == $value;
-                                    } 
-                                    // Otherwise, check if this is area_supervisor AND no post is selected
-                                    else {
-                                        $postId = old('security_post_id');
-                                        // If no post is selected (null, empty, or "All Posts"), pre-select area_supervisor
-                                        if ($value === 'area_supervisor' && (is_null($postId) || $postId === '' || $postId === '0')) {
-                                            $isSelected = true;
-                                        }
-                                    }
-                                @endphp
-                                <option value="{{ $value }}" {{ $isSelected ? 'selected' : '' }}>
-                                    {{ $label }}
-                                </option>
-                            @endforeach
-                        </select>
-                        <p class="mt-1 text-xs" style="color: var(--text-secondary);">
-                            <i class="fas fa-info-circle mr-1"></i>
-                            <span id="supervisorTypeHint">Select the appropriate supervisor type for this assignment</span>
-                        </p>
-                        <!-- Admin Only - Area Supervisor Warning -->
-                        <div id="areaSupervisorWarning" class="mt-2 p-2 rounded-lg hidden" 
-                             style="background-color: rgba(var(--warning-rgb), 0.1); border-left: 3px solid var(--warning);">
-                            <div class="flex items-start">
-                                <i class="fas fa-exclamation-triangle mr-2 mt-0.5" style="color: var(--warning);"></i>
-                                <span class="text-xs" style="color: var(--text-secondary);">
-                                    <strong>Area Supervisor:</strong> This grants supervision over ALL security posts.
-                                    Only administrators can assign Area Supervisors.
-                                </span>
+                    <div class="flex items-start justify-between p-4 rounded-lg"
+                         style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                        <div class="flex items-start">
+                            <i class="fas fa-crown mr-3 mt-1" style="color: var(--warning);"></i>
+                            <div>
+                                <label for="replace_existing" class="text-sm font-medium cursor-pointer" style="color: var(--text-primary);">
+                                    Replace current head
+                                </label>
+                                <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                                    @if($currentHead ?? null)
+                                        If ticked, <strong>{{ $currentHead->user->name }}</strong> will be demoted and the new officer appointed.
+                                    @else
+                                        There is no active head to replace — this checkbox has no effect.
+                                    @endif
+                                </p>
                             </div>
+                        </div>
+                        <div class="toggle-modern flex-shrink-0 ml-4">
+                            <input type="checkbox" name="replace_existing" id="replace_existing" value="1"
+                                   {{ old('replace_existing') ? 'checked' : '' }}
+                                   class="sr-only">
+                            <label for="replace_existing" class="toggle-slider"></label>
                         </div>
                     </div>
 
-                    <!-- Shifts -->
-                    <div>
-                        <label for="shift_ids" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
-                            <i class="fas fa-clock mr-1" style="color: var(--primary);"></i>
-                            Specific Shifts to Supervise
-                        </label>
-                        <select name="shift_ids[]" id="shift_ids" 
-                                class="index-custom-dropdown w-full" multiple 
-                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
-                            @foreach($shifts as $shift)
-                                <option value="{{ $shift->id }}" 
-                                        data-start="{{ $shift->start_time }}"
-                                        data-end="{{ $shift->end_time }}"
-                                        {{ in_array($shift->id, old('shift_ids', [])) ? 'selected' : '' }}>
-                                    {{ $shift->name }} ({{ substr($shift->start_time, 0, 5) }} - {{ substr($shift->end_time, 0, 5) }})
-                                    @if($shift->category)
-                                        - {{ ucfirst($shift->category) }}
-                                    @endif
-                                </option>
-                            @endforeach
-                        </select>
-                        <p class="mt-1 text-xs" style="color: var(--text-secondary);">Leave empty to supervise all shifts</p>
-                    </div>
-
-                    <!-- Applicable Days -->
-                    <div>
-                        <label for="applicable_days" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
-                            <i class="fas fa-calendar-day mr-1" style="color: var(--primary);"></i>
-                            Applicable Days
-                        </label>
-                        <select name="applicable_days[]" id="applicable_days" 
-                                class="index-custom-dropdown w-full" multiple 
-                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
-                            @foreach($daysOfWeek as $dayNum => $dayName)
-                                <option value="{{ $dayNum }}" 
-                                        {{ in_array($dayNum, old('applicable_days', [])) ? 'selected' : '' }}>
-                                    {{ $dayName }}
-                                </option>
-                            @endforeach
-                        </select>
-                        <p class="mt-1 text-xs" style="color: var(--text-secondary);">Leave empty to cover all days</p>
-                    </div>
-
-                    <!-- Primary Supervisor Toggle -->
-                    <div class="mt-4">
-                        <div class="flex items-center justify-between p-4 rounded-lg" style="background-color: var(--bg-secondary);">
-                            <div class="flex items-start">
-                                <i class="fas fa-star mr-3 mt-0.5" style="color: var(--warning);"></i>
-                                <div>
-                                    <label for="is_primary_supervisor" class="text-sm font-medium cursor-pointer" style="color: var(--text-primary);">
-                                        Set as Primary Supervisor
-                                    </label>
-                                    <p class="text-xs mt-1" style="color: var(--text-secondary);">Primary supervisor will be the main point of contact for this post</p>
-                                </div>
-                            </div>
-                            <div class="toggle-modern">
-                                <input type="checkbox" name="is_primary_supervisor" id="is_primary_supervisor" value="1" 
-                                       {{ old('is_primary_supervisor') ? 'checked' : '' }} class="sr-only">
-                                <label for="is_primary_supervisor" class="toggle-slider"></label>
-                            </div>
+                    <div class="p-3 rounded-lg"
+                         style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid var(--border-color);">
+                        <div class="flex items-start">
+                            <i class="fas fa-info-circle mr-2 mt-0.5" style="color: var(--info);"></i>
+                            <span class="text-xs" style="color: var(--text-secondary);">
+                                Only one active Head of Security exists at a time.
+                                The system enforces this invariant — you cannot appoint a second head without
+                                confirming replacement.
+                            </span>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Permissions -->
+            <!-- Notes -->
             <div class="card">
-                <div class="p-6 border-b flex justify-between items-center" style="border-color: var(--border-color);">
+                <div class="p-6 border-b" style="border-color: var(--border-color);">
                     <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-shield-alt mr-2" style="color: var(--primary);"></i>
-                        Supervisor Permissions
+                        <i class="fas fa-sticky-note mr-2" style="color: var(--primary);"></i>
+                        Notes
                     </h3>
-                    <div class="flex space-x-2">
-                        <button type="button" id="selectAllPermissions"
-                                class="px-3 py-1 text-xs rounded-lg btn-secondary"
-                                style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
-                            Select All
-                        </button>
-                        <button type="button" id="deselectAllPermissions"
-                                class="px-3 py-1 text-xs rounded-lg btn-secondary"
-                                style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--text-secondary);">
-                            Deselect All
-                        </button>
-                    </div>
                 </div>
-                <div class="p-6" style="max-height: 350px; overflow-y: auto;">
-                    <div class="grid grid-cols-1 gap-4">
-                        @foreach($permissionOptions as $permission => $label)
-                            @php
-                                // Determine if permission should be checked by default
-                                $defaultChecked = true;
-                                // For admin, all permissions default to true
-                                // Specific permissions might be false based on type
-                            @endphp
-                            <div class="flex items-center justify-between p-3 rounded-lg permission-item" style="background-color: var(--bg-secondary);">
-                                <div class="flex items-start">
-                                    <i class="fas fa-check-circle mr-3 mt-0.5" style="color: var(--primary); opacity: 0.7;"></i>
-                                    <div>
-                                        <label for="{{ $permission }}" class="text-sm font-medium cursor-pointer" style="color: var(--text-primary);">
-                                            {{ $label }}
-                                        </label>
-                                        <p class="text-xs mt-0.5" style="color: var(--text-secondary);">
-                                            @switch($permission)
-                                                @case('can_override_checkins')
-                                                    Allow supervisor to override check-in/check-out times
-                                                    @break
-                                                @case('can_approve_swaps')
-                                                    Allow supervisor to approve shift swap requests
-                                                    @break
-                                                @case('can_approve_overtime')
-                                                    Allow supervisor to approve overtime requests
-                                                    @break
-                                                @case('can_review_incidents')
-                                                    Allow supervisor to review and resolve incidents
-                                                    @break
-                                                @case('can_verify_checkins')
-                                                    Allow supervisor to verify check-in/out
-                                                    @break
-                                                @case('can_request_backup')
-                                                    Allow supervisor to request backup
-                                                    @break
-                                                @case('can_approve_breaks')
-                                                    Allow supervisor to approve break requests
-                                                    @break
-                                                @case('can_escalate_issues')
-                                                    Allow supervisor to escalate issues
-                                                    @break
-                                                @case('can_view_all_schedules')
-                                                    Allow supervisor to view all schedules
-                                                    @break
-                                                @case('can_edit_schedules')
-                                                    Allow supervisor to edit schedules
-                                                    @break
-                                                @default
-                                                    Additional permission
-                                            @endswitch
-                                        </p>
-                                    </div>
-                                </div>
-                                <div class="toggle-modern">
-                                    <input type="checkbox" name="{{ $permission }}" id="{{ $permission }}" value="1" 
-                                           {{ old($permission, $defaultChecked) ? 'checked' : '' }} class="permission-checkbox sr-only">
-                                    <label for="{{ $permission }}" class="toggle-slider"></label>
-                                </div>
-                            </div>
-                        @endforeach
-                    </div>
-
-                    <!-- Custom Permissions JSON -->
-                    <div class="mt-4">
-                        <label for="permissions" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
-                            <i class="fas fa-code mr-1" style="color: var(--primary);"></i>
-                            Additional Permissions (JSON)
-                            <span class="text-xs text-muted" style="color: var(--text-secondary);">(Admin Only)</span>
-                        </label>
-                        <textarea name="permissions" id="permissions" rows="2"
-                                  class="index-custom-input w-full @error('permissions') is-invalid @enderror font-mono text-xs"
-                                  style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color); font-family: monospace;"
-                                  placeholder='["approve_leave", "manage_equipment"]'>{{ old('permissions') }}</textarea>
-                        <p class="mt-1 text-xs" style="color: var(--text-secondary);">Enter custom permissions as JSON array. This is an admin-only feature.</p>
-                    </div>
+                <div class="p-6">
+                    <label for="notes" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
+                        <i class="fas fa-pen mr-1" style="color: var(--primary);"></i>
+                        Assignment Notes
+                    </h4>
+                    <textarea name="notes" id="notes" rows="5"
+                              class="index-custom-input w-full @error('notes') is-invalid @enderror"
+                              style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                              placeholder="Enter any special instructions or context for this appointment...">{{ old('notes') }}</textarea>
+                    <p class="mt-1 text-xs" style="color: var(--text-secondary);">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Optional. Recorded in the appointment's audit trail.
+                    </p>
                 </div>
             </div>
         </div>
 
-        <!-- Notes Section -->
+        <!-- Assignment Summary -->
         <div class="card mt-6">
             <div class="p-6 border-b" style="border-color: var(--border-color);">
                 <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
-                    <i class="fas fa-sticky-note mr-2" style="color: var(--primary);"></i>
-                    Notes & Additional Information
+                    <i class="fas fa-list-alt mr-2" style="color: var(--primary);"></i>
+                    Summary
                 </h3>
             </div>
             <div class="p-6">
-                <div>
-                    <label for="notes" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
-                        <i class="fas fa-pen mr-1" style="color: var(--primary);"></i>
-                        Assignment Notes
-                    </label>
-                    <textarea name="notes" id="notes" rows="3"
-                              class="index-custom-input w-full @error('notes') is-invalid @enderror"
-                              style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                              placeholder="Enter any special instructions or notes for this supervisor...">{{ old('notes') }}</textarea>
-                </div>
-
-                <!-- Admin Notes -->
-                <div class="mt-3">
-                    <label for="admin_notes" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
-                        <i class="fas fa-user-shield mr-1" style="color: var(--primary);"></i>
-                        Admin Notes <span class="text-xs text-muted" style="color: var(--text-secondary);">(Internal)</span>
-                    </label>
-                    <textarea name="admin_notes" id="admin_notes" rows="2"
-                              class="index-custom-input w-full"
-                              style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color); border-style: dashed;"
-                              placeholder="Internal notes visible only to administrators...">{{ old('admin_notes') }}</textarea>
-                    <p class="mt-1 text-xs" style="color: var(--text-secondary);">These notes are only visible to administrators and will be stored in metadata.</p>
-                </div>
-
-                <!-- Assignment Summary -->
-                <div class="mt-4 p-4 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid var(--border-color);">
-                    <h4 class="text-sm font-semibold mb-2 flex items-center" style="color: var(--info);">
-                        <i class="fas fa-info-circle mr-2"></i>
-                        Assignment Summary
-                    </h4>
+                <div class="p-4 rounded-lg"
+                     style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid var(--border-color);">
                     <div id="assignmentSummary" class="text-sm space-y-1" style="color: var(--text-secondary);">
-                        <p class="mb-0">Fill in the form to see a summary of this assignment.</p>
+                        <p class="mb-0">Fill in the form to see a summary of this appointment.</p>
                     </div>
                 </div>
             </div>
@@ -532,7 +353,7 @@
                 </button>
                 <button type="submit" id="submitBtn"
                         class="btn-primary px-6 py-2.5 rounded-lg text-sm font-medium text-white inline-flex items-center">
-                    <i class="fas fa-save mr-2"></i> Assign Supervisor
+                    <i class="fas fa-save mr-2"></i> Appoint Head of Security
                 </button>
             </div>
         </div>
@@ -589,15 +410,8 @@
     transform: translateX(24px);
 }
 
-/* Enhanced focus states for accessibility */
 .toggle-modern input:focus + .toggle-slider {
     box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.3);
-}
-
-/* Theme-specific toggle styles */
-[data-theme="light"] .toggle-slider {
-    background-color: #d1d5db;
-    border-color: #d1d5db;
 }
 
 [data-theme="dark"] .toggle-slider {
@@ -605,52 +419,11 @@
     border-color: #4b5563;
 }
 
-[data-theme="light"] .toggle-slider:before {
-    background-color: white;
-}
-
 [data-theme="dark"] .toggle-slider:before {
     background-color: #e5e7eb;
 }
 
-/* Permission item styling */
-.permission-item {
-    transition: all 0.2s ease;
-}
-
-.permission-item:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-}
-
-/* Select2 customization to match theme */
-.select2-container--default .select2-selection--single,
-.select2-container--default .select2-selection--multiple {
-    background-color: var(--bg-secondary) !important;
-    border-color: var(--border-color) !important;
-    color: var(--text-primary) !important;
-}
-
-.select2-container--default .select2-selection--single .select2-selection__rendered {
-    color: var(--text-primary) !important;
-}
-
-.select2-dropdown {
-    background-color: var(--bg-secondary) !important;
-    border-color: var(--border-color) !important;
-    color: var(--text-primary) !important;
-}
-
-.select2-container--default .select2-results__option[aria-selected=true] {
-    background-color: rgba(var(--primary-rgb), 0.1) !important;
-}
-
-.select2-container--default .select2-results__option--highlighted[aria-selected] {
-    background-color: var(--primary) !important;
-    color: white !important;
-}
-
-/* Card hover effects */
+/* Card hover */
 .card {
     transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
@@ -661,7 +434,7 @@
 }
 
 /* Preview panels */
-#supervisorPreview, #postPreview {
+#supervisorPreview {
     transition: all 0.2s ease;
 }
 
@@ -676,24 +449,24 @@
     transform: scale(0.95);
 }
 
-/* Responsive adjustments */
+/* Responsive */
 @media (max-width: 768px) {
     .grid {
         gap: 1rem;
     }
-    
+
     .toggle-modern {
         width: 40px;
         height: 20px;
     }
-    
+
     .toggle-slider:before {
         height: 14px;
         width: 14px;
         left: 1px;
         bottom: 1px;
     }
-    
+
     .toggle-modern input:checked + .toggle-slider:before {
         transform: translateX(20px);
     }
@@ -711,62 +484,32 @@
     border: 0;
 }
 
-/* Supervisor Type Hint Styles */
-#supervisorTypeHint {
-    transition: all 0.3s ease;
-}
-
-#supervisorTypeHint.hint-area {
-    color: var(--success);
-}
-
-#supervisorTypeHint.hint-post {
-    color: var(--info);
-}
-
-#supervisorTypeHint.hint-shift {
-    color: var(--warning);
-}
-
-#supervisorTypeHint.hint-relief {
-    color: var(--secondary);
-}
-
-#supervisorTypeHint.hint-training {
-    color: var(--text-secondary);
-}
-
 /* Badge styles */
 .badge-success {
     background-color: rgba(var(--success-rgb), 0.1) !important;
     color: var(--success) !important;
     border: 1px solid rgba(var(--success-rgb), 0.3) !important;
 }
-
 .badge-warning {
     background-color: rgba(var(--warning-rgb), 0.1) !important;
     color: var(--warning) !important;
     border: 1px solid rgba(var(--warning-rgb), 0.3) !important;
 }
-
 .badge-danger {
     background-color: rgba(var(--danger-rgb), 0.1) !important;
     color: var(--danger) !important;
     border: 1px solid rgba(var(--danger-rgb), 0.3) !important;
 }
-
 .badge-info {
     background-color: rgba(var(--info-rgb), 0.1) !important;
     color: var(--info) !important;
     border: 1px solid rgba(var(--info-rgb), 0.3) !important;
 }
-
 .badge-primary {
     background-color: rgba(var(--primary-rgb), 0.1) !important;
     color: var(--primary) !important;
     border: 1px solid rgba(var(--primary-rgb), 0.3) !important;
 }
-
 .badge-secondary {
     background-color: rgba(var(--secondary-rgb), 0.1) !important;
     color: var(--secondary) !important;
@@ -775,191 +518,75 @@
 </style>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize Select2 for better dropdown experience
-    if (typeof $ !== 'undefined' && $.fn.select2) {
-        $('.index-custom-dropdown').select2({
-            theme: 'default',
-            placeholder: 'Select options',
-            allowClear: true,
-            dropdownParent: $(document.body)
-        });
-    }
-
-    // Initialize toggle switches with proper styling
-    const toggleSwitches = document.querySelectorAll('.toggle-modern input[type="checkbox"]');
-    toggleSwitches.forEach(switchEl => {
-        // Set initial state
-        updateToggleSwitch(switchEl);
-        
-        // Add change event listener
-        switchEl.addEventListener('change', function() {
-            updateToggleSwitch(this);
-        });
-    });
-
-    function updateToggleSwitch(checkbox) {
-        const slider = checkbox.nextElementSibling;
-        if (checkbox.checked) {
-            slider.style.backgroundColor = 'var(--success)';
-            slider.style.borderColor = 'var(--success)';
-        } else {
-            slider.style.backgroundColor = '#d1d5db';
-            slider.style.borderColor = '#d1d5db';
-        }
-    }
-
-    // ✅ UPDATED: Supervisor preview using new data attributes
-    const userSelect = document.getElementById('user_id');
+document.addEventListener('DOMContentLoaded', function () {
+    // ------- Officer preview -------
+    const userSelect        = document.getElementById('user_id');
     const supervisorPreview = document.getElementById('supervisorPreview');
-    const previewName = document.getElementById('previewName');
-    const previewEligibility = document.getElementById('previewEligibility');
-    const previewEmail = document.getElementById('previewEmail');
+    const previewName       = document.getElementById('previewName');
+    const previewEmail      = document.getElementById('previewEmail');
 
-    userSelect.addEventListener('change', function() {
-        const selected = this.options[this.selectedIndex];
-        if (selected.value) {
-            const name = selected.dataset.name || 'Unknown';
-            const isEligible = selected.dataset.eligible === 'true';
-            const email = selected.dataset.email || 'No email';
-            
-            previewName.textContent = name;
-            previewEligibility.textContent = isEligible ? '✅ Eligible' : '❌ Not Eligible';
-            previewEligibility.style.backgroundColor = isEligible ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--danger-rgb), 0.1)';
-            previewEligibility.style.color = isEligible ? 'var(--success)' : 'var(--danger)';
-            previewEmail.textContent = email;
+    function updateOfficerPreview() {
+        const selected = userSelect.options[userSelect.selectedIndex];
+        if (selected && selected.value) {
+            previewName.textContent  = selected.dataset.name  || 'Unknown';
+            previewEmail.textContent = selected.dataset.email || 'No email';
             supervisorPreview.classList.remove('hidden');
         } else {
             supervisorPreview.classList.add('hidden');
         }
         updateAssignmentSummary();
-    });
-
-    // Post preview with auto-selection logic
-    const postSelect = document.getElementById('security_post_id');
-    const postPreview = document.getElementById('postPreview');
-    const postCapacity = document.getElementById('postCapacity');
-    const postCode = document.getElementById('postCode');
-    const supervisorType = document.getElementById('supervisor_type');
-    const supervisorTypeHint = document.getElementById('supervisorTypeHint');
-    const areaSupervisorWarning = document.getElementById('areaSupervisorWarning');
-
-    // Function to update supervisor type based on post selection
-    function updateSupervisorTypeBasedOnPost() {
-        const selectedPost = postSelect.value;
-        const currentType = supervisorType.value;
-        
-        // If no post is selected (role only)
-        if (!selectedPost || selectedPost === '') {
-            // Only change if not already area_supervisor and no old input
-            if (!oldSupervisorType && currentType !== 'area_supervisor') {
-                supervisorType.value = 'area_supervisor';
-                supervisorType.dispatchEvent(new Event('change'));
-                updateSupervisorTypeHint('area_supervisor');
-            }
-        } else {
-            // If a post is selected and current type is area_supervisor, switch to post_supervisor
-            if (currentType === 'area_supervisor' && !oldSupervisorType) {
-                supervisorType.value = 'post_supervisor';
-                supervisorType.dispatchEvent(new Event('change'));
-                updateSupervisorTypeHint('post_supervisor');
-            }
-        }
     }
 
-    // Store old supervisor type from server-side
-    const oldSupervisorType = '{{ old('supervisor_type') }}';
-
-    // Post select change handler
-    postSelect.addEventListener('change', function() {
-        const selected = this.options[this.selectedIndex];
-        if (selected.value) {
-            const maxPersonnel = selected.dataset.max;
-            const code = selected.dataset.code;
-            const name = selected.dataset.name || 'Unknown';
-            postCapacity.textContent = 'Max Personnel: ' + maxPersonnel;
-            postCode.textContent = 'Code: ' + code;
-            postPreview.classList.remove('hidden');
-        } else {
-            postPreview.classList.add('hidden');
-        }
-        
-        updateSupervisorTypeBasedOnPost();
-        updateAssignmentSummary();
-    });
-
-    // Supervisor type change handler with hint updates
-    supervisorType.addEventListener('change', function() {
-        updatePermissionsByType(this.value);
-        updateSupervisorTypeHint(this.value);
-        updateAssignmentSummary();
-        
-        if (this.value === 'area_supervisor') {
-            areaSupervisorWarning.classList.remove('hidden');
-        } else {
-            areaSupervisorWarning.classList.add('hidden');
-        }
-    });
-
-    // Function to update supervisor type hint
-    function updateSupervisorTypeHint(type) {
-        const hints = {
-            'post_supervisor': 'Supervises a specific post with full operational permissions',
-            'shift_supervisor': 'Supervises specific shifts with shift-based permissions',
-            'area_supervisor': 'Supervises ALL posts with full administrative permissions',
-            'relief_supervisor': 'Temporary supervisor with limited approval permissions',
-            'training_supervisor': 'Supervisor in training with observation-only permissions'
-        };
-        
-        const hintColors = {
-            'post_supervisor': 'hint-post',
-            'shift_supervisor': 'hint-shift',
-            'area_supervisor': 'hint-area',
-            'relief_supervisor': 'hint-relief',
-            'training_supervisor': 'hint-training'
-        };
-        
-        supervisorTypeHint.textContent = hints[type] || 'Select the appropriate supervisor type';
-        supervisorTypeHint.className = hintColors[type] || '';
+    if (userSelect) {
+        userSelect.addEventListener('change', updateOfficerPreview);
     }
 
-    // Date handling with presets
-    const startDate = document.getElementById('start_date');
-    const endDate = document.getElementById('end_date');
-    const durationDisplay = document.getElementById('durationDisplay');
+    // ------- Date handling -------
+    const startDate         = document.getElementById('start_date');
+    const endDate           = document.getElementById('end_date');
+    const durationDisplay   = document.getElementById('durationDisplay');
 
     function updateDurationDisplay() {
-        const start = startDate.value;
-        const end = endDate.value;
-        
+        const start = startDate?.value;
+        const end   = endDate?.value;
+
+        if (!durationDisplay) return;
+
         if (start && end) {
             const startMoment = new Date(start);
-            const endMoment = new Date(end);
-            const days = Math.round((endMoment - startMoment) / (1000 * 60 * 60 * 24));
-            durationDisplay.textContent = `Duration: ${days} day(s) (${start} to ${end})`;
+            const endMoment   = new Date(end);
+            const days        = Math.round((endMoment - startMoment) / (1000 * 60 * 60 * 24));
+            durationDisplay.textContent = `Duration: ${days} day(s) (${start} → ${end})`;
         } else if (start && !end) {
             durationDisplay.textContent = 'Duration: Indefinite (no end date)';
         } else {
             durationDisplay.textContent = 'Duration: Indefinite';
         }
+        updateAssignmentSummary();
     }
 
-    startDate.addEventListener('change', function() {
-        endDate.min = this.value;
-        updateDurationDisplay();
-    });
-
-    endDate.addEventListener('change', updateDurationDisplay);
+    if (startDate) {
+        startDate.addEventListener('change', function () {
+            if (endDate) endDate.min = this.value;
+            updateDurationDisplay();
+        });
+    }
+    if (endDate) {
+        endDate.addEventListener('change', updateDurationDisplay);
+    }
 
     // Duration presets
     document.querySelectorAll('.duration-preset').forEach(button => {
-        button.addEventListener('click', function() {
-            const days = parseInt(this.dataset.days);
+        button.addEventListener('click', function () {
+            const days = parseInt(this.dataset.days, 10);
+
+            if (!startDate || !endDate) return;
+
             if (days === 0) {
                 endDate.value = '';
             } else {
-                const start = new Date(startDate.value || new Date());
-                const end = new Date(start);
+                const start = new Date(startDate.value || new Date().toISOString().slice(0, 10));
+                const end   = new Date(start);
                 end.setDate(end.getDate() + days);
                 endDate.value = end.toISOString().split('T')[0];
             }
@@ -967,174 +594,58 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // Permission toggles
-    const selectAllBtn = document.getElementById('selectAllPermissions');
-    const deselectAllBtn = document.getElementById('deselectAllPermissions');
-    const permissionCheckboxes = document.querySelectorAll('.permission-checkbox');
-
-    selectAllBtn.addEventListener('click', function() {
-        permissionCheckboxes.forEach(cb => {
-            cb.checked = true;
-            updateToggleSwitch(cb);
-        });
-    });
-
-    deselectAllBtn.addEventListener('click', function() {
-        permissionCheckboxes.forEach(cb => {
-            cb.checked = false;
-            updateToggleSwitch(cb);
-        });
-    });
-
-    // Update toggle appearance on change
-    permissionCheckboxes.forEach(cb => {
-        cb.addEventListener('change', function() {
-            updateToggleSwitch(this);
-        });
-    });
-
-    // Supervisor type permissions
-    function updatePermissionsByType(type) {
-        const defaultPermissions = {
-            'post_supervisor': {
-                'can_override_checkins': true,
-                'can_approve_swaps': true,
-                'can_approve_overtime': true,
-                'can_review_incidents': true,
-                'can_verify_checkins': true,
-                'can_request_backup': true,
-                'can_approve_breaks': true,
-                'can_escalate_issues': true,
-                'can_view_all_schedules': true,
-                'can_edit_schedules': false
-            },
-            'shift_supervisor': {
-                'can_override_checkins': true,
-                'can_approve_swaps': true,
-                'can_approve_overtime': true,
-                'can_review_incidents': false,
-                'can_verify_checkins': true,
-                'can_request_backup': true,
-                'can_approve_breaks': true,
-                'can_escalate_issues': true,
-                'can_view_all_schedules': true,
-                'can_edit_schedules': false
-            },
-            'area_supervisor': {
-                'can_override_checkins': true,
-                'can_approve_swaps': true,
-                'can_approve_overtime': true,
-                'can_review_incidents': true,
-                'can_verify_checkins': true,
-                'can_request_backup': true,
-                'can_approve_breaks': true,
-                'can_escalate_issues': true,
-                'can_view_all_schedules': true,
-                'can_edit_schedules': true
-            },
-            'relief_supervisor': {
-                'can_override_checkins': true,
-                'can_approve_swaps': false,
-                'can_approve_overtime': false,
-                'can_review_incidents': false,
-                'can_verify_checkins': true,
-                'can_request_backup': true,
-                'can_approve_breaks': true,
-                'can_escalate_issues': true,
-                'can_view_all_schedules': true,
-                'can_edit_schedules': false
-            },
-            'training_supervisor': {
-                'can_override_checkins': false,
-                'can_approve_swaps': false,
-                'can_approve_overtime': false,
-                'can_review_incidents': false,
-                'can_verify_checkins': true,
-                'can_request_backup': false,
-                'can_approve_breaks': true,
-                'can_escalate_issues': true,
-                'can_view_all_schedules': true,
-                'can_edit_schedules': false
-            }
-        };
-
-        if (defaultPermissions[type]) {
-            const perms = defaultPermissions[type];
-            permissionCheckboxes.forEach(cb => {
-                const permName = cb.name;
-                if (perms.hasOwnProperty(permName)) {
-                    cb.checked = perms[permName];
-                    updateToggleSwitch(cb);
-                }
-            });
-        }
-    }
-
-    // Assignment summary
+    // ------- Assignment summary -------
     function updateAssignmentSummary() {
-        const supervisor = userSelect.options[userSelect.selectedIndex]?.text.split('(')[0] || 'Not selected';
-        const post = postSelect.options[postSelect.selectedIndex]?.text || 'Role Only';
-        const type = supervisorType.options[supervisorType.selectedIndex]?.text || 'Not selected';
-        const start = startDate.value || 'Not set';
-        const end = endDate.value || 'Indefinite';
-        const isPrimary = document.getElementById('is_primary_supervisor').checked ? 'Yes' : 'No';
-        
-        let checkedPermissions = 0;
-        permissionCheckboxes.forEach(cb => {
-            if (cb.checked) checkedPermissions++;
-        });
-        
-        let summary = '';
-        summary += `<div class="flex justify-between"><span class="font-medium">Supervisor:</span> <span>${supervisor}</span></div>`;
-        summary += `<div class="flex justify-between"><span class="font-medium">Post:</span> <span>${post}</span></div>`;
-        summary += `<div class="flex justify-between"><span class="font-medium">Type:</span> <span>${type}</span></div>`;
-        summary += `<div class="flex justify-between"><span class="font-medium">Start Date:</span> <span>${start}</span></div>`;
-        summary += `<div class="flex justify-between"><span class="font-medium">End Date:</span> <span>${end}</span></div>`;
-        summary += `<div class="flex justify-between"><span class="font-medium">Primary Supervisor:</span> <span>${isPrimary}</span></div>`;
-        summary += `<div class="flex justify-between"><span class="font-medium">Permissions:</span> <span>${checkedPermissions} of ${permissionCheckboxes.length} enabled</span></div>`;
-        
-        document.getElementById('assignmentSummary').innerHTML = summary;
+        const summaryEl = document.getElementById('assignmentSummary');
+        if (!summaryEl) return;
+
+        const officerOpt = userSelect?.options[userSelect.selectedIndex];
+        const officer    = officerOpt?.value ? (officerOpt.dataset.name || officerOpt.text) : 'Not selected';
+        const title      = document.getElementById('title')?.value || 'Head of Security';
+        const start      = startDate?.value || 'Not set';
+        const end        = endDate?.value || 'Indefinite';
+        const replace    = document.getElementById('replace_existing')?.checked ? 'Yes' : 'No';
+
+        summaryEl.innerHTML = `
+            <div class="flex justify-between"><span class="font-medium">Officer:</span> <span>${officer}</span></div>
+            <div class="flex justify-between"><span class="font-medium">Title:</span> <span>${title}</span></div>
+            <div class="flex justify-between"><span class="font-medium">Start date:</span> <span>${start}</span></div>
+            <div class="flex justify-between"><span class="font-medium">End date:</span> <span>${end}</span></div>
+            <div class="flex justify-between"><span class="font-medium">Replace current head:</span> <span>${replace}</span></div>
+        `;
     }
 
-    // Add listeners for summary updates
-    document.querySelectorAll('#is_primary_supervisor, .permission-checkbox').forEach(el => {
-        el.addEventListener('change', updateAssignmentSummary);
+    // Bind summary-updating listeners
+    ['user_id', 'title', 'start_date', 'end_date', 'replace_existing'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', updateAssignmentSummary);
+        if (el && el.tagName === 'INPUT' && el.type === 'text') {
+            el.addEventListener('input', updateAssignmentSummary);
+        }
     });
 
-    // Form submission
-    const form = document.getElementById('assignmentForm');
+    // ------- Submit -------
+    const form      = document.getElementById('assignmentForm');
     const submitBtn = document.getElementById('submitBtn');
 
-    form.addEventListener('submit', function(e) {
-        if (!userSelect.value) {
-            e.preventDefault();
-            alert('Please select a supervisor.');
-            return;
-        }
-        
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Assigning...';
-    });
+    if (form && submitBtn) {
+        form.addEventListener('submit', function (e) {
+            if (!userSelect?.value) {
+                e.preventDefault();
+                alert('Please select an officer.');
+                userSelect?.focus();
+                return;
+            }
 
-    // Initialize
-    updateSupervisorTypeBasedOnPost();
-    
-    if (userSelect.value) {
-        userSelect.dispatchEvent(new Event('change'));
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Appointing...';
+        });
     }
-    if (postSelect.value) {
-        postSelect.dispatchEvent(new Event('change'));
-    }
-    
+
+    // ------- Init -------
+    updateOfficerPreview();
     updateDurationDisplay();
     updateAssignmentSummary();
-
-    updatePermissionsByType(supervisorType.value);
-    updateSupervisorTypeHint(supervisorType.value);
-    
-    if (supervisorType.value === 'area_supervisor') {
-        areaSupervisorWarning.classList.remove('hidden');
-    }
 });
 </script>
 @endsection

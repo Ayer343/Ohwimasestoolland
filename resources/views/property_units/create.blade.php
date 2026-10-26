@@ -2,130 +2,153 @@
 @php
     // Dynamic title
     $pageTitle = 'Add New Property Unit';
-    
+
     // Get any success/error messages
     $successMessage = session('success');
-    $errorMessage = session('error');
-    
+    $errorMessage   = session('error');
+
     // Determine user role and layout
-    $isLandlord = auth()->user()->isLandlord();
-    $isAdmin = auth()->user()->isAdmin();
-    $isDeveloper = auth()->user()->isDeveloper();
+    $isLandlord   = auth()->user()->isLandlord();
+    $isAdmin      = auth()->user()->isAdmin();
+    $isDeveloper  = auth()->user()->isDeveloper();
     $isSuperAdmin = auth()->user()->isSuperAdmin();
-    
+
     // Determine layout and route prefix
     if ($isLandlord) {
-        $layout = 'layouts.landlord';
+        $layout      = 'layouts.landlord';
         $routePrefix = 'landlord.property-units';
     } elseif ($isAdmin || $isSuperAdmin) {
-        $layout = 'layouts.app';
+        $layout      = 'layouts.app';
         $routePrefix = 'admin.property-units';
     } elseif ($isDeveloper) {
-        $layout = 'layouts.app';
+        $layout      = 'layouts.app';
         $routePrefix = 'developer.property-units';
     } else {
-        $layout = 'layouts.app';
+        $layout      = 'layouts.app';
         $routePrefix = 'property-units';
     }
-    
-    // ============================================
-    // ⭐ BEST METHOD: FILTER PROPERTIES
-    // ============================================
-    // Build the base query
-    $propertiesQuery = \App\Models\Property::query();
-    
-    // Filter by landlord if landlord is viewing
-    if ($isLandlord) {
-        $propertiesQuery->where('landlord_id', auth()->id());
-    }
-    
-    // ⭐ CRITICAL: Exclude vacant land properties using a scope or where clause
-    // This ensures ONLY properties that can have units are shown
-    $propertiesQuery->where(function($query) {
-        // Include properties that are ACTIVE (regardless of construction details)
+
+    // ============================================================
+    // ⭐ FIXED: FILTER PROPERTIES BY ACCESS
+    // ============================================================
+    $propertiesQuery = \App\Models\Property::query()
+        ->accessibleBy(auth()->user());
+
+    $propertiesQuery->where(function ($query) {
         $query->where('status', 'active')
-              // OR properties that are UNDER CONSTRUCTION with construction details
-              ->orWhere(function($q) {
+              ->orWhere(function ($q) {
                   $q->where('status', 'under_construction')
-                    ->where(function($sub) {
-                        // Must have at least ONE of these:
-                        $sub->whereNotNull('property_type_id')
-                            ->where('property_type_id', '!=', 0)
-                            ->orWhereNotNull('construction_status')
-                            ->orWhere('has_plans', true)
-                            ->orWhereNotNull('construction_documents');
+                    ->where(function ($sub) {
+                        $sub->where(function ($t) {
+                            $t->whereNotNull('property_type_id')
+                              ->where('property_type_id', '!=', 0);
+                        })
+                        ->orWhereNotNull('construction_status')
+                        ->orWhere('has_plans', true)
+                        ->orWhereNotNull('construction_documents');
                     });
               });
     });
-    
-    // Also exclude any properties with status 'vacant' or null/empty (safety net)
-    $propertiesQuery->where(function($query) {
+
+    $propertiesQuery->where(function ($query) {
         $query->where('status', '!=', 'vacant')
               ->whereNotNull('status')
               ->where('status', '!=', '');
     });
-    
-    // Get the filtered properties
+
     $properties = $propertiesQuery->orderBy('property_name')->get();
-    
-    // Get selected property details if provided
+
+    // ============================================================
+    // SELECTED PROPERTY
+    // ============================================================
     $selectedPropertyDetails = null;
-    $selectedPropertyId = request('property_id') ?? $selectedPropertyId ?? null;
-    
+    $selectedPropertyId      = request('property_id') ?? $selectedPropertyId ?? null;
+
     if ($selectedPropertyId) {
         $selectedPropertyDetails = \App\Models\Property::with(['landlord', 'units', 'propertyType'])
+            ->accessibleBy(auth()->user())
             ->find($selectedPropertyId);
-        
-        // Validate the selected property is eligible
-        if ($selectedPropertyDetails) {
+
+        if (!$selectedPropertyDetails) {
+            $selectedPropertyId = null;
+            session()->flash('error', 'The selected property is not accessible or does not exist.');
+        } else {
             $isValidProperty = $selectedPropertyDetails->status === 'active' ||
-                              ($selectedPropertyDetails->status === 'under_construction' && 
-                               ($selectedPropertyDetails->property_type_id !== null && $selectedPropertyDetails->property_type_id != 0) ||
-                               $selectedPropertyDetails->construction_status !== null ||
-                               $selectedPropertyDetails->has_plans === true ||
-                               ($selectedPropertyDetails->construction_documents && count($selectedPropertyDetails->construction_documents) > 0));
-            
-            // If invalid, clear it and show error
+                ($selectedPropertyDetails->status === 'under_construction' &&
+                    (
+                        ($selectedPropertyDetails->property_type_id !== null && $selectedPropertyDetails->property_type_id != 0) ||
+                        $selectedPropertyDetails->construction_status !== null ||
+                        $selectedPropertyDetails->has_plans === true ||
+                        ($selectedPropertyDetails->construction_documents && count($selectedPropertyDetails->construction_documents) > 0)
+                    )
+                );
+
             if (!$isValidProperty) {
-                $selectedPropertyId = null;
+                $selectedPropertyId      = null;
                 $selectedPropertyDetails = null;
                 session()->flash('error', 'The selected property is vacant land and cannot have units. Please select an active property or a property under construction with plans.');
             }
         }
     }
-    
-    // Get existing units count for the selected property
+
     $existingUnitsCount = $selectedPropertyDetails ? $selectedPropertyDetails->units()->count() : 0;
-    
+
+    // ============================================================
+    // FAMILY-MEMBER CONTEXT BANNER
+    // ============================================================
+    $isOwnerOfAnyProperty = false;
+    $hasLinkedAccess      = false;
+
+    if ($properties->isNotEmpty()) {
+        foreach ($properties as $p) {
+            if ((int) $p->landlord_id === (int) auth()->id()) {
+                $isOwnerOfAnyProperty = true;
+            }
+            if ($p->relationLoaded('approvedFamilyLinks')
+                && $p->approvedFamilyLinks->contains(fn ($l) => (int) $l->linked_user_id === (int) auth()->id())
+            ) {
+                $hasLinkedAccess = true;
+            }
+        }
+    }
+
+    if (!$hasLinkedAccess && $properties->isNotEmpty()) {
+        $accessibleIds = $properties->pluck('id')->all();
+        $hasLinkedAccess = \App\Models\PropertyFamilyLink::query()
+            ->whereIn('property_id', $accessibleIds)
+            ->where('linked_user_id', auth()->id())
+            ->where('status', \App\Models\PropertyFamilyLink::STATUS_APPROVED)
+            ->exists();
+    }
+
+    $showFamilyMemberBanner = $hasLinkedAccess && !$isOwnerOfAnyProperty;
+
     // Check if tenant data was passed from index page (Create & Assign button)
-    $hasTenantData = request()->has('tenant_id');
-    $tenantId = request('tenant_id');
-    $tenantName = request('tenant_name');
-    $tenantEmail = request('tenant_email');
-    $tenantPhone = request('tenant_phone');
-    $preferredMoveIn = request('preferred_move_in');
-    $preferredRent = request('preferred_rent');
-    
-    // Default status for Create & Assign mode
+    $hasTenantData    = request()->has('tenant_id');
+    $tenantId         = request('tenant_id');
+    $tenantName       = request('tenant_name');
+    $tenantEmail      = request('tenant_email');
+    $tenantPhone      = request('tenant_phone');
+    $preferredMoveIn  = request('preferred_move_in');
+    $preferredRent    = request('preferred_rent');
+
     $defaultStatus = $hasTenantData ? 'occupied' : '';
-    
-    // Get available tenants for dropdown
+
     $availableTenants = collect();
     if (!$hasTenantData && ($isLandlord || $isAdmin)) {
         $assignedTenantIds = \App\Models\PropertyUnit::whereNotNull('tenant_id')
             ->whereIn('tenant_status', ['approved', 'pending_approval'])
             ->pluck('tenant_id')
             ->toArray();
-        
+
         $availableTenants = \App\Models\User::where('type', 'tenant')
-            ->when(!empty($assignedTenantIds), function($q) use ($assignedTenantIds) {
+            ->when(!empty($assignedTenantIds), function ($q) use ($assignedTenantIds) {
                 $q->whereNotIn('id', $assignedTenantIds);
             })
             ->orderBy('name')
             ->get();
     }
-    
-    // Type options for dropdown
+
     $typeOptions = [
         'apartment' => 'Apartment',
         'house' => 'House',
@@ -140,8 +163,7 @@
         'warehouse' => 'Warehouse',
         'other' => 'Other',
     ];
-    
-    // Status options for dropdown
+
     $statusOptions = [
         'available' => 'Available',
         'occupied' => 'Occupied',
@@ -149,8 +171,7 @@
         'renovation' => 'Renovation',
         'pending' => 'Pending',
     ];
-    
-    // Amenities options
+
     $amenityOptions = [
         'parking' => 'Parking',
         'balcony' => 'Balcony/Terrace',
@@ -169,6 +190,14 @@
         'kitchen_appliances' => 'Kitchen Appliances',
         'garden' => 'Garden/Yard',
     ];
+
+    // ============================================================
+    // PHOTO: LIMITS (pulled from the controller; safe fallbacks)
+    // ============================================================
+    $photoMaxCount = $photoMaxCount ?? 15;
+    $photoMaxKb    = $photoMaxKb    ?? 10240;    // 10 MB
+    $photoMimes    = $photoMimes    ?? 'jpg,jpeg,png,webp';
+    $photoMaxMb    = round($photoMaxKb / 1024, 1);
 @endphp
 
 @extends($layout)
@@ -189,7 +218,7 @@
                 </div>
                 <div>
                     <h2 class="text-xl font-semibold flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-home mr-2" style="color: var(--primary);"></i> 
+                        <i class="fas fa-home mr-2" style="color: var(--primary);"></i>
                         Add New Property Unit
                     </h2>
                     <div class="text-sm flex items-center mt-1" style="color: var(--text-secondary);">
@@ -208,6 +237,26 @@
             </div>
         </div>
     </div>
+
+    {{-- FAMILY-MEMBER CONTEXT BANNER --}}
+    @if($showFamilyMemberBanner)
+    <div class="card border-l-4"
+         style="border-left-color: var(--info); background-color: rgba(var(--info-rgb), 0.05);">
+        <div class="p-4 flex items-start">
+            <i class="fas fa-user-friends text-xl mr-3 mt-0.5"
+               style="color: var(--info);"></i>
+            <div>
+                <p class="font-medium" style="color: var(--text-primary);">
+                    You're managing these properties as a linked family member.
+                </p>
+                <p class="text-sm mt-1" style="color: var(--text-secondary);">
+                    Units you create here are added to the property owner's portfolio.
+                    Every action is recorded in the audit log for accountability.
+                </p>
+            </div>
+        </div>
+    </div>
+    @endif
 
     <!-- Success Message -->
     @if($successMessage)
@@ -241,12 +290,12 @@
     <div class="card">
         <div class="p-6">
             <div class="flex items-center justify-between">
-                <a href="{{ route($routePrefix . '.index') }}" 
-                   class="inline-flex items-center text-sm font-medium" 
+                <a href="{{ route($routePrefix . '.index') }}"
+                   class="inline-flex items-center text-sm font-medium"
                    style="color: var(--primary);">
                     <i class="fas fa-arrow-left mr-2"></i> Back to Property Units
                 </a>
-                <span class="text-xs px-3 py-1 rounded-full" 
+                <span class="text-xs px-3 py-1 rounded-full"
                       style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
                     <i class="fas fa-asterisk mr-1" style="color: var(--danger);"></i> Required fields
                 </span>
@@ -267,7 +316,7 @@
                 </div>
                 <div class="flex-1">
                     <h4 class="font-semibold mb-2 flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-info-circle mr-2" style="color: var(--success);"></i> 
+                        <i class="fas fa-info-circle mr-2" style="color: var(--success);"></i>
                         Creating Unit for Pending Tenant Assignment
                     </h4>
                     <p class="text-sm mb-4" style="color: var(--text-secondary);">
@@ -276,8 +325,8 @@
                             <i class="fas fa-check-circle mr-1"></i> Unit status will be automatically set to "Occupied" since you're assigning a tenant.
                         </strong>
                     </p>
-                    
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-lg" 
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-lg"
                          style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.2);">
                         <div>
                             <p class="text-xs font-medium mb-1" style="color: var(--text-secondary);">Tenant Name</p>
@@ -306,8 +355,7 @@
                         </div>
                         @endif
                     </div>
-                    
-                    <!-- Hidden inputs for tenant data -->
+
                     <input type="hidden" id="pending_tenant_id" value="{{ $tenantId }}">
                     <input type="hidden" id="pending_tenant_name" value="{{ $tenantName }}">
                 </div>
@@ -322,15 +370,15 @@
         <div class="p-6">
             <div class="flex items-center justify-between mb-6">
                 <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
-                    <i class="fas fa-building mr-2" style="color: var(--info);"></i> 
+                    <i class="fas fa-building mr-2" style="color: var(--info);"></i>
                     Select Property
                 </h3>
-                <span class="text-sm px-3 py-1 rounded-full" 
+                <span class="text-sm px-3 py-1 rounded-full"
                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
                     <i class="fas fa-home mr-1"></i> {{ $properties->count() }} eligible properties
                 </span>
             </div>
-            
+
             @if($properties->isEmpty())
             <div class="p-4 rounded-lg mb-4" style="background-color: rgba(var(--warning-rgb), 0.1); border: 1px solid rgba(var(--warning-rgb), 0.3);">
                 <div class="flex items-start">
@@ -355,18 +403,17 @@
             @else
             <p class="text-sm mb-6" style="color: var(--text-secondary);">
                 <i class="fas fa-info-circle mr-1"></i>
-                Select an active property or a property under construction with plans. 
+                Select an active property or a property under construction with plans.
                 Vacant land properties are not eligible for unit creation.
             </p>
             @endif
-            
+
             <div class="grid grid-cols-1 gap-6">
                 <div>
                     <label for="property_id" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                         <i class="fas fa-building mr-1"></i> Property <span class="text-red-500">*</span>
                     </label>
-                    {{-- ✅ FIX: Removed name="property_id" from the select. The hidden input inside the form is now the source of truth. --}}
-                    <select id="property_id" 
+                    <select id="property_id"
                             class="custom-dropdown w-full"
                             required
                             {{ $properties->isEmpty() ? 'disabled' : '' }}
@@ -377,15 +424,21 @@
                             $propertyType = $property->propertyType;
                             $unitsCount = $property->units()->count();
                             $isUnderConstruction = $property->status === 'under_construction';
+                            $isLinkedForUser = \App\Models\PropertyFamilyLink::query()
+                                ->where('property_id', $property->id)
+                                ->where('linked_user_id', auth()->id())
+                                ->where('status', \App\Models\PropertyFamilyLink::STATUS_APPROVED)
+                                ->exists();
                         @endphp
-                        <option value="{{ $property->id }}" 
+                        <option value="{{ $property->id }}"
                                 {{ old('property_id', $selectedPropertyId) == $property->id ? 'selected' : '' }}
                                 data-property-name="{{ $property->property_name }}"
                                 data-property-type="{{ $propertyType ? $propertyType->name : ($property->custom_property_type ?? 'Not specified') }}"
                                 data-property-address="{{ $property->digital_address }}"
                                 data-property-landlord="{{ $property->landlord->name ?? 'Unknown' }}"
                                 data-units-count="{{ $unitsCount }}"
-                                data-property-status="{{ $property->status }}">
+                                data-property-status="{{ $property->status }}"
+                                data-is-linked="{{ $isLinkedForUser ? '1' : '0' }}">
                             {{ $property->property_name }}
                             @if($isUnderConstruction)
                                 <span class="text-xs px-2 py-0.5 rounded-full" style="background-color: rgba(var(--warning-rgb), 0.2); color: var(--warning);">
@@ -394,6 +447,9 @@
                             @endif
                             @if($property->landlord && ($isAdmin || $isDeveloper))
                                 ({{ $property->landlord->name }})
+                            @endif
+                            @if($isLinkedForUser)
+                                <span class="text-xs text-gray-400">— family linked</span>
                             @endif
                             @if($unitsCount > 0)
                                 <span class="text-xs text-gray-400">({{ $unitsCount }} units)</span>
@@ -404,8 +460,7 @@
                     @error('property_id')
                     <p class="mt-1 text-xs" style="color: var(--danger);">{{ $message }}</p>
                     @enderror
-                    
-                    <!-- Info text about eligible properties -->
+
                     <div class="mt-2 flex flex-wrap gap-2">
                         <span class="text-xs px-2 py-1 rounded-full" style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 1px solid rgba(var(--success-rgb), 0.2);">
                             <i class="fas fa-check-circle mr-1"></i> Active Properties
@@ -413,19 +468,22 @@
                         <span class="text-xs px-2 py-1 rounded-full" style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.2);">
                             <i class="fas fa-hard-hat mr-1"></i> Under Construction (with plans)
                         </span>
+                        <span class="text-xs px-2 py-1 rounded-full" style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.2);">
+                            <i class="fas fa-user-friends mr-1"></i> Family-Linked Included
+                        </span>
                         <span class="text-xs px-2 py-1 rounded-full" style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.2);">
                             <i class="fas fa-times-circle mr-1"></i> Vacant Land (excluded)
                         </span>
                     </div>
                 </div>
-                
-                <div id="propertyInfoPreview" class="hidden p-4 rounded-lg" 
+
+                <div id="propertyInfoPreview" class="hidden p-4 rounded-lg"
                      style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.2);">
                     <div class="flex items-center justify-between mb-3">
                         <h4 class="font-semibold" style="color: var(--text-primary);">Selected Property Preview</h4>
                         <i class="fas fa-building" style="color: var(--info);"></i>
                     </div>
-                    
+
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <p class="text-sm font-medium" style="color: var(--text-secondary);">Property Name</p>
@@ -444,12 +502,16 @@
                             <p id="previewPropertyLandlord" class="font-medium" style="color: var(--text-primary);"></p>
                         </div>
                     </div>
-                    
+
                     <div class="mt-3 pt-3 border-t" style="border-color: rgba(var(--info-rgb), 0.2);">
                         <p class="text-sm flex items-center" style="color: var(--text-secondary);">
                             <i class="fas fa-info-circle mr-1"></i>
                             This property has <span id="previewUnitsCount" class="font-semibold" style="color: var(--info);"></span> existing units.
                             <span id="previewPropertyStatus" class="ml-2 px-2 py-0.5 rounded-full text-xs font-medium"></span>
+                        </p>
+                        <p id="previewLinkedHint" class="text-xs mt-1 hidden" style="color: var(--info);">
+                            <i class="fas fa-user-friends mr-1"></i>
+                            You're linked to this property as a family member.
                         </p>
                     </div>
                 </div>
@@ -458,13 +520,12 @@
     </div>
     @endif
 
-    <!-- Main Form -->
-    <form action="{{ route('property-units.store') }}" method="POST" id="unitForm">
+    <!-- Main Form — ✅ enctype added for photo uploads -->
+    <form action="{{ route('property-units.store') }}" method="POST" id="unitForm" enctype="multipart/form-data">
         @csrf
-        
-        {{-- ✅ FIX: Hidden input is now ALWAYS rendered. This guarantees property_id is submitted even when the user selects it client-side. --}}
+
         <input type="hidden" name="property_id" id="hidden_property_id" value="{{ $selectedPropertyId ?? '' }}">
-        
+
         @if($hasTenantData)
         <input type="hidden" name="assign_tenant_id" value="{{ $tenantId }}">
         <input type="hidden" name="tenant_name" value="{{ $tenantName }}">
@@ -477,7 +538,7 @@
             <div class="p-6">
                 <div class="flex items-center justify-between mb-6">
                     <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-building mr-2" style="color: var(--primary);"></i> 
+                        <i class="fas fa-building mr-2" style="color: var(--primary);"></i>
                         Selected Property
                     </h3>
                     <div class="flex items-center space-x-2">
@@ -489,23 +550,23 @@
                             'tenant_phone' => $tenantPhone,
                             'preferred_move_in' => $preferredMoveIn,
                             'preferred_rent' => $preferredRent
-                        ] : []) }}" 
-                           class="px-3 py-1 rounded-lg text-xs font-medium inline-flex items-center" 
+                        ] : []) }}"
+                           class="px-3 py-1 rounded-lg text-xs font-medium inline-flex items-center"
                            style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--secondary); border: 1px solid rgba(var(--secondary-rgb), 0.3);">
                             <i class="fas fa-exchange-alt mr-1"></i> Change
                         </a>
                         @endif
-                        <a href="{{ route('properties.show', $selectedPropertyId) }}" 
-                           class="px-3 py-1 rounded-lg text-xs font-medium inline-flex items-center" 
+                        <a href="{{ route('properties.show', $selectedPropertyId) }}"
+                           class="px-3 py-1 rounded-lg text-xs font-medium inline-flex items-center"
                            style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
                             <i class="fas fa-external-link-alt mr-1"></i> View Details
                         </a>
                     </div>
                 </div>
-                
+
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div class="space-y-4">
-                        <div class="p-4 rounded-lg" 
+                        <div class="p-4 rounded-lg"
                              style="background-color: rgba(var(--primary-rgb), 0.05); border: 1px solid rgba(var(--primary-rgb), 0.2);">
                             <label class="block text-xs font-medium mb-1 uppercase tracking-wider" style="color: var(--text-secondary);">
                                 Property Name
@@ -519,8 +580,8 @@
                             </span>
                             @endif
                         </div>
-                        
-                        <div class="p-4 rounded-lg" 
+
+                        <div class="p-4 rounded-lg"
                              style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.2);">
                             <label class="block text-xs font-medium mb-1 uppercase tracking-wider" style="color: var(--text-secondary);">
                                 Property Type
@@ -530,10 +591,10 @@
                                     <div class="w-10 h-10 rounded-full flex items-center justify-center"
                                          style="background-color: rgba(var(--info-rgb), 0.1); border: 2px solid rgba(var(--info-rgb), 0.3);">
                                         @if($selectedPropertyDetails->propertyType->icon)
-                                            <i class="{{ $selectedPropertyDetails->propertyType->icon }}" 
+                                            <i class="{{ $selectedPropertyDetails->propertyType->icon }}"
                                                style="color: var(--info);"></i>
                                         @else
-                                            <i class="fas fa-tag" 
+                                            <i class="fas fa-tag"
                                                style="color: var(--info);"></i>
                                         @endif
                                     </div>
@@ -577,9 +638,9 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="space-y-4">
-                        <div class="p-4 rounded-lg" 
+                        <div class="p-4 rounded-lg"
                              style="background-color: rgba(var(--success-rgb), 0.05); border: 1px solid rgba(var(--success-rgb), 0.2);">
                             <label class="block text-xs font-medium mb-1 uppercase tracking-wider flex items-center" style="color: var(--text-secondary);">
                                 <i class="fas fa-map-marker-alt mr-1"></i> Address
@@ -595,8 +656,8 @@
                                 @endif
                             </div>
                         </div>
-                        
-                        <div class="p-4 rounded-lg" 
+
+                        <div class="p-4 rounded-lg"
                              style="background-color: rgba(var(--secondary-rgb), 0.05); border: 1px solid rgba(var(--secondary-rgb), 0.2);">
                             <label class="block text-xs font-medium mb-1 uppercase tracking-wider" style="color: var(--text-secondary);">
                                 Location Details
@@ -620,26 +681,26 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="space-y-4">
-                        <div class="p-4 rounded-lg" 
+                        <div class="p-4 rounded-lg"
                              style="background-color: rgba(var(--primary-rgb), 0.05); border: 1px solid rgba(var(--primary-rgb), 0.2);">
                             <label class="block text-xs font-medium mb-1 uppercase tracking-wider" style="color: var(--text-secondary);">
                                 Property Statistics
                             </label>
                             <div class="grid grid-cols-2 gap-3 mt-2">
-                                <div class="text-center p-2 rounded-lg transition-all duration-200 hover:shadow-md" 
+                                <div class="text-center p-2 rounded-lg transition-all duration-200 hover:shadow-md"
                                      style="background-color: rgba(var(--primary-rgb), 0.1); border: 1px solid rgba(var(--primary-rgb), 0.3);">
                                     <p class="text-xl font-bold" style="color: var(--primary);">
                                         {{ $existingUnitsCount }}
                                     </p>
                                     <p class="text-xs" style="color: var(--text-secondary);">Existing Units</p>
                                 </div>
-                                
+
                                 @php
                                     $availableUnits = $selectedPropertyDetails->units()->where('status', 'available')->count();
                                 @endphp
-                                <div class="text-center p-2 rounded-lg transition-all duration-200 hover:shadow-md" 
+                                <div class="text-center p-2 rounded-lg transition-all duration-200 hover:shadow-md"
                                      style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.3);">
                                     <p class="text-xl font-bold" style="color: var(--success);">
                                         {{ $availableUnits }}
@@ -648,9 +709,9 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         @if($selectedPropertyDetails->landlord)
-                        <div class="p-4 rounded-lg" 
+                        <div class="p-4 rounded-lg"
                              style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.2);">
                             <label class="block text-xs font-medium mb-1 uppercase tracking-wider flex items-center" style="color: var(--text-secondary);">
                                 <i class="fas fa-user-tie mr-1"></i> Property Owner
@@ -682,22 +743,22 @@
             <div class="p-6">
                 <div class="flex items-center justify-between mb-6">
                     <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-info-circle mr-2" style="color: var(--primary);"></i> 
+                        <i class="fas fa-info-circle mr-2" style="color: var(--primary);"></i>
                         Unit Information
                     </h3>
                     <span class="text-xs px-3 py-1 rounded-full badge-secondary">
                         <i class="fas fa-asterisk mr-1"></i> Required fields
                     </span>
                 </div>
-                
+
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                         <label for="unit_number" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-hashtag mr-1"></i> Unit Number <span class="text-red-500">*</span>
                         </label>
-                        <input type="text" 
-                               name="unit_number" 
-                               id="unit_number" 
+                        <input type="text"
+                               name="unit_number"
+                               id="unit_number"
                                class="custom-input w-full"
                                value="{{ old('unit_number') }}"
                                required
@@ -715,16 +776,16 @@
                     <div>
                         <label for="unit_name" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-signature mr-1"></i> Unit Name (Optional)
-                            <button type="button" 
-                                    onclick="generateUnitNameSuggestion()" 
-                                    class="ml-2 text-xs px-2 py-0.5 rounded" 
+                            <button type="button"
+                                    onclick="generateUnitNameSuggestion()"
+                                    class="ml-2 text-xs px-2 py-0.5 rounded"
                                     style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
                                 <i class="fas fa-magic mr-1"></i> Suggest
                             </button>
                         </label>
-                        <input type="text" 
-                               name="unit_name" 
-                               id="unit_name" 
+                        <input type="text"
+                               name="unit_name"
+                               id="unit_name"
                                class="custom-input w-full"
                                value="{{ old('unit_name') }}"
                                placeholder="e.g., Garden View Apartment, Penthouse Suite"
@@ -741,8 +802,8 @@
                         <label for="unit_type" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-tag mr-1"></i> Unit Type <span class="text-red-500">*</span>
                         </label>
-                        <select name="unit_type" 
-                                id="unit_type" 
+                        <select name="unit_type"
+                                id="unit_type"
                                 class="custom-dropdown w-full"
                                 required
                                 onchange="validateField(this)">
@@ -762,14 +823,14 @@
                         <label for="status" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-circle mr-1"></i> Status <span class="text-red-500">*</span>
                         </label>
-                        <select name="status" 
-                                id="status" 
+                        <select name="status"
+                                id="status"
                                 class="custom-dropdown w-full"
                                 required
                                 onchange="updateAvailability(); validateField(this);">
                             <option value="">Select Status</option>
                             @foreach($statusOptions as $value => $label)
-                            <option value="{{ $value }}" 
+                            <option value="{{ $value }}"
                                     {{ old('status', $defaultStatus) == $value ? 'selected' : '' }}>
                                 {{ $label }}
                             </option>
@@ -777,7 +838,7 @@
                         </select>
                         @if($hasTenantData)
                         <p class="mt-1 text-xs flex items-center" style="color: var(--success);">
-                            <i class="fas fa-info-circle mr-1"></i> 
+                            <i class="fas fa-info-circle mr-1"></i>
                             Since you're assigning a tenant, status is automatically set to "Occupied".
                         </p>
                         @endif
@@ -791,8 +852,8 @@
                     <label for="description" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                         <i class="fas fa-align-left mr-1"></i> Description (Optional)
                     </label>
-                    <textarea name="description" 
-                              id="description" 
+                    <textarea name="description"
+                              id="description"
                               class="custom-textarea w-full"
                               rows="3"
                               placeholder="Describe the unit's features, layout, view, or any special characteristics...">{{ old('description') }}</textarea>
@@ -813,18 +874,18 @@
         <div class="card mb-6">
             <div class="p-6">
                 <h3 class="text-lg font-semibold mb-6 flex items-center" style="color: var(--text-primary);">
-                    <i class="fas fa-ruler-combined mr-2" style="color: var(--primary);"></i> 
+                    <i class="fas fa-ruler-combined mr-2" style="color: var(--primary);"></i>
                     Specifications
                 </h3>
-                
+
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     <div>
                         <label for="floor_area" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-expand-arrows-alt mr-1"></i> Floor Area (sqft)
                         </label>
-                        <input type="number" 
-                               name="floor_area" 
-                               id="floor_area" 
+                        <input type="number"
+                               name="floor_area"
+                               id="floor_area"
                                class="custom-input w-full"
                                value="{{ old('floor_area') }}"
                                min="0"
@@ -839,9 +900,9 @@
                         <label for="floor_number" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-layer-group mr-1"></i> Floor Number
                         </label>
-                        <input type="number" 
-                               name="floor_number" 
-                               id="floor_number" 
+                        <input type="number"
+                               name="floor_number"
+                               id="floor_number"
                                class="custom-input w-full"
                                value="{{ old('floor_number') }}"
                                min="-10"
@@ -856,9 +917,9 @@
                         <label for="bedrooms" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-bed mr-1"></i> Bedrooms
                         </label>
-                        <input type="number" 
-                               name="bedrooms" 
-                               id="bedrooms" 
+                        <input type="number"
+                               name="bedrooms"
+                               id="bedrooms"
                                class="custom-input w-full"
                                value="{{ old('bedrooms', 0) }}"
                                min="0"
@@ -873,9 +934,9 @@
                         <label for="bathrooms" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-bath mr-1"></i> Bathrooms
                         </label>
-                        <input type="number" 
-                               name="bathrooms" 
-                               id="bathrooms" 
+                        <input type="number"
+                               name="bathrooms"
+                               id="bathrooms"
                                class="custom-input w-full"
                                value="{{ old('bathrooms', 0) }}"
                                min="0"
@@ -893,9 +954,9 @@
                         <label for="living_rooms" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-couch mr-1"></i> Living Rooms
                         </label>
-                        <input type="number" 
-                               name="living_rooms" 
-                               id="living_rooms" 
+                        <input type="number"
+                               name="living_rooms"
+                               id="living_rooms"
                                class="custom-input w-full"
                                value="{{ old('living_rooms', 0) }}"
                                min="0"
@@ -910,9 +971,9 @@
                         <label for="kitchens" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             <i class="fas fa-utensils mr-1"></i> Kitchens
                         </label>
-                        <input type="number" 
-                               name="kitchens" 
-                               id="kitchens" 
+                        <input type="number"
+                               name="kitchens"
+                               id="kitchens"
                                class="custom-input w-full"
                                value="{{ old('kitchens', 0) }}"
                                min="0"
@@ -930,10 +991,10 @@
         <div class="card mb-6">
             <div class="p-6">
                 <h3 class="text-lg font-semibold mb-6 flex items-center" style="color: var(--text-primary);">
-                    <i class="fas fa-money-bill-wave mr-2" style="color: var(--success);"></i> 
+                    <i class="fas fa-money-bill-wave mr-2" style="color: var(--success);"></i>
                     Financial Information
                 </h3>
-                
+
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                         <label for="monthly_rent" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
@@ -943,9 +1004,9 @@
                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                 <span class="text-gray-400 text-sm font-medium">GHS</span>
                             </div>
-                            <input type="number" 
-                                   name="monthly_rent" 
-                                   id="monthly_rent" 
+                            <input type="number"
+                                   name="monthly_rent"
+                                   id="monthly_rent"
                                    class="custom-input w-full pl-12 pr-3"
                                    value="{{ old('monthly_rent', $preferredRent ? (float) filter_var($preferredRent, FILTER_SANITIZE_NUMBER_FLOAT) : '') }}"
                                    required
@@ -972,9 +1033,9 @@
                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                 <span class="text-gray-400 text-sm font-medium">GHS</span>
                             </div>
-                            <input type="number" 
-                                   name="security_deposit" 
-                                   id="security_deposit" 
+                            <input type="number"
+                                   name="security_deposit"
+                                   id="security_deposit"
                                    class="custom-input w-full pl-12 pr-3"
                                    value="{{ old('security_deposit') }}"
                                    min="0"
@@ -991,11 +1052,11 @@
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-                    <div class="flex items-center p-3 rounded-lg" 
+                    <div class="flex items-center p-3 rounded-lg"
                          style="background-color: rgba(var(--warning-rgb), 0.05); border: 1px solid rgba(var(--warning-rgb), 0.2);">
-                        <input type="checkbox" 
-                               name="is_furnished" 
-                               id="is_furnished" 
+                        <input type="checkbox"
+                               name="is_furnished"
+                               id="is_furnished"
                                value="1"
                                class="custom-checkbox mr-3"
                                {{ old('is_furnished') ? 'checked' : '' }}>
@@ -1009,11 +1070,11 @@
                         </div>
                     </div>
 
-                    <div class="flex items-center p-3 rounded-lg" 
+                    <div class="flex items-center p-3 rounded-lg"
                          style="background-color: rgba(var(--success-rgb), 0.05); border: 1px solid rgba(var(--success-rgb), 0.2);">
-                        <input type="checkbox" 
-                               name="is_available" 
-                               id="is_available" 
+                        <input type="checkbox"
+                               name="is_available"
+                               id="is_available"
                                value="1"
                                class="custom-checkbox mr-3"
                                {{ old('is_available', !$hasTenantData) ? 'checked' : '' }}
@@ -1038,9 +1099,9 @@
                     <label for="available_from" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                         <i class="fas fa-calendar-day mr-1"></i> Available From Date
                     </label>
-                    <input type="date" 
-                           name="available_from" 
-                           id="available_from" 
+                    <input type="date"
+                           name="available_from"
+                           id="available_from"
                            class="custom-input w-full max-w-xs"
                            value="{{ old('available_from', $preferredMoveIn ?? date('Y-m-d')) }}">
                     @error('available_from')
@@ -1055,31 +1116,102 @@
             </div>
         </div>
 
+        {{-- ============================================================
+             PHOTO: PROPERTY UNIT PHOTOS
+             Landlord/owner uploads up to N images (cover-first, ordered).
+             Files are posted as `photos[]` and processed by
+             PropertyUnitController::store() → storeUnitPhotos().
+             ============================================================ --}}
+        <div class="card mb-6">
+            <div class="p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
+                        <i class="fas fa-camera mr-2" style="color: var(--primary);"></i>
+                        Property Unit Photos
+                    </h3>
+                    <span class="text-xs px-3 py-1 rounded-full"
+                          style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
+                        <i class="fas fa-images mr-1"></i> Optional — up to {{ $photoMaxCount }} photos
+                    </span>
+                </div>
+
+                <p class="text-sm mb-4" style="color: var(--text-secondary);">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    Add clear, well-lit photos of the unit. The first photo becomes the cover image.
+                    Shoot in landscape, keep the unit tidy, and avoid capturing tenants, faces, or personal documents.
+                </p>
+
+                {{-- Drop zone --}}
+                <label for="photosInput"
+                       id="photoDropZone"
+                       class="block border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all"
+                       style="border-color: var(--border-color); background-color: rgba(var(--info-rgb), 0.02);">
+                    <i class="fas fa-cloud-upload-alt text-3xl mb-2" style="color: var(--primary);"></i>
+                    <p class="text-sm font-medium" style="color: var(--text-primary);">
+                        Drag photos here or click to browse
+                    </p>
+                    <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                        JPG, PNG, WEBP · Max {{ $photoMaxMb }} MB each · Up to {{ $photoMaxCount }} photos
+                    </p>
+                    <input id="photosInput"
+                           name="photos[]"
+                           type="file"
+                           multiple
+                           accept="image/{{ str_replace(',', ',image/', $photoMimes) }}"
+                           class="hidden">
+                </label>
+
+                {{-- Server-side validation errors --}}
+                @error('photos')
+                <p class="mt-2 text-xs" style="color: var(--danger);">
+                    <i class="fas fa-exclamation-circle mr-1"></i>{{ $message }}
+                </p>
+                @enderror
+                @error('photos.*')
+                <p class="mt-2 text-xs" style="color: var(--danger);">
+                    <i class="fas fa-exclamation-circle mr-1"></i>{{ $message }}
+                </p>
+                @enderror
+
+                {{-- Client-side error surface --}}
+                <p id="photoClientError" class="mt-2 text-xs hidden" style="color: var(--danger);"></p>
+
+                {{-- Preview grid --}}
+                <div id="photoPreviewGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 mt-4"></div>
+
+                {{-- Hidden counter + reset helper --}}
+                <p class="text-xs mt-3" style="color: var(--text-secondary);">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    Selected: <span id="photoSelectedCount">0</span> / {{ $photoMaxCount }}
+                </p>
+            </div>
+        </div>
+
         <!-- Amenities Section -->
         <div class="card mb-6">
             <div class="p-6">
                 <div class="flex items-center justify-between mb-6">
                     <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
-                        <i class="fas fa-concierge-bell mr-2" style="color: var(--primary);"></i> 
+                        <i class="fas fa-concierge-bell mr-2" style="color: var(--primary);"></i>
                         Amenities & Features
                     </h3>
-                    <button type="button" 
-                            onclick="toggleAllAmenities()" 
-                            class="px-3 py-1 rounded-lg text-xs font-medium inline-flex items-center" 
+                    <button type="button"
+                            onclick="toggleAllAmenities()"
+                            class="px-3 py-1 rounded-lg text-xs font-medium inline-flex items-center"
                             style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border: 1px solid rgba(var(--primary-rgb), 0.3);">
                         <i class="fas fa-check-double mr-1"></i> Toggle All
                     </button>
                 </div>
-                
+
                 <p class="text-sm mb-6" style="color: var(--text-secondary);">
                     Select all amenities and features available in this unit:
                 </p>
-                
+
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     @foreach($amenityOptions as $value => $label)
                     <label class="amenity-checkbox">
-                        <input type="checkbox" 
-                               name="amenities[]" 
+                        <input type="checkbox"
+                               name="amenities[]"
                                value="{{ $value }}"
                                class="hidden"
                                {{ in_array($value, old('amenities', [])) ? 'checked' : '' }}>
@@ -1145,13 +1277,13 @@
                     </label>
                     @endforeach
                 </div>
-                
+
                 <div class="mt-8 pt-6 border-t" style="border-color: var(--border-color);">
                     <label for="custom_amenities" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                         <i class="fas fa-plus-circle mr-1"></i> Additional Features (Optional)
                     </label>
-                    <textarea name="custom_amenities" 
-                              id="custom_amenities" 
+                    <textarea name="custom_amenities"
+                              id="custom_amenities"
                               class="custom-textarea w-full"
                               rows="2"
                               placeholder="List any additional features not listed above, separated by commas...">{{ old('custom_amenities') }}</textarea>
@@ -1169,25 +1301,25 @@
                     <div class="text-sm flex items-center" style="color: var(--text-secondary);">
                         <i class="fas fa-lightbulb mr-1"></i> Review all information before submitting
                     </div>
-                    
+
                     <div class="flex flex-wrap gap-3">
-                        <a href="{{ route($routePrefix . '.index', $hasTenantData ? ['tenant_id' => $tenantId] : []) }}" 
-                           class="px-4 py-2 rounded-lg inline-flex items-center text-sm font-medium" 
+                        <a href="{{ route($routePrefix . '.index', $hasTenantData ? ['tenant_id' => $tenantId] : []) }}"
+                           class="px-4 py-2 rounded-lg inline-flex items-center text-sm font-medium"
                            style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--secondary); border: 1px solid rgba(var(--secondary-rgb), 0.3);">
                             <i class="fas fa-times mr-2"></i> Cancel
                         </a>
-                        
-                        <button type="button" 
-                                onclick="resetForm()" 
-                                class="px-4 py-2 rounded-lg inline-flex items-center text-sm font-medium" 
+
+                        <button type="button"
+                                onclick="resetForm()"
+                                class="px-4 py-2 rounded-lg inline-flex items-center text-sm font-medium"
                                 style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.3);">
                             <i class="fas fa-redo mr-2"></i> Reset Form
                         </button>
-                        
-                        <button type="submit" 
-                                class="px-4 py-2 rounded-lg inline-flex items-center text-sm font-medium text-white shadow-lg hover:shadow-xl transition-all duration-200" 
+
+                        <button type="submit"
+                                class="px-4 py-2 rounded-lg inline-flex items-center text-sm font-medium text-white shadow-lg hover:shadow-xl transition-all duration-200"
                                 style="background-color: var(--primary); color: white; border: 2px solid var(--primary);">
-                            <i class="fas fa-plus-circle mr-2"></i> 
+                            <i class="fas fa-plus-circle mr-2"></i>
                             @if($hasTenantData)
                                 Create Unit & Assign Tenant
                             @else
@@ -1196,7 +1328,7 @@
                         </button>
                     </div>
                 </div>
-                
+
                 <!-- Form Validation Summary -->
                 <div class="mt-6 p-4 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.2);">
                     <p class="text-sm font-medium flex items-center mb-2" style="color: var(--info);">
@@ -1234,30 +1366,25 @@
 @section('scripts')
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // ✅ FIX: Sync hidden property_id from the select on page load
+    // Sync hidden property_id from the select on page load
     (function syncHiddenPropertyOnLoad() {
         const hidden = document.getElementById('hidden_property_id');
         const select = document.getElementById('property_id');
         if (!hidden) return;
-        if (hidden.value && hidden.value !== '') return; // already set from Blade
+        if (hidden.value && hidden.value !== '') return;
         if (select && select.value) {
             hidden.value = select.value;
         }
     })();
 
-    // Initialize form validation
     initializeValidation();
-    
-    // Update availability section based on status
     updateAvailability();
-    
-    // Toggle available from section based on is_available checkbox
+
     const isAvailableCheckbox = document.getElementById('is_available');
     const availableFromSection = document.getElementById('available_from_section');
-    
+
     if (isAvailableCheckbox && availableFromSection) {
         isAvailableCheckbox.addEventListener('change', function() {
-            // When in tenant assignment mode, is_available should be unchecked
             @if($hasTenantData)
             if (this.checked) {
                 this.checked = false;
@@ -1267,8 +1394,7 @@ document.addEventListener('DOMContentLoaded', function() {
             @endif
             availableFromSection.style.display = this.checked ? 'block' : 'none';
         });
-        
-        // Initialize available_from section visibility
+
         @if($hasTenantData)
         if (isAvailableCheckbox) {
             isAvailableCheckbox.checked = false;
@@ -1281,8 +1407,7 @@ document.addEventListener('DOMContentLoaded', function() {
         availableFromSection.style.display = isAvailableCheckbox.checked ? 'block' : 'none';
         @endif
     }
-    
-    // If in tenant assignment mode, disable is_available checkbox
+
     @if($hasTenantData)
     const isAvailableCheckboxElem = document.getElementById('is_available');
     if (isAvailableCheckboxElem) {
@@ -1290,8 +1415,7 @@ document.addEventListener('DOMContentLoaded', function() {
         isAvailableCheckboxElem.checked = false;
     }
     @endif
-    
-    // Amenity checkbox styling
+
     document.querySelectorAll('.amenity-checkbox input[type="checkbox"]').forEach(checkbox => {
         checkbox.addEventListener('change', function() {
             const content = this.closest('.amenity-checkbox').querySelector('.amenity-content');
@@ -1301,35 +1425,34 @@ document.addEventListener('DOMContentLoaded', function() {
                 content.classList.remove('checked');
             }
         });
-        
+
         if (checkbox.checked) {
             checkbox.closest('.amenity-checkbox').querySelector('.amenity-content').classList.add('checked');
         }
     });
-    
-    // Real-time form validation event listeners
+
     const unitNumberField = document.getElementById('unit_number');
     if (unitNumberField) {
         unitNumberField.addEventListener('input', function() { validateField(this); });
         unitNumberField.addEventListener('blur', function() { validateField(this); });
     }
-    
+
     const unitTypeField = document.getElementById('unit_type');
     if (unitTypeField) {
         unitTypeField.addEventListener('change', function() { validateField(this); });
     }
-    
+
     const statusField = document.getElementById('status');
     if (statusField) {
         statusField.addEventListener('change', function() { validateField(this); });
     }
-    
+
     const rentField = document.getElementById('monthly_rent');
     if (rentField) {
         rentField.addEventListener('input', function() { validateField(this); });
         rentField.addEventListener('blur', function() { validateField(this); });
     }
-    
+
     const propertySelect = document.getElementById('property_id');
     if (propertySelect) {
         propertySelect.addEventListener('change', function() {
@@ -1337,16 +1460,15 @@ document.addEventListener('DOMContentLoaded', function() {
             updatePropertyInfo(this.value);
         });
     }
-    
-    // Character count for description
+
     const descriptionTextarea = document.getElementById('description');
     const charCountElement = document.getElementById('charCount');
-    
+
     if (descriptionTextarea && charCountElement) {
         descriptionTextarea.addEventListener('input', function() {
             const length = this.value.length;
             charCountElement.textContent = `${length}/1000`;
-            
+
             if (length > 1000) {
                 charCountElement.style.color = 'var(--danger)';
             } else if (length > 900) {
@@ -1355,12 +1477,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 charCountElement.style.color = 'var(--text-secondary)';
             }
         });
-        
+
         const initialLength = descriptionTextarea.value.length;
         charCountElement.textContent = `${initialLength}/1000`;
     }
-    
-    // Auto-format currency inputs
+
     document.querySelectorAll('input[type="number"][id*="rent"], input[type="number"][id*="deposit"]').forEach(input => {
         input.addEventListener('blur', function() {
             if (this.value) {
@@ -1368,16 +1489,15 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     });
-    
-    // Calculate deposit suggestion
+
     const monthlyRentInput = document.getElementById('monthly_rent');
     const securityDepositInput = document.getElementById('security_deposit');
-    
+
     if (monthlyRentInput && securityDepositInput) {
         monthlyRentInput.addEventListener('blur', function() {
             if (this.value && !securityDepositInput.value) {
                 const suggestedDeposit = parseFloat(this.value) * 2;
-                
+
                 const tooltip = document.createElement('div');
                 tooltip.className = 'deposit-suggestion';
                 tooltip.innerHTML = `
@@ -1396,27 +1516,25 @@ document.addEventListener('DOMContentLoaded', function() {
                     font-size: 12px;
                     color: var(--info);
                 `;
-                
+
                 const existingTooltip = securityDepositInput.parentNode.querySelector('.deposit-suggestion');
                 if (existingTooltip) existingTooltip.remove();
-                
+
                 securityDepositInput.parentNode.appendChild(tooltip);
             }
         });
     }
-    
-    // Auto-hide messages after 5 seconds
+
     const successMessage = document.querySelector('.bg-green-100');
     if (successMessage) {
         setTimeout(() => { successMessage.style.display = 'none'; }, 5000);
     }
-    
+
     const errorMessage = document.querySelector('.bg-red-100');
     if (errorMessage) {
         setTimeout(() => { errorMessage.style.display = 'none'; }, 5000);
     }
-    
-    // Set minimum date for available_from field
+
     const availableFromInput = document.getElementById('available_from');
     if (availableFromInput) {
         const today = new Date().toISOString().split('T')[0];
@@ -1425,14 +1543,17 @@ document.addEventListener('DOMContentLoaded', function() {
             availableFromInput.value = today;
         }
     }
-    
-    // Show tenant data notification if present
+
+    // ============================================================
+    // PHOTO: initialize uploader
+    // ============================================================
+    initPhotoUploader(@json($photoMaxCount), @json($photoMaxKb), @json($photoMimes));
+
     @if($hasTenantData)
     showTenantNotification();
     @endif
 });
 
-// Toast notification function
 function showToast(type, message) {
     let toastContainer = document.getElementById('toast-container');
     if (!toastContainer) {
@@ -1447,7 +1568,7 @@ function showToast(type, message) {
         `;
         document.body.appendChild(toastContainer);
     }
-    
+
     const toast = document.createElement('div');
     toast.className = 'toast';
     toast.style.cssText = `
@@ -1467,7 +1588,7 @@ function showToast(type, message) {
         border-color: rgba(var(--info-rgb), 0.4);
         color: var(--info);
     `;
-    
+
     toast.innerHTML = `
         <div class="flex items-center">
             <i class="fas fa-info-circle mr-3 text-lg"></i>
@@ -1477,20 +1598,19 @@ function showToast(type, message) {
             <i class="fas fa-times"></i>
         </button>
     `;
-    
+
     const closeBtn = toast.querySelector('button');
     closeBtn.addEventListener('click', () => {
         toast.remove();
     });
-    
+
     setTimeout(() => {
         if (toast.parentNode) toast.remove();
     }, 5000);
-    
+
     toastContainer.appendChild(toast);
 }
 
-// Function to show tenant data notification
 function showTenantNotification() {
     const notification = document.createElement('div');
     notification.className = 'fixed top-4 right-4 z-50 shadow-lg animate-slide-in';
@@ -1519,11 +1639,9 @@ function showTenantNotification() {
     setTimeout(() => { notification.remove(); }, 8000);
 }
 
-// Validate a single field - handles all field types correctly
 function validateField(field) {
     if (!field) return false;
-    
-    // Map field ID to validation item ID
+
     let validationId = field.id;
     if (field.id === 'property_id') {
         validationId = 'property';
@@ -1534,19 +1652,18 @@ function validateField(field) {
     } else if (field.id === 'unit_number') {
         validationId = 'unit-number';
     }
-    
+
     const validationItem = document.getElementById(`validation-${validationId}`);
     if (!validationItem) return true;
-    
+
     const icon = validationItem.querySelector('i');
     const textSpan = validationItem.querySelector('span');
-    
+
     let isValid = false;
     let message = '';
-    
+
     switch(field.id) {
         case 'property_id':
-            // ✅ FIX: Read from the hidden input (source of truth) if available
             const hiddenProp = document.getElementById('hidden_property_id');
             let propertyValue = '';
             if (hiddenProp && hiddenProp.value) {
@@ -1560,35 +1677,34 @@ function validateField(field) {
             isValid = propertyValue && propertyValue.trim().length > 0;
             message = isValid ? '✓ Property selected' : 'Select a property';
             break;
-            
+
         case 'unit_number':
             isValid = field.value && field.value.trim().length > 0;
             message = isValid ? `✓ Unit number: ${field.value.trim()}` : 'Unit number is required';
             break;
-            
+
         case 'unit_type':
             isValid = field.value && field.value.trim().length > 0;
             const selectedText = field.options[field.selectedIndex]?.text || '';
             message = isValid ? `✓ ${selectedText} selected` : 'Select a unit type';
             break;
-            
+
         case 'status':
             isValid = field.value && field.value.trim().length > 0;
             const statusText = field.options[field.selectedIndex]?.text || '';
             message = isValid ? `✓ ${statusText}` : 'Select unit status';
             break;
-            
+
         case 'monthly_rent':
             const rentValue = parseFloat(field.value);
             isValid = !isNaN(rentValue) && rentValue > 0;
             message = isValid ? `✓ GHS ${rentValue.toFixed(2)}` : 'Enter valid monthly rent';
             break;
-            
+
         default:
             return true;
     }
-    
-    // Update validation item UI
+
     if (isValid) {
         icon.className = 'fas fa-check-circle text-xs mr-2 mt-1';
         icon.style.color = 'var(--success)';
@@ -1608,22 +1724,20 @@ function validateField(field) {
         field.style.borderColor = 'var(--danger)';
         field.style.backgroundColor = 'rgba(var(--danger-rgb), 0.02)';
     }
-    
+
     return isValid;
 }
 
-// Validate hidden property input (when property is pre-selected)
 function validateHiddenProperty() {
     const validationItem = document.getElementById('validation-property');
     if (!validationItem) return true;
-    
+
     const icon = validationItem.querySelector('i');
     const textSpan = validationItem.querySelector('span');
-    
-    // ✅ FIX: Prefer the hidden input as the source of truth
+
     const hiddenProperty = document.getElementById('hidden_property_id');
     const isValid = hiddenProperty && hiddenProperty.value;
-    
+
     if (isValid) {
         icon.className = 'fas fa-check-circle text-xs mr-2 mt-1';
         icon.style.color = 'var(--success)';
@@ -1639,55 +1753,49 @@ function validateHiddenProperty() {
             textSpan.innerHTML = 'Select a property';
         }
     }
-    
+
     return isValid;
 }
 
-// Initialize all validations
 function initializeValidation() {
-    // Set initial icons to danger state
     document.querySelectorAll('.validation-item i').forEach(icon => {
         icon.className = 'fas fa-times-circle text-xs mr-2 mt-1';
         icon.style.color = 'var(--danger)';
     });
-    
-    // Validate property (handle both select and hidden)
+
     const propertySelect = document.getElementById('property_id');
     if (propertySelect) {
         validateField(propertySelect);
     } else {
         validateHiddenProperty();
     }
-    
-    // Validate other fields
+
     const unitNumberField = document.getElementById('unit_number');
     if (unitNumberField) validateField(unitNumberField);
-    
+
     const unitTypeField = document.getElementById('unit_type');
     if (unitTypeField) validateField(unitTypeField);
-    
+
     const statusField = document.getElementById('status');
     if (statusField) validateField(statusField);
-    
+
     const rentField = document.getElementById('monthly_rent');
     if (rentField) validateField(rentField);
 }
 
-// Update property info preview
 function updatePropertyInfo(propertyId) {
     const propertySelect = document.getElementById('property_id');
     const previewContainer = document.getElementById('propertyInfoPreview');
     const hiddenPropertyInput = document.getElementById('hidden_property_id');
 
-    // ✅ FIX: Sync the hidden input that actually gets submitted
     if (hiddenPropertyInput) {
         hiddenPropertyInput.value = propertyId || '';
     }
 
     if (!propertySelect || !previewContainer) return;
-    
+
     const selectedOption = propertySelect.options[propertySelect.selectedIndex];
-    
+
     if (selectedOption && selectedOption.value) {
         previewContainer.classList.remove('hidden');
         document.getElementById('previewPropertyName').textContent = selectedOption.getAttribute('data-property-name') || 'Not specified';
@@ -1695,8 +1803,7 @@ function updatePropertyInfo(propertyId) {
         document.getElementById('previewPropertyAddress').textContent = selectedOption.getAttribute('data-property-address') || 'Not specified';
         document.getElementById('previewPropertyLandlord').textContent = selectedOption.getAttribute('data-property-landlord') || 'Not specified';
         document.getElementById('previewUnitsCount').textContent = selectedOption.getAttribute('data-units-count') || '0';
-        
-        // Show property status
+
         const statusEl = document.getElementById('previewPropertyStatus');
         const status = selectedOption.getAttribute('data-property-status');
         if (statusEl && status) {
@@ -1704,22 +1811,27 @@ function updatePropertyInfo(propertyId) {
             statusEl.style.backgroundColor = status === 'under_construction' ? 'rgba(var(--warning-rgb), 0.2)' : 'rgba(var(--success-rgb), 0.2)';
             statusEl.style.color = status === 'under_construction' ? 'var(--warning)' : 'var(--success)';
         }
+
+        const linkedHint = document.getElementById('previewLinkedHint');
+        const isLinked = selectedOption.getAttribute('data-is-linked') === '1';
+        if (linkedHint) {
+            linkedHint.classList.toggle('hidden', !isLinked);
+        }
     } else {
         previewContainer.classList.add('hidden');
     }
 }
 
-// Generate unit name suggestion
 function generateUnitNameSuggestion() {
     const unitNumberInput = document.getElementById('unit_number');
     const unitTypeSelect = document.getElementById('unit_type');
     const unitNameInput = document.getElementById('unit_name');
-    
+
     if (!unitNumberInput || !unitTypeSelect || !unitNameInput) return;
-    
+
     const unitNumber = unitNumberInput.value.trim();
     const unitType = unitTypeSelect.options[unitTypeSelect.selectedIndex]?.text;
-    
+
     if (unitNumber && unitType && unitType !== 'Select Unit Type') {
         const suggestions = [
             `${unitNumber} ${unitType}`,
@@ -1727,7 +1839,7 @@ function generateUnitNameSuggestion() {
             `${unitType} ${unitNumber}`,
             `${getRandomDescriptor()} ${unitType} ${unitNumber}`
         ];
-        
+
         if (!unitNameInput.value || unitNameInput.value === unitNumber) {
             unitNameInput.value = suggestions[0];
         }
@@ -1739,7 +1851,6 @@ function getRandomDescriptor() {
     return descriptors[Math.floor(Math.random() * descriptors.length)];
 }
 
-// Toggle all amenities
 function toggleAllAmenities() {
     const amenityCheckboxes = document.querySelectorAll('.amenity-checkbox input[type="checkbox"]');
     const allChecked = Array.from(amenityCheckboxes).every(checkbox => checkbox.checked);
@@ -1749,7 +1860,6 @@ function toggleAllAmenities() {
     });
 }
 
-// Apply suggested deposit
 window.applySuggestedDeposit = function(amount) {
     const securityDepositInput = document.getElementById('security_deposit');
     if (securityDepositInput) {
@@ -1760,15 +1870,14 @@ window.applySuggestedDeposit = function(amount) {
     }
 };
 
-// Update availability section based on status
 function updateAvailability() {
     const statusSelect = document.getElementById('status');
     const isAvailableCheckbox = document.getElementById('is_available');
     const availableFromSection = document.getElementById('available_from_section');
-    
+
     if (statusSelect && isAvailableCheckbox && availableFromSection) {
         const status = statusSelect.value;
-        
+
         if (status === 'available') {
             isAvailableCheckbox.checked = true;
             isAvailableCheckbox.disabled = false;
@@ -1784,21 +1893,25 @@ function updateAvailability() {
     }
 }
 
-// Reset form
 function resetForm() {
     if (confirm('Are you sure you want to reset the form? All entered data will be lost.')) {
         document.getElementById('unitForm').reset();
         updateAvailability();
-        
-        // ✅ FIX: Clear the hidden property_id on reset unless a Blade-provided default exists
+
+        // Reset photo uploader state too.
+        if (window.__photoState) {
+            window.__photoState.files = [];
+            renderPhotoPreviews();
+        }
+
         const hiddenProperty = document.getElementById('hidden_property_id');
         if (hiddenProperty) {
             hiddenProperty.value = @json($selectedPropertyId ?? '');
         }
-        
+
         const previewContainer = document.getElementById('propertyInfoPreview');
         if (previewContainer) previewContainer.classList.add('hidden');
-        
+
         document.querySelectorAll('.validation-item').forEach(item => {
             const icon = item.querySelector('i');
             const textSpan = item.querySelector('span');
@@ -1810,26 +1923,24 @@ function resetForm() {
                 textSpan.innerHTML = originalText;
             }
         });
-        
+
         document.querySelectorAll('input, select, textarea').forEach(field => {
             field.style.borderColor = 'var(--border-color)';
             field.style.backgroundColor = '';
         });
-        
+
         document.querySelectorAll('.amenity-content').forEach(content => {
             content.classList.remove('checked');
         });
-        
+
         const charCountElement = document.getElementById('charCount');
         if (charCountElement) {
             charCountElement.textContent = '0/1000';
             charCountElement.style.color = 'var(--text-secondary)';
         }
-        
-        // Re-validate after reset
+
         initializeValidation();
-        
-        // For tenant assignment mode, re-enforce occupied status
+
         @if($hasTenantData)
         const statusField = document.getElementById('status');
         if (statusField) {
@@ -1839,10 +1950,177 @@ function resetForm() {
         @endif
     }
 }
+
+// ============================================================
+// PHOTO UPLOADER
+// ------------------------------------------------------------
+// Files are kept in a JS array (not the <input>) so we can:
+//   • Preview thumbnails before submit
+//   • Let the user remove individual files
+//   • Enforce the per-unit max count client-side
+// On submit, we rebuild a DataTransfer and assign it to the
+// underlying <input> so the browser posts the exact file list.
+// ============================================================
+function initPhotoUploader(maxCount, maxKb, mimesCsv) {
+    const allowedMimes  = mimesCsv.split(',').map(m => 'image/' + m.trim().toLowerCase());
+    const maxBytes      = maxKb * 1024;
+    const maxCountSafe  = Math.max(1, parseInt(maxCount, 10) || 15);
+
+    window.__photoState = { files: [], maxCount: maxCountSafe, maxBytes, allowedMimes };
+
+    const dropZone  = document.getElementById('photoDropZone');
+    const input     = document.getElementById('photosInput');
+    const grid      = document.getElementById('photoPreviewGrid');
+    const counter   = document.getElementById('photoSelectedCount');
+    const errEl     = document.getElementById('photoClientError');
+
+    if (!dropZone || !input || !grid || !counter || !errEl) return;
+
+    function showError(msg) {
+        errEl.textContent = msg;
+        errEl.classList.remove('hidden');
+        setTimeout(() => errEl.classList.add('hidden'), 5000);
+    }
+
+    function addFiles(list) {
+        const current = window.__photoState.files;
+        const incoming = Array.from(list || []);
+
+        for (const file of incoming) {
+            if (current.length >= window.__photoState.maxCount) {
+                showError(`You can add up to ${window.__photoState.maxCount} photos.`);
+                break;
+            }
+            if (!window.__photoState.allowedMimes.includes(file.type)) {
+                showError(`"${file.name}" is not a supported image type.`);
+                continue;
+            }
+            if (file.size > window.__photoState.maxBytes) {
+                showError(`"${file.name}" exceeds the ${Math.round(window.__photoState.maxBytes / 1024 / 1024)} MB limit.`);
+                continue;
+            }
+            // Avoid duplicate (same name + size + lastModified)
+            const dup = current.some(f =>
+                f.name === file.name && f.size === file.size && f.lastModified === file.lastModified
+            );
+            if (dup) continue;
+
+            current.push(file);
+        }
+
+        syncInput();
+        renderPreviews();
+    }
+
+    function syncInput() {
+        try {
+            const dt = new DataTransfer();
+            window.__photoState.files.forEach(f => dt.items.add(f));
+            input.files = dt.files;
+        } catch (e) {
+            // DataTransfer unsupported in very old browsers — fallback is a no-op;
+            // the visible list still reflects state and the user can re-pick.
+            console.warn('DataTransfer unsupported, photo input not synced', e);
+        }
+    }
+
+    function removeAt(index) {
+        window.__photoState.files.splice(index, 1);
+        syncInput();
+        renderPreviews();
+    }
+
+    function renderPreviews() {
+        grid.innerHTML = '';
+        const files = window.__photoState.files;
+
+        counter.textContent = files.length;
+
+        files.forEach((file, idx) => {
+            const card = document.createElement('div');
+            card.className = 'relative rounded-lg overflow-hidden border group';
+            card.style.cssText = 'border-color: var(--border-color); background-color: var(--card-bg);';
+
+            const isFirst = idx === 0;
+            const badge = isFirst
+                ? `<span class="absolute top-1 left-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background-color: var(--success); color: white;">COVER</span>`
+                : '';
+
+            card.innerHTML = `
+                <div class="w-full aspect-square bg-gray-100 overflow-hidden">
+                    <img alt="${file.name}" class="w-full h-full object-cover">
+                </div>
+                ${badge}
+                <button type="button"
+                        class="absolute top-1 right-1 w-6 h-6 rounded-full flex items-center justify-center opacity-90 hover:opacity-100 transition-opacity"
+                        style="background-color: rgba(220,53,69,0.9); color: white;"
+                        title="Remove photo">
+                    <i class="fas fa-times text-xs"></i>
+                </button>
+                <div class="p-2 text-[11px] truncate" style="color: var(--text-secondary);">
+                    ${file.name}
+                </div>
+            `;
+
+            // Set the image src from object URL
+            const img = card.querySelector('img');
+            const url = URL.createObjectURL(file);
+            img.src = url;
+            img.onload = () => URL.revokeObjectURL(url);
+
+            card.querySelector('button').addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                removeAt(idx);
+            });
+
+            grid.appendChild(card);
+        });
+    }
+
+    // File picker
+    input.addEventListener('change', function() {
+        addFiles(this.files);
+    });
+
+    // Drag & drop
+    ['dragenter', 'dragover'].forEach(evt => {
+        dropZone.addEventListener(evt, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.style.borderColor = 'var(--primary)';
+            dropZone.style.backgroundColor = 'rgba(var(--primary-rgb), 0.05)';
+        });
+    });
+    ['dragleave', 'drop'].forEach(evt => {
+        dropZone.addEventListener(evt, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.style.borderColor = 'var(--border-color)';
+            dropZone.style.backgroundColor = 'rgba(var(--info-rgb), 0.02)';
+        });
+    });
+    dropZone.addEventListener('drop', (e) => {
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+            addFiles(e.dataTransfer.files);
+        }
+    });
+}
+
+// Expose helper used by resetForm()
+function renderPhotoPreviews() {
+    // Trigger a re-render by re-dispatching through the same state object.
+    // (The closure-scoped renderPreviews() is not globally accessible,
+    //  so this is a thin bridge — see initPhotoUploader.)
+    const evt = new Event('photoStateChanged');
+    window.dispatchEvent(evt);
+}
 </script>
 
 <style>
-/* Custom dropdown styles */
+/* =========================================================
+   Original styles preserved
+   ========================================================= */
 .custom-dropdown {
     background-color: var(--card-bg);
     border: 1px solid var(--border-color);
@@ -2149,26 +2427,26 @@ function resetForm() {
     .grid.grid-cols-1.lg\:grid-cols-3 {
         grid-template-columns: 1fr;
     }
-    
+
     .p-6 {
         padding: 1rem;
     }
-    
+
     .flex.flex-col.md\:flex-row {
         flex-direction: column;
         gap: 1rem;
     }
-    
+
     .amenity-content {
         padding: 10px;
     }
-    
+
     .amenity-icon {
         width: 36px;
         height: 36px;
         margin-right: 10px;
     }
-    
+
     #monthly_rent, #security_deposit {
         padding-left: 2.75rem !important;
     }
@@ -2179,28 +2457,28 @@ function resetForm() {
         padding: 8px 10px;
         font-size: 13px;
     }
-    
+
     .text-lg {
         font-size: 16px;
     }
-    
+
     .amenity-content {
         flex-direction: column;
         text-align: center;
         padding: 16px 12px;
     }
-    
+
     .amenity-icon {
         margin-right: 0;
         margin-bottom: 8px;
         width: 32px;
         height: 32px;
     }
-    
+
     .amenity-details {
         margin-bottom: 8px;
     }
-    
+
     .amenity-check {
         position: absolute;
         top: 8px;
@@ -2208,7 +2486,7 @@ function resetForm() {
         width: 20px;
         height: 20px;
     }
-    
+
     #monthly_rent, #security_deposit {
         padding-left: 2.5rem !important;
     }

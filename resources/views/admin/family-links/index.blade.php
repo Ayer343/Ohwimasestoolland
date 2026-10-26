@@ -1,89 +1,114 @@
 {{-- admin/family-links/index.blade.php --}}
 @php
     use App\Models\PropertyFamilyLink;
-    use Illuminate\Support\Facades\Storage;
 
-    $isAdmin = auth()->user()->isAdmin();
-    $isSuperAdmin = auth()->user()->isSuperAdmin();
     $layout = 'layouts.app';
 
     $pageTitle = 'Family Link Proposals';
 
     $successMessage = session('success');
-    $errorMessage = session('error');
+    $errorMessage   = session('error');
 
     // ── Stats from the controller (two-stage aware) ──
-    $pendingAdminReview      = $stats['pending_admin_review']          ?? 0;
-    $pendingLandlordConfirm  = $stats['pending_landlord_confirmation'] ?? 0;
-    $pendingLegacy           = $stats['pending_legacy']                ?? 0;
-    $pendingCount            = $stats['pending']                       ?? 0; // admin-actionable + legacy
-    $approvedCount           = $stats['approved']                      ?? 0;
-    $rejectedCount           = $stats['rejected']                      ?? 0;
-    $revokedCount            = $stats['revoked']                       ?? 0;
-    $cancelledCount          = $stats['cancelled']                     ?? 0;
-    $approvedToday           = $stats['approved_today']                ?? 0;
-    $totalCount              = $pendingAdminReview
-                             + $pendingLandlordConfirm
-                             + $pendingLegacy
-                             + $approvedCount
-                             + $rejectedCount
-                             + $revokedCount
-                             + $cancelledCount;
+    $pendingAdminReview     = $stats['pending_admin_review']          ?? 0;
+    $pendingLandlordConfirm = $stats['pending_landlord_confirmation'] ?? 0;
+    $pendingLegacy          = $stats['pending_legacy']                ?? 0;
+    $pendingCount           = $stats['pending']                       ?? 0;
+    $approvedCount          = $stats['approved']                      ?? 0;
+    $rejectedCount          = $stats['rejected']                      ?? 0;
+    $revokedCount           = $stats['revoked']                       ?? 0;
+    $cancelledCount         = $stats['cancelled']                     ?? 0;
+    $approvedToday          = $stats['approved_today']                ?? 0;
 
-    $currentStatus = request('status');
+    $totalCount = $stats['total']
+        ?? ($pendingAdminReview + $pendingLandlordConfirm + $pendingLegacy
+            + $approvedCount + $rejectedCount + $revokedCount + $cancelledCount);
+
+    $currentStatus       = request('status');
+    $currentPerPage      = (int) request('per_page', 20);
     $relationshipOptions = config('property_family_links.relationship_options', []);
 
-    // ── Status presentation config (used in both the table and filter dropdown) ──
+    // ── Status presentation config ──
     $statusConfigs = [
         PropertyFamilyLink::STATUS_PENDING_ADMIN => [
-            'label'   => 'Awaiting Admin Review',
-            'short'   => 'Awaiting Admin',
-            'class'   => 'badge-warning',
-            'icon'    => 'hourglass-half',
-            'color'   => 'var(--warning)',
+            'label' => 'Awaiting Admin Review',
+            'short' => 'Awaiting Admin',
+            'class' => 'badge-warning',
+            'icon'  => 'hourglass-half',
+            'color' => 'var(--warning)',
         ],
         PropertyFamilyLink::STATUS_PENDING_LANDLORD => [
-            'label'   => 'Awaiting Landlord Confirmation',
-            'short'   => 'Awaiting Landlord',
-            'class'   => 'badge-primary',
-            'icon'    => 'hand-pointer',
-            'color'   => 'var(--primary)',
+            'label' => 'Awaiting Landlord Confirmation',
+            'short' => 'Awaiting Landlord',
+            'class' => 'badge-primary',
+            'icon'  => 'hand-pointer',
+            'color' => 'var(--primary)',
         ],
         PropertyFamilyLink::STATUS_PENDING => [
-            'label'   => 'Pending',
-            'short'   => 'Pending',
-            'class'   => 'badge-warning',
-            'icon'    => 'clock',
-            'color'   => 'var(--warning)',
+            'label' => 'Pending',
+            'short' => 'Pending',
+            'class' => 'badge-warning',
+            'icon'  => 'clock',
+            'color' => 'var(--warning)',
         ],
         PropertyFamilyLink::STATUS_APPROVED => [
-            'label'   => 'Approved',
-            'short'   => 'Approved',
-            'class'   => 'badge-success',
-            'icon'    => 'check-circle',
-            'color'   => 'var(--success)',
+            'label' => 'Approved',
+            'short' => 'Approved',
+            'class' => 'badge-success',
+            'icon'  => 'check-circle',
+            'color' => 'var(--success)',
         ],
         PropertyFamilyLink::STATUS_REJECTED => [
-            'label'   => 'Rejected',
-            'short'   => 'Rejected',
-            'class'   => 'badge-danger',
-            'icon'    => 'times-circle',
-            'color'   => 'var(--danger)',
+            'label' => 'Rejected',
+            'short' => 'Rejected',
+            'class' => 'badge-danger',
+            'icon'  => 'times-circle',
+            'color' => 'var(--danger)',
         ],
         PropertyFamilyLink::STATUS_REVOKED => [
-            'label'   => 'Revoked',
-            'short'   => 'Revoked',
-            'class'   => 'badge-secondary',
-            'icon'    => 'ban',
-            'color'   => 'var(--secondary)',
+            'label' => 'Revoked',
+            'short' => 'Revoked',
+            'class' => 'badge-secondary',
+            'icon'  => 'ban',
+            'color' => 'var(--secondary)',
         ],
         PropertyFamilyLink::STATUS_CANCELLED => [
-            'label'   => 'Cancelled',
-            'short'   => 'Cancelled',
-            'class'   => 'badge-secondary',
-            'icon'    => 'times',
-            'color'   => 'var(--secondary)',
+            'label' => 'Cancelled',
+            'short' => 'Cancelled',
+            'class' => 'badge-secondary',
+            'icon'  => 'times',
+            'color' => 'var(--secondary)',
         ],
+    ];
+
+    // ── Quick filter chips shown above the table ──
+    $quickFilters = [
+        ['value' => '',                                          'label' => 'All Pending',    'count' => $pendingCount,           'icon' => 'layer-group'],
+        ['value' => PropertyFamilyLink::STATUS_PENDING_ADMIN,    'label' => 'Awaiting Admin', 'count' => $pendingAdminReview,     'icon' => 'hourglass-half'],
+        ['value' => PropertyFamilyLink::STATUS_PENDING_LANDLORD, 'label' => 'With Landlord',  'count' => $pendingLandlordConfirm, 'icon' => 'hand-pointer'],
+        ['value' => PropertyFamilyLink::STATUS_REJECTED,         'label' => 'Rejected',       'count' => $rejectedCount,          'icon' => 'times-circle'],
+    ];
+
+    // Preset rejection / revocation reasons for the modals.
+    $rejectPresets = [
+        'Insufficient documentation provided.',
+        'Relationship could not be verified.',
+        'Duplicate of an existing proposal.',
+        'Property ownership could not be confirmed.',
+        'Suspected fraudulent or inaccurate information.',
+        'Contact details are unreachable or invalid.',
+    ];
+    $revokePresets = [
+        'Link no longer required by the landlord.',
+        'Relationship status changed.',
+        'Suspicious activity detected.',
+        'Property sold or transferred.',
+    ];
+    $bulkRejectPresets = [
+        'Insufficient documentation provided.',
+        'Relationship could not be verified.',
+        'Duplicate proposals.',
+        'Suspected fraudulent or inaccurate information.',
     ];
 @endphp
 
@@ -184,7 +209,6 @@
          STAT CARDS — two-stage aware
          ============================================================ --}}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-        {{-- Awaiting Admin Review (actionable) --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -205,7 +229,6 @@
             </div>
         </div>
 
-        {{-- Awaiting Landlord (informational) --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -221,7 +244,6 @@
             </div>
         </div>
 
-        {{-- Approved --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -237,7 +259,6 @@
             </div>
         </div>
 
-        {{-- Rejected --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -253,7 +274,6 @@
             </div>
         </div>
 
-        {{-- Revoked --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -269,7 +289,6 @@
             </div>
         </div>
 
-        {{-- Approved Today --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -300,13 +319,15 @@
                     </h3>
 
                     <form method="GET" action="{{ route('admin.family-links.index') }}" class="space-y-4" id="filterForm">
+                        <input type="hidden" name="per_page" value="{{ $currentPerPage }}">
+
                         <div>
                             <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                 <i class="fas fa-search mr-1"></i> Search
                             </label>
                             <div class="relative">
                                 <input type="text" name="search" value="{{ request('search') }}"
-                                       class="index-custom-input w-full pl-10 pr-3 py-2"
+                                       class="index-custom-input w-full"
                                        placeholder="Name, phone, email..."
                                        style="padding-left: 2.5rem;">
                                 <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
@@ -320,7 +341,7 @@
                                 <i class="fas fa-tag mr-1"></i> Status
                             </label>
                             <select name="status" class="index-custom-dropdown w-full">
-                                <option value="">All Status</option>
+                                <option value="">All Statuses</option>
                                 <option value="{{ PropertyFamilyLink::STATUS_PENDING_ADMIN }}"
                                     {{ request('status') == PropertyFamilyLink::STATUS_PENDING_ADMIN ? 'selected' : '' }}>
                                     Awaiting Admin Review
@@ -358,9 +379,13 @@
                             </label>
                             <select name="relationship" class="index-custom-dropdown w-full">
                                 <option value="">All Relationships</option>
-                                @foreach($relationshipOptions as $rel)
-                                    <option value="{{ $rel }}" {{ request('relationship') == $rel ? 'selected' : '' }}>
-                                        {{ ucfirst($rel) }}
+                                @foreach($relationshipOptions as $key => $label)
+                                    @php
+                                        $value = is_int($key) ? $label : $key;
+                                        $text  = is_int($key) ? ucfirst($label) : $label;
+                                    @endphp
+                                    <option value="{{ $value }}" {{ request('relationship') == $value ? 'selected' : '' }}>
+                                        {{ $text }}
                                     </option>
                                 @endforeach
                             </select>
@@ -390,12 +415,12 @@
                     <div class="space-y-3">
                         @php
                             $dist = [
-                                ['label' => 'Awaiting Admin',     'count' => $pendingAdminReview,     'color' => 'var(--warning)'],
-                                ['label' => 'Awaiting Landlord',  'count' => $pendingLandlordConfirm, 'color' => 'var(--primary)'],
-                                ['label' => 'Approved',           'count' => $approvedCount,          'color' => 'var(--success)'],
-                                ['label' => 'Rejected',           'count' => $rejectedCount,          'color' => 'var(--danger)'],
-                                ['label' => 'Revoked',            'count' => $revokedCount,           'color' => 'var(--secondary)'],
-                                ['label' => 'Cancelled',          'count' => $cancelledCount,         'color' => 'var(--secondary)'],
+                                ['label' => 'Awaiting Admin',    'count' => $pendingAdminReview,     'color' => 'var(--warning)'],
+                                ['label' => 'Awaiting Landlord', 'count' => $pendingLandlordConfirm, 'color' => 'var(--primary)'],
+                                ['label' => 'Approved',          'count' => $approvedCount,          'color' => 'var(--success)'],
+                                ['label' => 'Rejected',          'count' => $rejectedCount,          'color' => 'var(--danger)'],
+                                ['label' => 'Revoked',           'count' => $revokedCount,           'color' => 'var(--secondary)'],
+                                ['label' => 'Cancelled',         'count' => $cancelledCount,         'color' => 'var(--secondary)'],
                             ];
                         @endphp
                         @foreach($dist as $d)
@@ -419,29 +444,58 @@
         {{-- Main Table --}}
         <div class="lg:col-span-3">
             <div class="card p-6">
+
+                {{-- Stalled-proposals banner --}}
+                @if($pendingLandlordConfirm > 0 && !request('status'))
+                <div class="mb-6 p-4 rounded-lg flex items-start flex-wrap gap-3"
+                     style="background-color: rgba(var(--primary-rgb), 0.08); border: 1px solid rgba(var(--primary-rgb), 0.3);">
+                    <i class="fas fa-hand-pointer mr-1 mt-0.5" style="color: var(--primary);"></i>
+                    <div class="flex-1 min-w-[200px]">
+                        <p class="text-sm font-medium" style="color: var(--text-primary);">
+                            {{ $pendingLandlordConfirm }}
+                            {{ \Illuminate\Support\Str::plural('proposal', $pendingLandlordConfirm) }}
+                            {{ $pendingLandlordConfirm === 1 ? 'is' : 'are' }}
+                            still awaiting landlord confirmation.
+                        </p>
+                        <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                            These won't be actionable until the landlord confirms them — but you can review the details now.
+                        </p>
+                    </div>
+                    <a href="{{ route('admin.family-links.index', ['status' => PropertyFamilyLink::STATUS_PENDING_LANDLORD]) }}"
+                       class="text-xs font-medium px-3 py-1.5 rounded-lg whitespace-nowrap"
+                       style="background-color: var(--primary); color: white;">
+                        View them
+                    </a>
+                </div>
+                @endif
+
                 <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
                     <div>
                         <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
                             Proposals
                             @if($currentStatus)
                                 <span class="text-sm font-normal ml-2 px-2 py-1 rounded-full badge-primary">
-                                    {{ $statusConfigs[$currentStatus]['label'] ?? ucfirst(str_replace('_', ' ', $currentStatus)) }}
+                                    {{ data_get($statusConfigs, "$currentStatus.label", ucfirst(str_replace('_', ' ', $currentStatus))) }}
                                 </span>
                             @endif
                         </h3>
                         <p class="text-sm mt-1" style="color: var(--text-secondary);">
-                            Showing {{ $links->firstItem() }} to {{ $links->lastItem() }} of {{ $links->total() }} entries
+                            @if($links->total() > 0)
+                                Showing {{ $links->firstItem() }} to {{ $links->lastItem() }} of {{ $links->total() }} entries
+                            @else
+                                No entries to display
+                            @endif
                         </p>
                     </div>
 
                     <div class="flex items-center space-x-3 mt-4 md:mt-0">
                         @php
-                            // Selectable = has at least one admin-reviewable link
                             $hasSelectable = $links->filter(function ($l) {
                                 return $l->isAwaitingAdminReview()
-                                    || $l->status === \App\Models\PropertyFamilyLink::STATUS_PENDING;
+                                    || $l->status === PropertyFamilyLink::STATUS_PENDING;
                             })->count() > 0;
                         @endphp
+
                         @if($hasSelectable)
                         <div class="relative">
                             <button type="button" id="bulkActionsBtn"
@@ -469,14 +523,44 @@
                         <div class="flex items-center space-x-2">
                             <span class="text-sm" style="color: var(--text-secondary);">Show:</span>
                             <select onchange="updatePerPage(this.value)" class="index-custom-dropdown text-sm py-1 px-2 rounded">
-                                <option value="10" {{ request('per_page', 20) == 10 ? 'selected' : '' }}>10</option>
-                                <option value="25" {{ request('per_page') == 25 ? 'selected' : '' }}>25</option>
-                                <option value="50" {{ request('per_page') == 50 ? 'selected' : '' }}>50</option>
-                                <option value="100" {{ request('per_page') == 100 ? 'selected' : '' }}>100</option>
+                                @foreach([10, 20, 25, 50, 100] as $pp)
+                                    <option value="{{ $pp }}" {{ $currentPerPage === $pp ? 'selected' : '' }}>{{ $pp }}</option>
+                                @endforeach
                             </select>
                         </div>
                     </div>
                 </div>
+
+                {{-- Quick filter chips --}}
+                @unless(request('status'))
+                <div class="flex flex-wrap items-center gap-2 mb-5">
+                    @foreach($quickFilters as $chip)
+                        @php
+                            // "All Pending" chip is active when there's no status filter.
+                            $isActive = $chip['value'] === '';
+                            $url = $chip['value'] === ''
+                                ? route('admin.family-links.index', request()->except(['status', 'page']))
+                                : route('admin.family-links.index', array_merge(
+                                    request()->except(['status', 'page']),
+                                    ['status' => $chip['value']]
+                                ));
+                        @endphp
+                        <a href="{{ $url }}"
+                           class="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium transition"
+                           style="
+                                {{ $isActive
+                                    ? 'background-color: var(--primary); color: white; border: 1px solid var(--primary);'
+                                    : 'background-color: rgba(var(--primary-rgb), 0.08); color: var(--primary); border: 1px solid rgba(var(--primary-rgb), 0.3);' }}">
+                            <i class="fas fa-{{ $chip['icon'] }} mr-1.5"></i>
+                            {{ $chip['label'] }}
+                            <span class="ml-2 px-1.5 py-0.5 rounded-full text-[10px]"
+                                  style="background-color: rgba(255,255,255,0.25);">
+                                {{ number_format($chip['count']) }}
+                            </span>
+                        </a>
+                    @endforeach
+                </div>
+                @endunless
 
                 @if($links->isEmpty())
                     <div class="text-center py-12">
@@ -486,10 +570,10 @@
                         </div>
                         <h4 class="text-lg font-semibold mb-2" style="color: var(--text-primary);">No family link proposals found</h4>
                         <p class="text-sm" style="color: var(--text-secondary);">
-                            @if(request('status'))
-                                Try clearing your filters.
+                            @if(request('status') || request('search') || request('relationship'))
+                                No proposals match the current filters. Try resetting them.
                             @else
-                                There are no proposals awaiting admin review right now.
+                                There are no family link proposals awaiting review right now.
                             @endif
                         </p>
                     </div>
@@ -532,18 +616,31 @@
                             <tbody id="linksTableBody">
                                 @foreach($links as $link)
                                 @php
-                                    // Only admin-reviewable links can be bulk-selected.
                                     $canBulk = $link->isAwaitingAdminReview()
                                             || $link->status === PropertyFamilyLink::STATUS_PENDING;
 
                                     $sc = $statusConfigs[$link->status]
                                         ?? ['class' => 'badge-secondary', 'icon' => 'question-circle', 'label' => ucfirst($link->status)];
+
+                                    $reasonText = $link->admin_notes ?? null;
+                                    $isRejected = $link->status === PropertyFamilyLink::STATUS_REJECTED;
+                                    $isRevoked  = $link->status === PropertyFamilyLink::STATUS_REVOKED;
+                                    $hasReason  = in_array($link->status, [
+                                        PropertyFamilyLink::STATUS_REJECTED,
+                                        PropertyFamilyLink::STATUS_REVOKED,
+                                    ], true) && !empty($reasonText);
+                                    $reasonId   = "reason-{$link->id}";
                                 @endphp
                                 <tr data-link-id="{{ $link->id }}"
                                     data-status="{{ $link->status }}"
-                                    data-proposed-name="{{ addslashes($link->proposed_name) }}"
-                                    data-property-name="{{ addslashes($link->property->property_name ?? 'N/A') }}"
-                                    data-can-bulk="{{ $canBulk ? 'true' : 'false' }}">
+                                    data-proposed-name="{{ $link->proposed_name }}"
+                                    data-property-name="{{ $link->property->property_name ?? 'N/A' }}"
+                                    data-admin-notes="{{ $link->admin_notes }}"
+                                    data-can-bulk="{{ $canBulk ? 'true' : 'false' }}"
+                                    data-has-email="{{ !empty(trim((string) $link->proposed_email)) ? 'true' : 'false' }}"
+                                    data-has-phone="{{ !empty(trim((string) $link->proposed_phone)) ? 'true' : 'false' }}"
+                                    data-invitable-email="{{ $link->proposed_email }}"
+                                    data-invitable-phone="{{ $link->proposed_phone }}">
 
                                     <td class="p-3 text-center align-top">
                                         <input type="checkbox" class="link-checkbox" value="{{ $link->id }}"
@@ -616,9 +713,34 @@
                                             </div>
                                         @endif
 
-                                        @if($link->admin_notes && $link->isRejected())
-                                            <div class="text-xs mt-1" style="color: var(--danger);">
-                                                <i class="fas fa-comment mr-0.5"></i> {{ Str::limit($link->admin_notes, 40) }}
+                                        @if($hasReason)
+                                            <div class="text-xs mt-1.5">
+                                                <button type="button"
+                                                        onclick="toggleReason('{{ $reasonId }}')"
+                                                        class="inline-flex items-center font-medium"
+                                                        style="color: {{ $isRejected ? 'var(--danger)' : 'var(--secondary)' }}; background: none; border: none; cursor: pointer; padding: 0;">
+                                                    <i class="fas fa-comment mr-1"></i>
+                                                    <span id="{{ $reasonId }}-short">
+                                                        {{ Str::limit($reasonText, 40) }}
+                                                    </span>
+                                                    <i class="fas fa-chevron-down ml-1" id="{{ $reasonId }}-icon" style="transition: transform .15s ease;"></i>
+                                                </button>
+                                                <div id="{{ $reasonId }}-full"
+                                                     class="hidden mt-1 p-2 rounded text-xs"
+                                                     style="background-color: rgba(var(--danger-rgb), 0.06); border: 1px solid rgba(var(--danger-rgb), 0.2); color: var(--text-primary); max-width: 320px;">
+                                                    <div class="font-medium mb-0.5"
+                                                         style="color: {{ $isRejected ? 'var(--danger)' : 'var(--secondary)' }};">
+                                                        <i class="fas fa-comment-dots mr-1"></i>
+                                                        {{ $isRejected ? 'Rejection reason' : 'Revocation reason' }}
+                                                    </div>
+                                                    <div style="white-space: pre-wrap;">{{ $reasonText }}</div>
+                                                    @if($link->reviewer)
+                                                        <div class="mt-1" style="color: var(--text-secondary);">
+                                                            — {{ $link->reviewer->name ?? 'Admin' }},
+                                                            {{ optional($link->reviewed_at)->diffForHumans() ?? 'recently' }}
+                                                        </div>
+                                                    @endif
+                                                </div>
                                             </div>
                                         @endif
                                     </td>
@@ -626,10 +748,10 @@
                                     {{-- Submitted --}}
                                     <td class="p-3 align-top">
                                         <div class="text-sm" style="color: var(--text-primary);">
-                                            {{ $link->created_at->format('M j, Y') }}
+                                            {{ optional($link->created_at)->format('M j, Y') ?? '—' }}
                                         </div>
                                         <div class="text-xs mt-0.5" style="color: var(--text-secondary);">
-                                            <i class="fas fa-clock mr-1"></i> {{ $link->created_at->diffForHumans() }}
+                                            <i class="fas fa-clock mr-1"></i> {{ optional($link->created_at)->diffForHumans() ?? '—' }}
                                         </div>
                                         @if($link->reviewed_at)
                                         <div class="text-xs mt-0.5" style="color: var(--success);">
@@ -648,12 +770,12 @@
 
                                             @if($link->isAwaitingAdminReview() || $link->status === PropertyFamilyLink::STATUS_PENDING)
                                                 <button type="button"
-                                                        onclick="showApproveModal('{{ $link->id }}', '{{ addslashes($link->proposed_name) }}')"
+                                                        onclick="showApproveModal({{ $link->id }})"
                                                         class="action-btn assign" data-tooltip="Approve">
                                                     <i class="fas fa-check"></i>
                                                 </button>
                                                 <button type="button"
-                                                        onclick="showRejectModal('{{ $link->id }}', '{{ addslashes($link->proposed_name) }}')"
+                                                        onclick="showRejectModal({{ $link->id }})"
                                                         class="action-btn delete" data-tooltip="Reject">
                                                     <i class="fas fa-times"></i>
                                                 </button>
@@ -667,7 +789,7 @@
 
                                             @elseif($link->isApproved())
                                                 <button type="button"
-                                                        onclick="showRevokeModal('{{ $link->id }}', '{{ addslashes($link->proposed_name) }}')"
+                                                        onclick="showRevokeModal({{ $link->id }})"
                                                         class="action-btn delete" data-tooltip="Revoke Access">
                                                     <i class="fas fa-ban"></i>
                                                 </button>
@@ -680,6 +802,7 @@
                         </table>
                     </div>
 
+                    @if($links->total() > 0)
                     <div class="flex flex-col md:flex-row justify-between items-center pt-6 mt-6 border-t"
                          style="border-color: var(--border-color);">
                         <div class="text-sm mb-4 md:mb-0" style="color: var(--text-secondary);">
@@ -689,6 +812,7 @@
                             {{ $links->appends(request()->except('page'))->links() }}
                         </div>
                     </div>
+                    @endif
                 @endif
             </div>
         </div>
@@ -699,11 +823,11 @@
      MODALS
      ============================================================ --}}
 
-{{-- Approve Modal --}}
+{{-- Approve Modal — with delivery channel selection --}}
 <div id="approveModal" class="fixed inset-0 z-50 hidden">
     <div class="fixed inset-0 bg-black bg-opacity-50" onclick="hideApproveModal()"></div>
     <div class="fixed inset-0 flex items-center justify-center p-4">
-        <div class="modal-container rounded-lg shadow-xl w-full max-w-md">
+        <div class="modal-container rounded-lg shadow-xl w-full max-w-lg">
             <div class="modal-header">
                 <h3 class="flex items-center text-lg font-semibold" style="color: var(--text-primary);">
                     <i class="fas fa-check-circle mr-2" style="color: var(--success);"></i> Approve Family Link
@@ -719,6 +843,111 @@
                     <p class="text-sm mb-4" style="color: var(--text-primary);">
                         Approve family link for: <strong id="approveMemberName"></strong>
                     </p>
+
+                    {{-- Delivery channels --}}
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                            <i class="fas fa-paper-plane mr-1"></i> Delivery Channels
+                        </label>
+                        <p class="text-xs mb-2" style="color: var(--text-secondary);">
+                            Choose how the invitation is sent. Only channels the landlord provided are selectable.
+                        </p>
+
+                        <div id="approveChannelList" class="space-y-2">
+                            {{-- Email --}}
+                            <label id="approveChannelEmailWrap"
+                                   class="flex items-center p-3 rounded-lg cursor-pointer transition"
+                                   style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                                <input type="checkbox"
+                                       name="channels[]"
+                                       value="email"
+                                       id="approveChannelEmail"
+                                       class="mr-3 w-4 h-4"
+                                       style="accent-color: var(--primary);">
+                                <div class="flex-1">
+                                    <div class="text-sm font-medium" style="color: var(--text-primary);">
+                                        <i class="fas fa-envelope mr-1" style="color: var(--info);"></i>
+                                        Email
+                                    </div>
+                                    <div class="text-xs mt-0.5"
+                                         id="approveChannelEmailValue"
+                                         style="color: var(--text-secondary);">
+                                        —
+                                    </div>
+                                </div>
+                                <span id="approveChannelEmailUnavailable"
+                                      class="text-xs px-2 py-0.5 rounded-full hidden"
+                                      style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.3);">
+                                    Not provided
+                                </span>
+                            </label>
+
+                            {{-- SMS --}}
+                            <label id="approveChannelSmsWrap"
+                                   class="flex items-center p-3 rounded-lg cursor-pointer transition"
+                                   style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                                <input type="checkbox"
+                                       name="channels[]"
+                                       value="sms"
+                                       id="approveChannelSms"
+                                       class="mr-3 w-4 h-4"
+                                       style="accent-color: var(--primary);">
+                                <div class="flex-1">
+                                    <div class="text-sm font-medium" style="color: var(--text-primary);">
+                                        <i class="fas fa-sms mr-1" style="color: var(--success);"></i>
+                                        SMS
+                                    </div>
+                                    <div class="text-xs mt-0.5"
+                                         id="approveChannelSmsValue"
+                                         style="color: var(--text-secondary);">
+                                        —
+                                    </div>
+                                </div>
+                                <span id="approveChannelSmsUnavailable"
+                                      class="text-xs px-2 py-0.5 rounded-full hidden"
+                                      style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.3);">
+                                    Not provided
+                                </span>
+                            </label>
+
+                            {{-- WhatsApp --}}
+                            <label id="approveChannelWhatsappWrap"
+                                   class="flex items-center p-3 rounded-lg cursor-pointer transition"
+                                   style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                                <input type="checkbox"
+                                       name="channels[]"
+                                       value="whatsapp"
+                                       id="approveChannelWhatsapp"
+                                       class="mr-3 w-4 h-4"
+                                       style="accent-color: var(--primary);">
+                                <div class="flex-1">
+                                    <div class="text-sm font-medium" style="color: var(--text-primary);">
+                                        <i class="fab fa-whatsapp mr-1" style="color: #25D366;"></i>
+                                        WhatsApp
+                                    </div>
+                                    <div class="text-xs mt-0.5"
+                                         id="approveChannelWhatsappValue"
+                                         style="color: var(--text-secondary);">
+                                        —
+                                    </div>
+                                </div>
+                                <span id="approveChannelWhatsappUnavailable"
+                                      class="text-xs px-2 py-0.5 rounded-full hidden"
+                                      style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.3);">
+                                    Not provided
+                                </span>
+                            </label>
+                        </div>
+
+                        {{-- Warning when nothing is selectable --}}
+                        <div id="approveChannelEmptyWarning"
+                             class="mt-2 p-2 rounded hidden text-xs"
+                             style="background-color: rgba(var(--danger-rgb), 0.08); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.25);">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>
+                            No contact method was provided by the landlord. Cannot send an invitation.
+                        </div>
+                    </div>
+
                     <div class="mb-4">
                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             Admin Notes (Optional)
@@ -726,13 +955,14 @@
                         <textarea name="admin_notes" rows="3" class="index-custom-textarea w-full"
                                   placeholder="Add notes about this approval..."></textarea>
                     </div>
+
                     <div class="rounded-lg p-4"
                          style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.3);">
                         <div class="flex items-start">
                             <i class="fas fa-info-circle mr-2 mt-0.5" style="color: var(--success);"></i>
                             <p class="text-sm" style="color: var(--text-secondary);">
                                 This will grant the family member access to the property.
-                                <strong>The family member will receive an invitation to set up their account.</strong>
+                                <strong>The family member will receive an invitation on the selected channels.</strong>
                                 The landlord will be notified.
                             </p>
                         </div>
@@ -743,7 +973,7 @@
                             class="btn-secondary px-4 py-2 rounded-lg font-medium">Cancel</button>
                     <button type="submit"
                             class="btn-primary px-4 py-2 rounded-lg font-medium text-white">
-                        <i class="fas fa-check mr-2"></i> Approve
+                        <i class="fas fa-check mr-2"></i> Approve & Send Invitation
                     </button>
                 </div>
             </form>
@@ -771,13 +1001,37 @@
                     <p class="text-sm mb-4" style="color: var(--text-primary);">
                         Reject family link for: <strong id="rejectMemberName"></strong>
                     </p>
+
+                    <div class="mb-3">
+                        <label class="block text-xs font-medium mb-1.5" style="color: var(--text-secondary);">
+                            Common reasons (click to use)
+                        </label>
+                        <div class="flex flex-wrap gap-1.5">
+                            @foreach($rejectPresets as $preset)
+                                <button type="button"
+                                        class="text-xs px-2 py-1 rounded-full preset-reason"
+                                        data-reason="{{ $preset }}"
+                                        data-target="rejectReasonInput"
+                                        style="background-color: rgba(var(--danger-rgb), 0.08); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.25); cursor: pointer;">
+                                    {{ $preset }}
+                                </button>
+                            @endforeach
+                        </div>
+                    </div>
+
                     <div class="mb-4">
                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             Reason for Rejection <span class="text-red-500">*</span>
                         </label>
-                        <textarea name="admin_notes" rows="4" class="index-custom-textarea w-full"
+                        <textarea name="admin_notes" id="rejectReasonInput" rows="4"
+                                  class="index-custom-textarea w-full"
                                   placeholder="Please provide a reason..." required></textarea>
+                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            This is shared with the landlord so they understand the decision.
+                        </div>
                     </div>
+
                     <div class="rounded-lg p-4"
                          style="background-color: rgba(var(--warning-rgb), 0.1); border: 1px solid rgba(var(--warning-rgb), 0.3);">
                         <div class="flex items-start">
@@ -820,13 +1074,33 @@
                     <p class="text-sm mb-4" style="color: var(--text-primary);">
                         Revoke access for: <strong id="revokeMemberName"></strong>
                     </p>
+
+                    <div class="mb-3">
+                        <label class="block text-xs font-medium mb-1.5" style="color: var(--text-secondary);">
+                            Common reasons (click to use)
+                        </label>
+                        <div class="flex flex-wrap gap-1.5">
+                            @foreach($revokePresets as $preset)
+                                <button type="button"
+                                        class="text-xs px-2 py-1 rounded-full preset-reason"
+                                        data-reason="{{ $preset }}"
+                                        data-target="revokeReasonInput"
+                                        style="background-color: rgba(var(--danger-rgb), 0.08); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.25); cursor: pointer;">
+                                    {{ $preset }}
+                                </button>
+                            @endforeach
+                        </div>
+                    </div>
+
                     <div class="mb-4">
                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             Reason for Revocation
                         </label>
-                        <textarea name="reason" rows="3" class="index-custom-textarea w-full"
+                        <textarea name="reason" id="revokeReasonInput" rows="3"
+                                  class="index-custom-textarea w-full"
                                   placeholder="Reason for revoking access..."></textarea>
                     </div>
+
                     <div class="rounded-lg p-4"
                          style="background-color: rgba(var(--danger-rgb), 0.1); border: 1px solid rgba(var(--danger-rgb), 0.3);">
                         <div class="flex items-start">
@@ -870,6 +1144,43 @@
                     <p class="text-sm mb-2" style="color: var(--text-primary);">Selected proposals:</p>
                     <div id="bulkApproveList" class="max-h-40 overflow-y-auto space-y-1 p-2 rounded mb-4"
                          style="background-color: var(--bg-secondary);"></div>
+
+                    {{-- Bulk channel selection --}}
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                            <i class="fas fa-paper-plane mr-1"></i> Delivery Channels
+                        </label>
+                        <p class="text-xs mb-2" style="color: var(--text-secondary);">
+                            Applies to every selected proposal. Channels the recipient doesn't have will be skipped.
+                        </p>
+                        <div class="space-y-2">
+                            <label class="flex items-center p-2 rounded-lg cursor-pointer"
+                                   style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                                <input type="checkbox" name="channels[]" value="email"
+                                       class="mr-3 w-4 h-4" style="accent-color: var(--primary);" checked>
+                                <span class="text-sm" style="color: var(--text-primary);">
+                                    <i class="fas fa-envelope mr-1" style="color: var(--info);"></i> Email
+                                </span>
+                            </label>
+                            <label class="flex items-center p-2 rounded-lg cursor-pointer"
+                                   style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                                <input type="checkbox" name="channels[]" value="sms"
+                                       class="mr-3 w-4 h-4" style="accent-color: var(--primary);" checked>
+                                <span class="text-sm" style="color: var(--text-primary);">
+                                    <i class="fas fa-sms mr-1" style="color: var(--success);"></i> SMS
+                                </span>
+                            </label>
+                            <label class="flex items-center p-2 rounded-lg cursor-pointer"
+                                   style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                                <input type="checkbox" name="channels[]" value="whatsapp"
+                                       class="mr-3 w-4 h-4" style="accent-color: var(--primary);">
+                                <span class="text-sm" style="color: var(--text-primary);">
+                                    <i class="fab fa-whatsapp mr-1" style="color: #25D366;"></i> WhatsApp
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
                     <div class="mb-4">
                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             Admin Notes (Optional)
@@ -877,10 +1188,11 @@
                         <textarea name="admin_notes" rows="3" class="index-custom-textarea w-full"
                                   placeholder="Notes for all approvals..."></textarea>
                     </div>
+
                     <div class="rounded-lg p-4"
                          style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.3);">
                         <p class="text-sm" style="color: var(--text-secondary);">
-                            All selected proposals will be approved. Each family member will receive an account-setup invitation, and their landlords will be notified.
+                            All selected proposals will be approved. Each family member will receive an account-setup invitation on the selected channels, and their landlords will be notified.
                             Proposals still awaiting landlord confirmation will be skipped.
                         </p>
                     </div>
@@ -919,12 +1231,35 @@
                     <p class="text-sm mb-2" style="color: var(--text-primary);">Selected proposals:</p>
                     <div id="bulkRejectList" class="max-h-40 overflow-y-auto space-y-1 p-2 rounded mb-4"
                          style="background-color: var(--bg-secondary);"></div>
+
+                    <div class="mb-3">
+                        <label class="block text-xs font-medium mb-1.5" style="color: var(--text-secondary);">
+                            Common reasons (click to use)
+                        </label>
+                        <div class="flex flex-wrap gap-1.5">
+                            @foreach($bulkRejectPresets as $preset)
+                                <button type="button"
+                                        class="text-xs px-2 py-1 rounded-full preset-reason"
+                                        data-reason="{{ $preset }}"
+                                        data-target="bulkRejectReasonInput"
+                                        style="background-color: rgba(var(--danger-rgb), 0.08); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.25); cursor: pointer;">
+                                    {{ $preset }}
+                                </button>
+                            @endforeach
+                        </div>
+                    </div>
+
                     <div class="mb-4">
                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                             Reason for Rejection <span class="text-red-500">*</span>
                         </label>
-                        <textarea name="admin_notes" rows="3" class="index-custom-textarea w-full"
+                        <textarea name="admin_notes" id="bulkRejectReasonInput" rows="3"
+                                  class="index-custom-textarea w-full"
                                   placeholder="Please provide a reason..." required></textarea>
+                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            This reason will be attached to every selected proposal.
+                        </div>
                     </div>
                     <div class="rounded-lg p-4"
                          style="background-color: rgba(var(--danger-rgb), 0.1); border: 1px solid rgba(var(--danger-rgb), 0.3);">
@@ -955,28 +1290,44 @@ document.addEventListener('DOMContentLoaded', function() {
     autoHideMessages();
     initTooltips();
 
-    const bulkActionsBtn = document.getElementById('bulkActionsBtn');
+    const bulkActionsBtn      = document.getElementById('bulkActionsBtn');
     const bulkActionsDropdown = document.getElementById('bulkActionsDropdown');
-    if (bulkActionsBtn) {
+    if (bulkActionsBtn && bulkActionsDropdown) {
         bulkActionsBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             bulkActionsDropdown.classList.toggle('hidden');
         });
-    }
-    document.addEventListener('click', function(event) {
-        if (bulkActionsDropdown && !bulkActionsDropdown.classList.contains('hidden')) {
-            if (!bulkActionsBtn.contains(event.target) && !bulkActionsDropdown.contains(event.target)) {
-                bulkActionsDropdown.classList.add('hidden');
+        document.addEventListener('click', function(event) {
+            if (!bulkActionsDropdown.classList.contains('hidden')) {
+                if (!bulkActionsBtn.contains(event.target) && !bulkActionsDropdown.contains(event.target)) {
+                    bulkActionsDropdown.classList.add('hidden');
+                }
             }
-        }
+        });
+    }
+
+    // Preset-reason chips — respect data-target if present, otherwise default to rejectReasonInput.
+    document.querySelectorAll('.preset-reason').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const reason = this.getAttribute('data-reason') || '';
+            const targetId = this.getAttribute('data-target');
+            const input = targetId
+                ? document.getElementById(targetId)
+                : document.getElementById('rejectReasonInput');
+
+            if (input) {
+                input.value = input.value ? (input.value.trimEnd() + ' ' + reason) : reason;
+                input.focus();
+                input.setSelectionRange(input.value.length, input.value.length);
+            }
+        });
     });
 
-    // Wire up all forms
-    bindForm('approveForm',      data => submitSingle('approve', data));
-    bindForm('rejectForm',       data => submitSingle('reject',  data));
-    bindForm('revokeForm',       data => submitSingle('revoke',  data));
-    bindForm('bulkApproveForm',  data => submitBulk('approve',   data));
-    bindForm('bulkRejectForm',   data => submitBulk('reject',    data));
+    bindForm('approveForm',     form => submitSingle('approve', form));
+    bindForm('rejectForm',      form => submitSingle('reject',  form));
+    bindForm('revokeForm',      form => submitSingle('revoke',  form));
+    bindForm('bulkApproveForm', form => submitBulk('approve',   form));
+    bindForm('bulkRejectForm',  form => submitBulk('reject',    form));
 });
 
 function bindForm(id, handler) {
@@ -1014,34 +1365,150 @@ function updateBulkActions() {
             ? `<i class="fas fa-check-double mr-2"></i> ${selectedLinkIds.length} Selected <i class="fas fa-chevron-down ml-2 text-xs"></i>`
             : `<i class="fas fa-check-double mr-2"></i> Bulk Actions <i class="fas fa-chevron-down ml-2 text-xs"></i>`;
     }
+
+    updateSelectAllState();
 }
 
-// ── Single modals ────────────────────────────────────────
-function showApproveModal(id, name) {
-    document.getElementById('approveForm').action = `/admin/family-links/${id}/review`;
-    document.getElementById('approveMemberName').textContent = name;
+function updateSelectAllState() {
+    const master = document.getElementById('selectAll');
+    if (!master) return;
+    const enabled = Array.from(document.querySelectorAll('.link-checkbox')).filter(cb => !cb.disabled);
+    const checked = enabled.filter(cb => cb.checked);
+    master.checked       = enabled.length > 0 && checked.length === enabled.length;
+    master.indeterminate = checked.length > 0 && checked.length < enabled.length;
+}
+
+function rowName(id) {
+    const row = document.querySelector(`tr[data-link-id="${id}"]`);
+    return row?.getAttribute('data-proposed-name') || 'this member';
+}
+
+function toggleReason(id) {
+    const full  = document.getElementById(`${id}-full`);
+    const icon  = document.getElementById(`${id}-icon`);
+    const short = document.getElementById(`${id}-short`);
+    if (!full) return;
+
+    const isHidden = full.classList.contains('hidden');
+    full.classList.toggle('hidden', !isHidden);
+    if (short) short.classList.toggle('hidden', isHidden);
+    if (icon)  icon.style.transform = isHidden ? 'rotate(180deg)' : '';
+}
+
+// ── Approve modal — with channel selection prefill ──
+function showApproveModal(id) {
+    const row = document.querySelector(`tr[data-link-id="${id}"]`);
+    if (!row) return;
+
+    const form = document.getElementById('approveForm');
+    form.action = `/admin/family-links/${id}/review`;
+
+    // Clear notes
+    const notes = form.querySelector('textarea[name="admin_notes"]');
+    if (notes) notes.value = '';
+
+    // Read landlord-provided contact info
+    const hasEmail   = row.getAttribute('data-has-email') === 'true';
+    const hasPhone   = row.getAttribute('data-has-phone') === 'true';
+    const emailValue = row.getAttribute('data-invitable-email') || '';
+    const phoneValue = row.getAttribute('data-invitable-phone') || '';
+
+    // ── Email channel ──
+    const emailCb       = document.getElementById('approveChannelEmail');
+    const emailWrap     = document.getElementById('approveChannelEmailWrap');
+    const emailValueEl  = document.getElementById('approveChannelEmailValue');
+    const emailMissing  = document.getElementById('approveChannelEmailUnavailable');
+
+    emailValueEl.textContent = hasEmail ? emailValue : 'Not provided by landlord';
+    if (hasEmail) {
+        emailCb.disabled = false;
+        emailCb.checked  = true;
+        emailWrap.style.opacity = '1';
+        emailWrap.style.cursor  = 'pointer';
+        emailMissing.classList.add('hidden');
+    } else {
+        emailCb.disabled = true;
+        emailCb.checked  = false;
+        emailWrap.style.opacity = '0.55';
+        emailWrap.style.cursor  = 'not-allowed';
+        emailMissing.classList.remove('hidden');
+    }
+
+    // ── SMS channel ──
+    const smsCb      = document.getElementById('approveChannelSms');
+    const smsWrap    = document.getElementById('approveChannelSmsWrap');
+    const smsValueEl = document.getElementById('approveChannelSmsValue');
+    const smsMissing = document.getElementById('approveChannelSmsUnavailable');
+
+    smsValueEl.textContent = hasPhone ? phoneValue : 'Not provided by landlord';
+    if (hasPhone) {
+        smsCb.disabled = false;
+        smsCb.checked  = true;
+        smsWrap.style.opacity = '1';
+        smsWrap.style.cursor  = 'pointer';
+        smsMissing.classList.add('hidden');
+    } else {
+        smsCb.disabled = true;
+        smsCb.checked  = false;
+        smsWrap.style.opacity = '0.55';
+        smsWrap.style.cursor  = 'not-allowed';
+        smsMissing.classList.remove('hidden');
+    }
+
+    // ── WhatsApp channel (needs phone, default OFF — opt-in) ──
+    const waCb      = document.getElementById('approveChannelWhatsapp');
+    const waWrap    = document.getElementById('approveChannelWhatsappWrap');
+    const waValueEl = document.getElementById('approveChannelWhatsappValue');
+    const waMissing = document.getElementById('approveChannelWhatsappUnavailable');
+
+    waValueEl.textContent = hasPhone ? phoneValue : 'Not provided by landlord';
+    if (hasPhone) {
+        waCb.disabled = false;
+        waCb.checked  = false; // opt-in
+        waWrap.style.opacity = '1';
+        waWrap.style.cursor  = 'pointer';
+        waMissing.classList.add('hidden');
+    } else {
+        waCb.disabled = true;
+        waCb.checked  = false;
+        waWrap.style.opacity = '0.55';
+        waWrap.style.cursor  = 'not-allowed';
+        waMissing.classList.remove('hidden');
+    }
+
+    // Empty warning
+    const warn = document.getElementById('approveChannelEmptyWarning');
+    warn.classList.toggle('hidden', hasEmail || hasPhone);
+
+    document.getElementById('approveMemberName').textContent = rowName(id);
     document.getElementById('approveModal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
 }
+
 function hideApproveModal() {
     document.getElementById('approveModal').classList.add('hidden');
     document.body.style.overflow = 'auto';
 }
 
-function showRejectModal(id, name) {
-    document.getElementById('rejectForm').action = `/admin/family-links/${id}/review`;
-    document.getElementById('rejectMemberName').textContent = name;
+function showRejectModal(id) {
+    const form = document.getElementById('rejectForm');
+    form.action = `/admin/family-links/${id}/review`;
+    document.getElementById('rejectReasonInput').value = '';
+    document.getElementById('rejectMemberName').textContent = rowName(id);
     document.getElementById('rejectModal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    setTimeout(() => document.getElementById('rejectReasonInput').focus(), 100);
 }
 function hideRejectModal() {
     document.getElementById('rejectModal').classList.add('hidden');
     document.body.style.overflow = 'auto';
 }
 
-function showRevokeModal(id, name) {
-    document.getElementById('revokeForm').action = `/admin/family-links/${id}/revoke`;
-    document.getElementById('revokeMemberName').textContent = name;
+function showRevokeModal(id) {
+    const form = document.getElementById('revokeForm');
+    form.action = `/admin/family-links/${id}/revoke`;
+    document.getElementById('revokeReasonInput').value = '';
+    document.getElementById('revokeMemberName').textContent = rowName(id);
     document.getElementById('revokeModal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
 }
@@ -1050,9 +1517,10 @@ function hideRevokeModal() {
     document.body.style.overflow = 'auto';
 }
 
-// ── Bulk modals ──────────────────────────────────────────
 function showBulkApproveModal() {
-    if (selectedLinkIds.length === 0) return showNotification('error', 'Select at least one proposal awaiting review.');
+    if (selectedLinkIds.length === 0) {
+        return showNotification('error', 'Select at least one proposal awaiting review.');
+    }
     buildBulkList('bulkApproveList', 'bulkApproveIdsContainer');
     document.getElementById('bulkApproveModal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
@@ -1063,10 +1531,14 @@ function hideBulkApproveModal() {
 }
 
 function showBulkRejectModal() {
-    if (selectedLinkIds.length === 0) return showNotification('error', 'Select at least one proposal awaiting review.');
+    if (selectedLinkIds.length === 0) {
+        return showNotification('error', 'Select at least one proposal awaiting review.');
+    }
     buildBulkList('bulkRejectList', 'bulkRejectIdsContainer');
+    document.getElementById('bulkRejectReasonInput').value = '';
     document.getElementById('bulkRejectModal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    setTimeout(() => document.getElementById('bulkRejectReasonInput').focus(), 100);
 }
 function hideBulkRejectModal() {
     document.getElementById('bulkRejectModal').classList.add('hidden');
@@ -1074,15 +1546,15 @@ function hideBulkRejectModal() {
 }
 
 function buildBulkList(listId, containerId) {
-    const list = document.getElementById(listId);
+    const list      = document.getElementById(listId);
     const container = document.getElementById(containerId);
-    list.innerHTML = '';
+    list.innerHTML      = '';
     container.innerHTML = '';
 
     selectedLinkIds.forEach(id => {
         const row = document.querySelector(`tr[data-link-id="${id}"]`);
         if (!row) return;
-        const name = row.getAttribute('data-proposed-name') || 'Unknown';
+        const name     = row.getAttribute('data-proposed-name') || 'Unknown';
         const property = row.getAttribute('data-property-name') || 'Unknown';
 
         const div = document.createElement('div');
@@ -1092,19 +1564,38 @@ function buildBulkList(listId, containerId) {
         list.appendChild(div);
 
         const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = 'link_ids[]';
+        input.type  = 'hidden';
+        input.name  = 'link_ids[]';
         input.value = id;
         container.appendChild(input);
     });
 }
 
-// ── Form submission ──────────────────────────────────────
+// ── Submit handlers ──
 function submitSingle(action, form) {
-    const btn = form.querySelector('button[type="submit"]');
+    if (action === 'approve') {
+        const selectedChannels = Array.from(
+            form.querySelectorAll('input[name="channels[]"]:checked')
+        );
+        if (selectedChannels.length === 0) {
+            showNotification('error', 'Select at least one delivery channel for the invitation.');
+            return;
+        }
+    }
+
+    if (action === 'reject') {
+        const reason = form.querySelector('textarea[name="admin_notes"]')?.value.trim();
+        if (!reason) {
+            showNotification('error', 'Please provide a rejection reason.');
+            form.querySelector('textarea[name="admin_notes"]')?.focus();
+            return;
+        }
+    }
+
+    const btn      = form.querySelector('button[type="submit"]');
     const original = btn.innerHTML;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Processing...';
-    btn.disabled = true;
+    btn.innerHTML  = '<i class="fas fa-spinner fa-spin mr-2"></i> Processing...';
+    btn.disabled   = true;
 
     fetch(form.action, {
         method: 'POST',
@@ -1126,21 +1617,40 @@ function submitSingle(action, form) {
         } else {
             showNotification('error', data.message || 'Error.');
             btn.innerHTML = original;
-            btn.disabled = false;
+            btn.disabled  = false;
         }
     })
     .catch(() => {
         showNotification('error', 'Request failed.');
         btn.innerHTML = original;
-        btn.disabled = false;
+        btn.disabled  = false;
     });
 }
 
 function submitBulk(action, form) {
-    const btn = form.querySelector('button[type="submit"]');
+    if (action === 'approve') {
+        const selectedChannels = Array.from(
+            form.querySelectorAll('input[name="channels[]"]:checked')
+        );
+        if (selectedChannels.length === 0) {
+            showNotification('error', 'Select at least one delivery channel for the bulk approval.');
+            return;
+        }
+    }
+
+    if (action === 'reject') {
+        const reason = form.querySelector('textarea[name="admin_notes"]')?.value.trim();
+        if (!reason) {
+            showNotification('error', 'Please provide a rejection reason for all selected proposals.');
+            form.querySelector('textarea[name="admin_notes"]')?.focus();
+            return;
+        }
+    }
+
+    const btn      = form.querySelector('button[type="submit"]');
     const original = btn.innerHTML;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Processing...';
-    btn.disabled = true;
+    btn.innerHTML  = '<i class="fas fa-spinner fa-spin mr-2"></i> Processing...';
+    btn.disabled   = true;
 
     fetch(form.action, {
         method: 'POST',
@@ -1161,11 +1671,11 @@ function submitBulk(action, form) {
     .catch(() => {
         showNotification('error', 'Bulk request failed.');
         btn.innerHTML = original;
-        btn.disabled = false;
+        btn.disabled  = false;
     });
 }
 
-// ── Helpers ─────────────────────────────────────────────
+// ── Helpers ──
 function escapeHtml(t) {
     const d = document.createElement('div');
     d.textContent = t;
@@ -1213,7 +1723,7 @@ function initTooltips() {
             document.body.appendChild(tip);
             const r = this.getBoundingClientRect();
             tip.style.left = r.left + (r.width / 2) - (tip.offsetWidth / 2) + 'px';
-            tip.style.top = r.top - tip.offsetHeight - 5 + 'px';
+            tip.style.top  = r.top - tip.offsetHeight - 5 + 'px';
             this._tip = tip;
         });
         el.addEventListener('mouseleave', function () {
@@ -1301,6 +1811,10 @@ function initTooltips() {
 .modal-close-btn {
     background: none; border: none; cursor: pointer;
     font-size: 1.25rem; padding: 0.5rem; border-radius: 50%;
+}
+
+.preset-reason:hover {
+    background-color: rgba(var(--danger-rgb), 0.18) !important;
 }
 
 .badge-success   { background-color: rgba(var(--success-rgb), 0.1) !important; color: var(--success) !important; border: 1px solid rgba(var(--success-rgb), 0.3) !important; }

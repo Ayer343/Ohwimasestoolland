@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;      // ========== PHOTO
 use Illuminate\Support\Str;
 
 class PropertyUnit extends Model
@@ -165,6 +166,11 @@ class PropertyUnit extends Model
         'current_phase',
         'has_advance_rent',
         'advance_rent_remaining_months',
+
+        // ========== PHOTO ==========
+        'photo_count',
+        'has_photos',
+        'cover_photo_url',
     ];
 
     // Unit status constants
@@ -329,6 +335,35 @@ class PropertyUnit extends Model
     public function activityLogs(): HasMany
     {
         return $this->hasMany(ActivityLog::class, 'unit_id');
+    }
+
+    // ========== PHOTO: RELATIONSHIPS ==========
+
+    /**
+     * All photos for this unit.
+     *
+     * Ordering is baked into the relation so both
+     *   $unit->photos           (eager-loaded collection)
+     * and
+     *   $unit->photos()->get()  (fresh query)
+     * return cover-first, then sort_order, then id.
+     */
+    public function photos(): HasMany
+    {
+        return $this->hasMany(UnitPhoto::class, 'property_unit_id')
+            ->orderByDesc('is_cover')
+            ->orderBy('sort_order')
+            ->orderBy('id');
+    }
+
+    /**
+     * The unit's cover photo, if any.
+     * Use `->with('coverPhoto')` in list queries to avoid N+1.
+     */
+    public function coverPhoto(): HasOne
+    {
+        return $this->hasOne(UnitPhoto::class, 'property_unit_id')
+            ->where('is_cover', true);
     }
 
     // ========== EXISTING ACCESSORS ==========
@@ -727,6 +762,43 @@ class PropertyUnit extends Model
         return $this->currentLease->advance_months_remaining;
     }
 
+    // ========== PHOTO: ACCESSORS ==========
+
+    /**
+     * Number of photos attached to this unit.
+     * Uses the loaded relation if present, otherwise queries.
+     */
+    public function getPhotoCountAttribute(): int
+    {
+        if ($this->relationLoaded('photos')) {
+            return $this->photos->count();
+        }
+        return $this->photos()->count();
+    }
+
+    /**
+     * Convenience boolean — is there at least one photo?
+     */
+    public function getHasPhotosAttribute(): bool
+    {
+        return $this->photo_count > 0;
+    }
+
+    /**
+     * URL of the cover photo (or null).
+     * Uses the eager-loaded relation if available, otherwise queries.
+     */
+    public function getCoverPhotoUrlAttribute(): ?string
+    {
+        if ($this->relationLoaded('coverPhoto')) {
+            $cover = $this->coverPhoto;
+            return $cover ? $cover->thumb_url : null;
+        }
+
+        $cover = $this->coverPhoto()->first();
+        return $cover ? $cover->thumb_url : null;
+    }
+
     // ========== STATIC OPTION LISTS ==========
 
     public static function getStatusOptions(): array
@@ -939,6 +1011,24 @@ class PropertyUnit extends Model
                       ->orWhere('advance_rent_period_end', '<', now());
               });
         });
+    }
+
+    // ========== PHOTO: SCOPES ==========
+
+    /**
+     * Units that have at least one photo.
+     */
+    public function scopeWithPhotos($query)
+    {
+        return $query->whereHas('photos');
+    }
+
+    /**
+     * Units with no photos — useful for "needs attention" dashboards.
+     */
+    public function scopeWithoutPhotos($query)
+    {
+        return $query->whereDoesntHave('photos');
     }
 
     // ========== BUSINESS LOGIC METHODS ==========
@@ -1194,6 +1284,29 @@ class PropertyUnit extends Model
             && $this->tenant_requested_at->diffInDays(now()) > 7;
     }
 
+    // ========== PHOTO: BUSINESS METHODS ==========
+
+    /**
+     * Delete every photo attached to this unit — files AND rows.
+     * Called from PropertyUnitController::destroy() inside its transaction,
+     * and safe to call from a `forceDeleting` model event as well.
+     *
+     * Returns the number of photos removed.
+     */
+    public function deleteAllPhotos(): int
+    {
+        $photos = $this->photos()->get();
+        $count  = 0;
+
+        foreach ($photos as $photo) {
+            $photo->deleteFiles();
+            $photo->delete();
+            $count++;
+        }
+
+        return $count;
+    }
+
     // ========== ✅ INVOICE: UPDATED AGGREGATE METHODS ==========
 
     /**
@@ -1432,6 +1545,9 @@ class PropertyUnit extends Model
             ->where('status', PropertyUnitInvoice::STATUS_OVERDUE)
             ->count();
 
+        // ========== PHOTO: dashboard metrics ==========
+        $unitsWithoutPhotos = $query->clone()->withoutPhotos()->count();
+
         return [
             'total_units'        => $totalUnits,
             'available_units'    => $availableUnits,
@@ -1450,6 +1566,9 @@ class PropertyUnit extends Model
             'collection_rate'      => ($totalMonthlyRent * 12) > 0
                 ? round(($totalAnnualRent - $outstanding) / $totalAnnualRent * 100, 2)
                 : 0,
+
+            // ========== PHOTO ==========
+            'units_without_photos' => $unitsWithoutPhotos,
         ];
     }
 }

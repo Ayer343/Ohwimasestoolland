@@ -69,9 +69,54 @@ class UserRepository
         return in_array($id, array_values(self::TYPE_SLUG_TO_CONSTANT), true);
     }
 
+    /**
+     * ✅ Normalize an email value: trim, blank → null.
+     */
+    protected function normalizeEmail($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+
+        return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * Get paginated users.
+     *
+     * ✅ NEW: eager-loads two counts used by the User model accessors
+     *         so the "N Properties · linked" badge in the user index
+     *         renders with zero extra queries per row:
+     *
+     *           • properties_count          — owned count (landlord_id = user.id)
+     *           • linked_properties_count   — approved family-link count
+     *
+     *         These feed:
+     *           $user->property_count             (owned)
+     *           $user->linked_property_count      (linked)
+     *           $user->accessible_property_count  (owned + linked)
+     *           $user->has_property_access        (total > 0)
+     *
+     *         The eager loads execute as 2 COUNT queries total per page,
+     *         regardless of how many rows are shown.
+     */
     public function getPaginatedUsers(array $filters, User $currentUser, int $perPage = 20): LengthAwarePaginator
     {
-        $query = User::with(['creator'])->orderBy('created_at', 'desc');
+        $query = User::with(['creator'])
+            ->withCount([
+                // Owned properties — landlord_id = user.id
+                'ownedProperties as properties_count',
+
+                // Approved family-link grants — linked_user_id = user.id
+                'approvedFamilyLinks as linked_properties_count',
+            ])
+            ->orderBy('created_at', 'desc');
 
         $this->applyFilters($query, $filters);
         $this->applyAuthorizationScope($query, $currentUser);
@@ -205,6 +250,11 @@ class UserRepository
         try {
             $sanitationPersonnel = $user->sanitationPersonnel;
 
+            // ✅ Normalize email once for reuse below
+            $normalizedEmail = array_key_exists('email', $data)
+                ? $this->normalizeEmail($data['email'])
+                : $user->email;
+
             if (!$sanitationPersonnel) {
                 $sanitationPersonnel = new SanitationPersonnel();
                 $sanitationPersonnel->user_id = $user->id;
@@ -212,7 +262,8 @@ class UserRepository
                 $sanitationPersonnel->first_name = $data['name'] ?? $user->name;
                 $sanitationPersonnel->last_name = '';
                 $sanitationPersonnel->phone = $data['phone'] ?? $user->phone;
-                $sanitationPersonnel->email = $data['email'] ?? $user->email;
+                // ✅ Email may be null now
+                $sanitationPersonnel->email = $normalizedEmail;
             }
 
             $role = $data['sanitation_personnel_role'] ?? 'worker';
@@ -264,7 +315,14 @@ class UserRepository
             $sanitationPersonnel->can_be_supervisor = (bool) $canBeSupervisor;
             $sanitationPersonnel->first_name = $data['name'] ?? $sanitationPersonnel->first_name ?? $user->name;
             $sanitationPersonnel->phone = $data['phone'] ?? $sanitationPersonnel->phone ?? $user->phone;
-            $sanitationPersonnel->email = $data['email'] ?? $sanitationPersonnel->email ?? $user->email;
+
+            // ✅ Only overwrite email when the caller explicitly sent a value
+            //    (including null) — otherwise preserve what's already stored.
+            if (array_key_exists('email', $data)) {
+                $sanitationPersonnel->email = $normalizedEmail;
+            } elseif (empty($sanitationPersonnel->email)) {
+                $sanitationPersonnel->email = $user->email;
+            }
 
             if (!empty($data['sanitation_vehicle_number'])) {
                 $sanitationPersonnel->vehicle_number = $data['sanitation_vehicle_number'];
@@ -392,7 +450,10 @@ class UserRepository
 
         foreach ($updatableFields as $field) {
             if (array_key_exists($field, $data)) {
-                if ($field === 'dob' && !empty($data['dob'])) {
+                if ($field === 'email') {
+                    // ✅ Normalize email: blank string → null
+                    $updateData['email'] = $this->normalizeEmail($data['email']);
+                } elseif ($field === 'dob' && !empty($data['dob'])) {
                     $updateData[$field] = $data['dob'];
                 } elseif ($field === 'supervisor_certifications' && !empty($data[$field])) {
                     $updateData[$field] = is_string($data[$field]) ? $data[$field] : json_encode($data[$field]);
@@ -413,7 +474,16 @@ class UserRepository
         }
 
         if (isset($data['auto_verify_email']) && $data['auto_verify_email']) {
-            $updateData['email_verified_at'] = now();
+            // ✅ Only verify email if one actually exists
+            $emailForVerification = $updateData['email'] ?? $user->email;
+            if (!empty($emailForVerification)) {
+                $updateData['email_verified_at'] = now();
+            }
+        }
+
+        // ✅ If email was cleared, remove email verification timestamp too
+        if (array_key_exists('email', $updateData) && $updateData['email'] === null) {
+            $updateData['email_verified_at'] = null;
         }
 
         $updated = $user->update($updateData);
@@ -497,9 +567,6 @@ class UserRepository
 
             // ---------------------------------------------------------
             // 1. Capture a snapshot for the audit trail.
-            //    (Redundant now — the row itself is intact — but kept
-            //    so downstream consumers relying on original_data still
-            //    find it.)
             // ---------------------------------------------------------
             $snapshot = $this->getUserSnapshot($user);
 
@@ -636,11 +703,49 @@ class UserRepository
             }
         }
 
+        // ─────────────────────────────────────────────────────────────
+        // Property-access filters.
+        //
+        // Two dimensions:
+        //   • has_properties    — legacy filter, strictly OWNED
+        //   • property_access   — NEW filter, owned OR linked
+        //
+        // `property_access` aligns the filter semantics with the
+        // badge column, so a user can filter for "anyone with access"
+        // and get family members too.
+        // ─────────────────────────────────────────────────────────────
+
         if (isset($filters['has_properties']) && $filters['has_properties'] !== 'all') {
             if ($filters['has_properties'] === 'yes') {
                 $query->whereHas('ownedProperties');
             } else {
                 $query->whereDoesntHave('ownedProperties');
+            }
+        }
+
+        if (isset($filters['property_access']) && $filters['property_access'] !== 'all') {
+            switch ($filters['property_access']) {
+                case 'owned_only':
+                    $query->whereHas('ownedProperties')
+                          ->whereDoesntHave('approvedFamilyLinks');
+                    break;
+
+                case 'linked_only':
+                    $query->whereDoesntHave('ownedProperties')
+                          ->whereHas('approvedFamilyLinks');
+                    break;
+
+                case 'any':
+                    $query->where(function ($q) {
+                        $q->whereHas('ownedProperties')
+                          ->orWhereHas('approvedFamilyLinks');
+                    });
+                    break;
+
+                case 'none':
+                    $query->whereDoesntHave('ownedProperties')
+                          ->whereDoesntHave('approvedFamilyLinks');
+                    break;
             }
         }
 
@@ -669,7 +774,8 @@ class UserRepository
     {
         $userData = [
             'name'            => $data['name'],
-            'email'           => $data['email'],
+            // ✅ Email is now OPTIONAL — normalize blank → null
+            'email'           => $this->normalizeEmail($data['email'] ?? null),
             'phone'           => $data['phone'],
             'type'            => (int) $data['type'],
             'status'          => $data['status'],
@@ -687,7 +793,10 @@ class UserRepository
             $userData['status'] = User::STATUS_PENDING;
         } else {
             $userData['password'] = Hash::make($data['password']);
-            $userData['email_verified_at'] = !empty($data['auto_verify_email']) ? now() : null;
+            // ✅ Only mark email verified if an email actually exists
+            $userData['email_verified_at'] = (!empty($data['auto_verify_email']) && !empty($userData['email']))
+                ? now()
+                : null;
         }
 
         if (!empty($data['auto_verify_phone'])) {
@@ -815,9 +924,12 @@ class UserRepository
 
     protected function calculateProfileCompletion(User $user): int
     {
+        // ✅ Email now counts as "complete" if it exists AND is verified,
+        //    OR if it's simply absent (since email is optional going forward).
+        //    Phone is the primary identifier and always required.
         $fields = [
             'name'            => !empty($user->name),
-            'email'           => !empty($user->email) && !is_null($user->email_verified_at),
+            'email'           => empty($user->email) || !is_null($user->email_verified_at),
             'phone'           => !empty($user->phone) && !is_null($user->phone_verified_at),
             'digital_address' => !empty($user->digital_address),
             'region'          => !empty($user->region),

@@ -29,11 +29,15 @@
                 </div>
             </div>
             <div class="flex items-center space-x-3">
-                @if(($stats['total_trashed'] ?? 0) > 0)
-                <button onclick="confirmEmptyTrash()" 
+                @if(($stats['old_deleted_count'] ?? 0) > 0)
+                <button onclick="confirmEmptyTrash()"
                         class="btn-danger px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center"
-                        style="background-color: #dc2626; color: white;">
-                    <i class="fas fa-trash-alt mr-2"></i> Empty Trash
+                        style="background-color: #dc2626; color: white;"
+                        title="Permanently delete all records eligible for permanent deletion (30+ days in trash)">
+                    <i class="fas fa-trash-alt mr-2"></i> Empty Eligible Trash
+                    <span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-white text-red-800">
+                        {{ $stats['old_deleted_count'] }}
+                    </span>
                 </button>
                 @endif
                 <a href="{{ route('security.personnel.index') }}"
@@ -70,8 +74,8 @@
             <div>
                 <h4 class="text-sm font-medium" style="color: var(--text-primary);">Deleted Personnel Management</h4>
                 <p class="text-xs mt-1" style="color: var(--text-secondary);">
-                    Personnel in trash have been soft-deleted. You can <strong>restore</strong> them to reactivate their accounts,
-                    or <strong>permanently delete</strong> them to remove all data. Users deleted over 30 days ago are eligible for permanent deletion.
+                    Personnel in trash have been soft-deleted. You can <strong>restore</strong> them (they will return to the admin approval queue), or <strong>permanently delete</strong> them to remove all data.
+                    Records must be in trash for at least <strong>30 days</strong> before permanent deletion is allowed.
                 </p>
             </div>
         </div>
@@ -90,7 +94,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="card p-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -102,7 +106,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="card p-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -114,7 +118,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="card p-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -140,7 +144,7 @@
         <h3 class="text-lg font-semibold mb-4 flex items-center" style="color: var(--text-primary);">
             <i class="fas fa-filter mr-2" style="color: var(--primary);"></i> Filter Deleted Personnel
         </h3>
-        
+
         <form method="GET" action="{{ route('security.personnel.trash') }}" class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
                 <label for="search" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
@@ -154,7 +158,7 @@
                        placeholder="Search by name or email..."
                        value="{{ request('search') }}">
             </div>
-            
+
             <div>
                 <label for="deleted_by" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
                     <i class="fas fa-user-cog mr-1" style="color: var(--primary);"></i> Deleted By
@@ -171,7 +175,7 @@
                     @endforeach
                 </select>
             </div>
-            
+
             <div>
                 <label for="filter" class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">
                     <i class="fas fa-clock mr-1" style="color: var(--primary);"></i> Time Filter
@@ -187,7 +191,7 @@
                     <option value="old" {{ request('filter') == 'old' ? 'selected' : '' }}>Over 30 Days Old</option>
                 </select>
             </div>
-            
+
             <div class="flex items-end space-x-3">
                 <a href="{{ route('security.personnel.trash') }}"
                    class="btn-secondary px-6 py-2.5 rounded-lg text-sm font-medium inline-flex items-center">
@@ -219,7 +223,7 @@
                 <i class="fas fa-clock mr-1"></i> Last updated: {{ now()->format('H:i') }}
             </div>
         </div>
-        
+
         <div class="overflow-x-auto">
             <table class="w-full">
                 <thead>
@@ -238,71 +242,90 @@
                 <tbody>
                     @forelse($personnel as $person)
                         @php
-                            // Get deletion metadata
-                            $metadata = [];
-                            if ($person->metadata) {
-                                if (is_string($person->metadata)) {
-                                    $metadata = json_decode($person->metadata, true) ?? [];
-                                } elseif (is_array($person->metadata)) {
-                                    $metadata = $person->metadata;
-                                }
+                            // ================================================================
+                            // Metadata decode — same defensive pattern as the controller.
+                            // ================================================================
+                            $metadata = $person->metadata ?? [];
+                            if (is_string($metadata)) {
+                                $metadata = json_decode($metadata, true) ?? [];
                             }
-                            
+                            if (!is_array($metadata)) {
+                                $metadata = [];
+                            }
+
                             $deletionInfo = $metadata['deletion_info'] ?? [];
-                            $deletedByName = $deletionInfo['deleted_by_name'] ?? 'System';
+
+                            $deletedByName =
+                                $deletionInfo['deleted_by_name']
+                                ?? optional(\App\Models\User::withTrashed()->find($deletionInfo['deleted_by'] ?? null))->name
+                                ?? 'System';
+
                             $deletionReason = $deletionInfo['deletion_reason'] ?? 'Not specified';
-                            $deletedAt = $person->deleted_at ? Carbon\Carbon::parse($person->deleted_at) : null;
-                            $daysDeleted = $deletedAt ? $deletedAt->diffInDays(now()) : null;
-                            $isOld = $daysDeleted !== null && $daysDeleted > 30;
-                            
+                            $deletionType   = $deletionInfo['deletion_type'] ?? null;
+
+                            $deletedAt   = $person->deleted_at ? \Carbon\Carbon::parse($person->deleted_at) : null;
+                            $daysDeleted = $deletedAt ? (int) $deletedAt->diffInDays(now()) : null;
+
+                            // 🔧 Matches controller's MIN_DAYS_BEFORE_PERMANENT_DELETE = 30
+                            // Use >= so a record at exactly 30 days is eligible.
+                            $isOld = $daysDeleted !== null && $daysDeleted >= 30;
+                            $daysRemaining = !$isOld && $daysDeleted !== null
+                                ? max(0, 30 - $daysDeleted)
+                                : null;
+
                             // Format phone
                             $formattedPhone = $person->phone;
-                            if ($person->phone) {
-                                if (preg_match('/^\+233(\d{9})$/', $person->phone, $matches)) {
-                                    $formattedPhone = '0' . $matches[1];
-                                }
+                            if ($person->phone && preg_match('/^\+233(\d{9})$/', $person->phone, $matches)) {
+                                $formattedPhone = '0' . $matches[1];
                             }
                         @endphp
-                        <tr class="border-b hover:bg-opacity-50 transition-colors duration-200 {{ $isOld ? 'bg-opacity-5' : '' }}" 
+                        <tr class="border-b hover:bg-opacity-50 transition-colors duration-200 {{ $isOld ? 'bg-opacity-5' : '' }}"
                             style="border-color: var(--border-color); background-color: var(--card-bg); {{ $isOld ? 'background-color: rgba(var(--warning-rgb), 0.03);' : '' }}">
-                            
+
                             <td class="py-4 px-6">
                                 <input type="checkbox" class="user-checkbox rounded border-gray-300" value="{{ $person->id }}">
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="flex items-center">
                                     <div class="w-10 h-10 rounded-lg flex items-center justify-center mr-3"
                                          style="background: linear-gradient(135deg, var(--danger) 0%, #dc2626 100%); color: white;">
-                                        {{ substr($person->name, 0, 2) }}
+                                        {{ strtoupper(substr($person->name, 0, 2)) }}
                                     </div>
                                     <div>
                                         <div class="font-medium flex items-center" style="color: var(--text-primary);">
                                             {{ $person->name }}
                                             @if($isOld)
-                                                <span class="ml-2 px-2 py-0.5 text-xs rounded-full" 
-                                                      style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.3);">
+                                                <span class="ml-2 px-2 py-0.5 text-xs rounded-full"
+                                                      style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.3);"
+                                                      title="Eligible for permanent deletion">
                                                     <i class="fas fa-exclamation-triangle mr-1"></i> {{ $daysDeleted }} days
+                                                </span>
+                                            @elseif($daysRemaining !== null)
+                                                <span class="ml-2 px-2 py-0.5 text-xs rounded-full"
+                                                      style="background-color: rgba(var(--secondary-rgb), 0.1); color: var(--text-secondary); border: 1px solid rgba(var(--secondary-rgb), 0.3);"
+                                                      title="Permanent deletion available after 30 days in trash">
+                                                    <i class="fas fa-lock mr-1"></i> {{ $daysRemaining }}d until eligible
                                                 </span>
                                             @endif
                                         </div>
                                         <div class="text-xs" style="color: var(--text-secondary);">
                                             <i class="fas fa-id-badge mr-1"></i> ID: {{ $person->id }}
                                             <span class="ml-2">
-                                                <i class="fas fa-user-tag mr-1"></i> 
+                                                <i class="fas fa-user-tag mr-1"></i>
                                                 {{ ucfirst(str_replace('_', ' ', $person->type)) }}
                                             </span>
                                         </div>
                                     </div>
                                 </div>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="text-sm" style="color: var(--text-primary);">{{ $person->email }}</div>
                                 <div class="flex items-center mt-1">
                                     @if($person->phone)
                                         <span class="text-xs" style="color: var(--text-secondary);">
-                                            <i class="fas fa-phone mr-1"></i> 
+                                            <i class="fas fa-phone mr-1"></i>
                                             <span style="color: var(--text-primary);">{{ $formattedPhone }}</span>
                                         </span>
                                     @else
@@ -312,7 +335,7 @@
                                     @endif
                                 </div>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="text-sm" style="color: var(--text-primary);">
                                     {{ $deletedAt ? $deletedAt->format('M j, Y H:i') : 'Unknown' }}
@@ -322,43 +345,48 @@
                                     {{ $deletedAt ? $deletedAt->diffForHumans() : 'Unknown' }}
                                 </div>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="text-sm" style="color: var(--text-primary);">{{ $deletedByName }}</div>
-                                @if($deletionInfo['deleted_by'] ?? false)
+                                @if($deletionType === 'approval_rejection')
+                                    <div class="text-xs" style="color: var(--text-secondary);">
+                                        <i class="fas fa-user-shield mr-1"></i> Admin rejection
+                                    </div>
+                                @elseif($deletionInfo['deleted_by'] ?? false)
                                     <div class="text-xs" style="color: var(--text-secondary);">
                                         <i class="fas fa-id-badge mr-1"></i> ID: {{ $deletionInfo['deleted_by'] }}
                                     </div>
                                 @endif
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="text-sm" style="color: var(--text-primary);">
-                                    {{ Str::limit($deletionReason, 50) }}
+                                    {{ \Illuminate\Support\Str::limit($deletionReason, 50) }}
                                 </div>
                                 @if(strlen($deletionReason) > 50)
-                                    <button onclick="showFullReason('{{ addslashes($deletionReason) }}')" 
+                                    <button onclick="showFullReason('{{ addslashes($deletionReason) }}')"
                                             class="text-xs text-blue-600 hover:text-blue-800">
                                         <i class="fas fa-expand mr-1"></i> View full
                                     </button>
                                 @endif
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="flex flex-wrap gap-1">
                                     <!-- Restore Button -->
                                     <button onclick="restorePersonnel({{ $person->id }}, '{{ addslashes($person->name) }}')"
                                             class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
                                             style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);"
-                                            title="Restore Personnel">
+                                            title="Restore Personnel (returns to pending approval)">
                                         <i class="fas fa-undo-alt text-sm"></i>
                                     </button>
-                                    
+
                                     <!-- Permanent Delete Button -->
                                     <button onclick="permanentDelete({{ $person->id }}, '{{ addslashes($person->name) }}')"
-                                            class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
+                                            class="action-btn w-8 h-8 rounded-lg flex items-center justify-center {{ $isOld ? '' : 'opacity-50 cursor-not-allowed' }}"
                                             style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);"
-                                            title="Permanently Delete">
+                                            title="{{ $isOld ? 'Permanently Delete' : 'Available after 30 days in trash' }}"
+                                            {{ $isOld ? '' : 'disabled' }}>
                                         <i class="fas fa-trash-alt text-sm"></i>
                                     </button>
                                 </div>
@@ -375,7 +403,7 @@
                                     <h4 class="text-lg font-semibold mb-2" style="color: var(--text-primary);">No Deleted Personnel Found</h4>
                                     <p class="text-sm mb-4" style="color: var(--text-secondary);">
                                         @if(request('search') || request('deleted_by') || request('filter'))
-                                            No results match your filters. 
+                                            No results match your filters.
                                             <a href="{{ route('security.personnel.trash') }}" style="color: var(--primary);" class="hover:underline">
                                                 Clear all filters
                                             </a>
@@ -393,7 +421,7 @@
                 </tbody>
             </table>
         </div>
-        
+
         <!-- Bulk Actions -->
         <div class="p-4 border-t" style="border-color: var(--border-color);">
             <div class="flex justify-between items-center flex-wrap gap-3">
@@ -403,7 +431,7 @@
                             style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                         <option value="">Choose Action</option>
                         <option value="restore">Restore Selected</option>
-                        <option value="permanent_delete">Permanently Delete Selected</option>
+                        <option value="permanent_delete">Permanently Delete Selected (30+ days only)</option>
                     </select>
                     <button onclick="performBulkAction()" class="btn-primary px-4 py-1.5 rounded-lg text-sm">
                         <i class="fas fa-play mr-2"></i> Apply
@@ -414,7 +442,7 @@
                 </div>
             </div>
         </div>
-        
+
         @if(method_exists($personnel, 'links'))
             <div class="p-6 border-t" style="border-color: var(--border-color);">
                 {{ $personnel->appends(request()->query())->links() }}
@@ -440,8 +468,8 @@
                 <div class="mt-3 p-3 rounded-lg" style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.2);">
                     <p class="text-sm" style="color: var(--text-secondary);">
                         <i class="fas fa-info-circle mr-2" style="color: var(--success);"></i>
-                        Restoring this personnel will reactivate their account and set their status to <strong>Pending</strong>.
-                        Any previous assignments or schedules will need to be reassigned if needed.
+                        Restoring this personnel will set them back to <strong>Pending Approval</strong> and re-notify the administrators.
+                        They will need to be re-approved before they can log in.
                     </p>
                 </div>
             </div>
@@ -472,15 +500,16 @@
                 <div class="mt-3 p-3 rounded-lg" style="background-color: rgba(var(--danger-rgb), 0.1); border: 1px solid rgba(var(--danger-rgb), 0.2);">
                     <p class="text-sm" style="color: var(--text-secondary);">
                         <i class="fas fa-exclamation-triangle mr-2" style="color: var(--danger);"></i>
-                        <strong>Warning:</strong> This action is <strong>permanent</strong> and cannot be undone. 
+                        <strong>Warning:</strong> This action is <strong>permanent</strong> and cannot be undone.
                         All associated data including schedules, assignments, and profile information will be permanently removed.
+                        Personal data (name, email, phone, photo) will be scrubbed before deletion.
                     </p>
                 </div>
                 <div class="mt-4">
                     <label for="permanent_delete_reason" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                         Reason for Permanent Deletion (Optional)
                     </label>
-                    <textarea id="permanent_delete_reason" rows="2" 
+                    <textarea id="permanent_delete_reason" rows="2"
                               class="w-full p-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                               placeholder="Enter reason for permanent deletion..."></textarea>
@@ -509,7 +538,7 @@
                 </div>
             </div>
             <div class="p-6">
-                <p class="text-sm" style="color: var(--text-primary);" id="fullReasonContent"></p>
+                <p class="text-sm whitespace-pre-wrap" style="color: var(--text-primary);" id="fullReasonContent"></p>
             </div>
             <div class="p-6 border-t flex justify-end" style="border-color: var(--border-color);">
                 <button onclick="closeFullReasonModal()" class="btn-secondary px-4 py-2 rounded-lg">
@@ -525,7 +554,7 @@
 .action-btn {
     transition: all 0.2s ease;
 }
-.action-btn:hover {
+.action-btn:hover:not([disabled]) {
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
 }
@@ -592,6 +621,17 @@ tbody tr:hover {
 
 <!-- ==================== JAVASCRIPT ==================== -->
 <script>
+// ==================== ROUTES (from Blade, resolved at render time) ====================
+const ROUTES = {
+    restore:    (id) => `{{ route('security.personnel.restore', '__ID__') }}`.replace('__ID__', id),
+    forceDelete:(id) => `{{ route('security.personnel.force-delete', '__ID__') }}`.replace('__ID__', id),
+    bulkRestore:      `{{ route('security.personnel.bulk-restore') }}`,
+    bulkPermanentDel: `{{ route('security.personnel.bulk-permanent-delete') }}`,
+    emptyTrash:       `{{ route('security.personnel.empty-trash') }}`,
+};
+
+const CSRF = () => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '{{ csrf_token() }}';
+
 // ==================== RESTORE PERSONNEL ====================
 let restoreUserId = null;
 let restoreUserName = null;
@@ -614,38 +654,33 @@ function closeRestoreModal() {
 
 function confirmRestorePersonnel() {
     if (!restoreUserId) return;
-    
+
     const confirmBtn = document.getElementById('restoreConfirmBtn');
     const originalText = confirmBtn.innerHTML;
     confirmBtn.disabled = true;
     confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Restoring...';
-    
-    fetch(`/security/personnel/${restoreUserId}/restore`, {
+
+    fetch(ROUTES.restore(restoreUserId), {
         method: 'POST',
         headers: {
-            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '{{ csrf_token() }}',
+            'X-CSRF-TOKEN': CSRF(),
             'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest'
         }
     })
-    .then(response => {
-        return response.text().then(text => {
-            if (text.charCodeAt(0) === 0xFEFF) {
-                text = text.slice(1);
-            }
-            text = text.trim();
-            try {
-                return { status: response.status, data: JSON.parse(text) };
-            } catch (e) {
-                console.error('JSON Parse Error:', e);
-                throw new Error('Invalid JSON response: ' + text.substring(0, 200));
-            }
-        });
-    })
+    .then(response => response.text().then(text => {
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        text = text.trim();
+        try {
+            return { status: response.status, data: JSON.parse(text) };
+        } catch (e) {
+            throw new Error('Invalid JSON response: ' + text.substring(0, 200));
+        }
+    }))
     .then(({ status, data }) => {
         confirmBtn.innerHTML = originalText;
         confirmBtn.disabled = false;
-        
+
         if (data.success) {
             showToast('success', data.message || 'Personnel restored successfully!');
             closeRestoreModal();
@@ -685,48 +720,50 @@ function closePermanentDeleteModal() {
 
 function confirmPermanentDelete() {
     if (!permanentDeleteUserId) return;
-    
+
     const reason = document.getElementById('permanent_delete_reason').value;
     const confirmBtn = document.getElementById('permanentDeleteConfirmBtn');
     const originalText = confirmBtn.innerHTML;
-    
+
     confirmBtn.disabled = true;
     confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Deleting...';
-    
-    fetch(`/security/personnel/${permanentDeleteUserId}/force-delete`, {
+
+    fetch(ROUTES.forceDelete(permanentDeleteUserId), {
         method: 'POST',
         headers: {
-            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '{{ csrf_token() }}',
+            'X-CSRF-TOKEN': CSRF(),
             'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest',
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({ deletion_reason: reason || 'Permanent deletion from trash' })
     })
-    .then(response => {
-        return response.text().then(text => {
-            if (text.charCodeAt(0) === 0xFEFF) {
-                text = text.slice(1);
-            }
-            text = text.trim();
-            try {
-                return { status: response.status, data: JSON.parse(text) };
-            } catch (e) {
-                console.error('JSON Parse Error:', e);
-                throw new Error('Invalid JSON response: ' + text.substring(0, 200));
-            }
-        });
-    })
+    .then(response => response.text().then(text => {
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        text = text.trim();
+        try {
+            return { status: response.status, data: JSON.parse(text) };
+        } catch (e) {
+            throw new Error('Invalid JSON response: ' + text.substring(0, 200));
+        }
+    }))
     .then(({ status, data }) => {
         confirmBtn.innerHTML = originalText;
         confirmBtn.disabled = false;
-        
+
         if (data.success) {
             showToast('success', data.message || 'Personnel permanently deleted successfully!');
             closePermanentDeleteModal();
             setTimeout(() => window.location.reload(), 1500);
         } else {
-            showToast('error', data.message || 'Failed to permanently delete personnel.');
+            // Handle age-gate rejection with a specific message
+            if (data.days_in_trash !== undefined) {
+                showToast('warning',
+                    `${data.message} (in trash: ${data.days_in_trash}d, required: ${data.required_days}d)`
+                );
+            } else {
+                showToast('error', data.message || 'Failed to permanently delete personnel.');
+            }
         }
     })
     .catch(error => {
@@ -738,10 +775,7 @@ function confirmPermanentDelete() {
 }
 
 // ==================== FULL REASON MODAL ====================
-let fullReasonText = '';
-
 function showFullReason(reason) {
-    fullReasonText = reason;
     document.getElementById('fullReasonContent').textContent = reason;
     document.getElementById('fullReasonModal').classList.remove('hidden');
 }
@@ -754,43 +788,38 @@ function closeFullReasonModal() {
 function performBulkAction() {
     const action = document.getElementById('bulk-action').value;
     const selectedUsers = Array.from(document.querySelectorAll('.user-checkbox:checked')).map(cb => cb.value);
-    
+
     if (!action) {
         showToast('warning', 'Please select an action.');
         return;
     }
-    
+
     if (selectedUsers.length === 0) {
         showToast('warning', 'Please select at least one user.');
         return;
     }
-    
+
     let confirmMessage = '';
-    if (action === 'restore') {
-        confirmMessage = `Restore ${selectedUsers.length} selected personnel?`;
-    } else if (action === 'permanent_delete') {
-        confirmMessage = `⚠️ PERMANENTLY DELETE ${selectedUsers.length} selected personnel? This cannot be undone!`;
-    }
-    
-    if (!confirm(confirmMessage)) return;
-    
     let endpoint = '';
-    let method = 'POST';
     let body = { user_ids: selectedUsers };
-    
+
     if (action === 'restore') {
-        endpoint = '/security/personnel/bulk/restore';
+        confirmMessage = `Restore ${selectedUsers.length} selected personnel? They will return to pending approval.`;
+        endpoint = ROUTES.bulkRestore;
     } else if (action === 'permanent_delete') {
-        endpoint = '/security/personnel/bulk/permanent-delete';
+        confirmMessage = `⚠️ PERMANENTLY DELETE ${selectedUsers.length} selected personnel?\n\nRecords younger than 30 days will be skipped by the server. This cannot be undone!`;
+        endpoint = ROUTES.bulkPermanentDel;
         body.deletion_reason = 'Bulk permanent deletion from trash';
     }
-    
+
+    if (!confirm(confirmMessage)) return;
+
     showToast('info', 'Processing bulk action...');
-    
+
     fetch(endpoint, {
-        method: method,
+        method: 'POST',
         headers: {
-            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '{{ csrf_token() }}',
+            'X-CSRF-TOKEN': CSRF(),
             'Accept': 'application/json',
             'Content-Type': 'application/json'
         },
@@ -799,7 +828,11 @@ function performBulkAction() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            showToast('success', data.message || 'Bulk action completed successfully!');
+            let message = data.message || 'Bulk action completed.';
+            if (data.skipped_count > 0) {
+                message += ` (${data.skipped_count} skipped — under 30 days)`;
+            }
+            showToast('success', message);
             setTimeout(() => window.location.reload(), 1500);
         } else {
             showToast('error', data.message || 'Bulk action failed.');
@@ -814,6 +847,8 @@ function performBulkAction() {
 // ==================== SELECT ALL ====================
 document.getElementById('select-all')?.addEventListener('change', function(e) {
     document.querySelectorAll('.user-checkbox').forEach(checkbox => {
+        // Don't select rows where permanent delete is disabled if the action is delete?
+        // (Keep checkbox enabled — bulk logic will skip ineligible rows on the server.)
         checkbox.checked = e.target.checked;
     });
     updateSelectedCount();
@@ -833,44 +868,48 @@ function updateSelectedCount() {
 
 // ==================== EMPTY TRASH ====================
 function confirmEmptyTrash() {
-    if (confirm('⚠️ WARNING: This will permanently delete ALL users in the trash. This action cannot be undone. Continue?')) {
-        const confirmation = prompt('Type "empty_all_trash" to confirm permanent deletion:');
-        if (confirmation === 'empty_all_trash') {
-            showToast('info', 'Emptying trash...');
-            
-            fetch('/security/personnel/empty-trash', {
-                method: 'POST',
-                headers: {
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '{{ csrf_token() }}',
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ confirmation: 'empty_all_trash' })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    showToast('success', data.message);
-                    setTimeout(() => window.location.reload(), 2000);
-                } else {
-                    showToast('error', data.message || 'Failed to empty trash.');
-                }
-            })
-            .catch(error => {
-                showToast('error', 'An error occurred: ' + error.message);
-                console.error('Empty trash error:', error);
-            });
-        } else {
-            showToast('warning', 'Trash empty cancelled.');
-        }
+    if (!confirm('⚠️ WARNING: This will permanently delete all eligible records (30+ days in trash) for YOUR submissions.\n\nRecords under 30 days will be skipped automatically. This action cannot be undone. Continue?')) {
+        return;
     }
+
+    const confirmation = prompt('Type "empty_all_trash" to confirm permanent deletion:');
+    if (confirmation !== 'empty_all_trash') {
+        showToast('warning', 'Trash empty cancelled.');
+        return;
+    }
+
+    showToast('info', 'Emptying eligible trash...');
+
+    fetch(ROUTES.emptyTrash, {
+        method: 'POST',
+        headers: {
+            'X-CSRF-TOKEN': CSRF(),
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ confirmation: 'empty_all_trash' })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            let message = data.message || 'Trash emptied.';
+            showToast('success', message);
+            setTimeout(() => window.location.reload(), 2000);
+        } else {
+            showToast('error', data.message || 'Failed to empty trash.');
+        }
+    })
+    .catch(error => {
+        showToast('error', 'An error occurred: ' + error.message);
+        console.error('Empty trash error:', error);
+    });
 }
 
 // ==================== TOAST NOTIFICATIONS ====================
 function showToast(type, message) {
     const existingToast = document.querySelector('.custom-toast');
     if (existingToast) existingToast.remove();
-    
+
     const toast = document.createElement('div');
     toast.className = 'custom-toast';
     const colors = {
@@ -885,7 +924,7 @@ function showToast(type, message) {
         warning: 'fa-exclamation-triangle',
         info: 'fa-info-circle'
     };
-    
+
     toast.style.cssText = `
         position: fixed;
         top: 20px;
@@ -899,11 +938,11 @@ function showToast(type, message) {
         display: flex;
         align-items: center;
         gap: 12px;
-        max-width: 450px;
+        max-width: 500px;
         animation: slideInRight 0.4s ease;
         border: 1px solid var(--border-color);
     `;
-    
+
     toast.innerHTML = `
         <i class="fas ${icons[type]}" style="color: ${colors[type]}; font-size: 1.2rem;"></i>
         <span style="color: var(--text-primary); font-size: 0.9rem;">${message}</span>
@@ -911,26 +950,26 @@ function showToast(type, message) {
             <i class="fas fa-times"></i>
         </button>
     `;
-    
+
     document.body.appendChild(toast);
-    
+
     setTimeout(() => {
         if (toast.parentElement) {
             toast.style.opacity = '0';
             toast.style.transform = 'translateX(100px)';
             setTimeout(() => toast.remove(), 300);
         }
-    }, 5000);
+    }, 6000);
 }
 
 // ==================== MODAL CLOSE ON OUTSIDE CLICK ====================
-window.onclick = function(event) {
+window.addEventListener('click', function(event) {
     if (event.target.classList.contains('fixed')) {
         closeRestoreModal();
         closePermanentDeleteModal();
         closeFullReasonModal();
     }
-}
+});
 
 // ==================== KEYBOARD SHORTCUTS ====================
 document.addEventListener('keydown', function(event) {

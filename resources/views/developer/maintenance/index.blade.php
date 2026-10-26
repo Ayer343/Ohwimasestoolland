@@ -4,69 +4,96 @@
 
 @section('content')
 <div class="grid grid-cols-1 gap-6 mb-6">
-    <!-- Header Card -->
-    <div class="card">
-        <div class="flex justify-between items-center p-6">
-            <h2 class="text-xl font-semibold" style="color: var(--text-primary);">Maintenance Management</h2>
+
+    {{-- ============================================================
+         | HEADER CARD
+         * ============================================================ --}}
+    <div class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
+        <div class="flex justify-between items-center p-6 flex-wrap gap-3">
+            <div>
+                <h2 class="text-xl font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-tools mr-2" style="color: var(--primary);"></i> Maintenance Management
+                </h2>
+                <p class="text-sm mt-1" style="color: var(--text-secondary);">
+                    Schedule, monitor, and review system maintenance windows.
+                </p>
+            </div>
             <div class="flex space-x-2">
-                <a href="{{ route('developer.maintenance.create') }}" class="btn-primary flex items-center">
+                <a href="{{ route('developer.maintenance.create') }}"
+                   class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                   style="background-color: var(--primary); color: white;">
                     <i class="fas fa-calendar-plus mr-2"></i> Schedule Maintenance
                 </a>
-                <a href="{{ route('developer.maintenance.statistics') }}" class="btn-secondary flex items-center">
-                    <i class="fas fa-chart-bar mr-2"></i> View Statistics
+                <a href="{{ route('developer.maintenance.statistics') }}"
+                   class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                   style="background-color: var(--bg-secondary); color: var(--text-secondary);">
+                    <i class="fas fa-chart-bar mr-2"></i> Statistics
+                </a>
+                <a href="{{ route('developer.maintenance.trash') }}"
+                   class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                   style="background-color: var(--bg-secondary); color: var(--text-secondary);">
+                    <i class="fas fa-trash-restore mr-2"></i> Trash
+                    @if(($trashCount ?? 0) > 0)
+                        <span class="ml-2 px-2 py-0.5 rounded-full text-xs"
+                              style="background-color: rgba(var(--danger-rgb), 0.15); color: var(--danger);">
+                            {{ $trashCount }}
+                        </span>
+                    @endif
                 </a>
             </div>
         </div>
     </div>
 
-    <!-- Active Maintenance Banner -->
-    @php
-        $activeMaintenance = \App\Models\Maintenance::active()->first();
-    @endphp
-    
-    @if($activeMaintenance)
-    <div class="card p-6" style="border-left: 6px solid var(--warning); box-shadow: 0 10px 30px rgba(var(--warning-rgb), 0.15);">
-        <div class="flex flex-col lg:flex-row lg:items-center justify-between">
-            <div class="flex items-center mb-4 lg:mb-0">
+    {{-- ============================================================
+         | ACTIVE MAINTENANCE BANNER
+         * ============================================================ --}}
+    @if($activeMaintenance ?? false)
+    <div class="card p-6"
+         style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;
+                border-left: 6px solid var(--warning); box-shadow: 0 10px 30px rgba(var(--warning-rgb), 0.15);">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div class="flex items-center">
                 <div class="w-12 h-12 rounded-full flex items-center justify-center bg-gradient-to-br from-yellow-400 to-orange-500 animate-pulse mr-4">
                     <i class="fas fa-tools text-white text-xl"></i>
                 </div>
                 <div>
-                    <h3 class="text-lg font-bold" style="color: var(--text-primary);">🚧 SYSTEM MAINTENANCE IN PROGRESS</h3>
+                    <h3 class="text-lg font-bold" style="color: var(--text-primary);">
+                        🚧 System Maintenance In Progress
+                    </h3>
                     <div class="flex flex-wrap items-center gap-2 mt-2">
-                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-yellow-500 text-white flex items-center">
-                            <i class="fas fa-sync-alt mr-1"></i>
-                            IN PROGRESS
+                        <span class="badge" style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.3);">
+                            <i class="fas fa-sync-alt mr-1"></i> In Progress
                         </span>
-                        <span class="px-3 py-1 rounded-full text-xs font-medium text-white"
-                              style="background: {{ $activeMaintenance->impact_level == 'critical' ? 'var(--danger)' : ($activeMaintenance->impact_level == 'high' ? 'var(--warning)' : 'var(--info)') }};">
+                        <span class="badge"
+                              style="background-color: {{ $activeMaintenance->impact_level === 'critical' ? 'rgba(var(--danger-rgb), 0.15)' : ($activeMaintenance->impact_level === 'high' ? 'rgba(var(--warning-rgb), 0.15)' : 'rgba(var(--info-rgb), 0.15)') }};
+                                     color: {{ $activeMaintenance->impact_level === 'critical' ? 'var(--danger)' : ($activeMaintenance->impact_level === 'high' ? 'var(--warning)' : 'var(--info)') }};
+                                     border: 1px solid {{ $activeMaintenance->impact_level === 'critical' ? 'rgba(var(--danger-rgb), 0.3)' : ($activeMaintenance->impact_level === 'high' ? 'rgba(var(--warning-rgb), 0.3)' : 'rgba(var(--info-rgb), 0.3)') }};">
                             <i class="fas fa-exclamation mr-1"></i>
-                            {{ strtoupper($activeMaintenance->impact_level) }} IMPACT
+                            {{ strtoupper($activeMaintenance->impact_level) }} Impact
                         </span>
-                        <span class="px-3 py-1 rounded-full text-xs font-medium bg-purple-500 text-white flex items-center">
+                        <span class="badge" style="background-color: rgba(139, 92, 246, 0.15); color: #8b5cf6; border: 1px solid rgba(139, 92, 246, 0.3);">
                             <i class="fas fa-tag mr-1"></i>
                             {{ strtoupper(str_replace('_', ' ', $activeMaintenance->maintenance_type)) }}
                         </span>
                     </div>
                 </div>
             </div>
-            <div class="flex space-x-2">
-                <form action="{{ route('developer.maintenance.complete', $activeMaintenance->id) }}" method="POST" onsubmit="return confirmCompleteMaintenance()">
-                    @csrf
-                    <input type="hidden" name="post_checks_passed" value="1">
-                    <button type="submit" class="btn-primary flex items-center">
-                        <i class="fas fa-check-circle mr-2"></i>
-                        Complete Maintenance
-                    </button>
-                </form>
-                <button onclick="showMaintenanceDetails({{ $activeMaintenance->id }})" 
-                        class="btn-secondary flex items-center">
-                    <i class="fas fa-info-circle mr-2"></i>
-                    View Details
+
+            <div class="flex space-x-2 flex-wrap gap-2">
+                <button type="button"
+                        onclick="openCompleteModal({{ $activeMaintenance->id }}, {{ $activeMaintenance->estimated_duration_minutes }}, {{ $activeMaintenance->estimated_affected_users ?? 0 }})"
+                        class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                        style="background-color: var(--success); color: white;">
+                    <i class="fas fa-check-circle mr-2"></i> Complete Maintenance
                 </button>
+                <a href="{{ route('developer.maintenance.show', $activeMaintenance->id) }}"
+                   class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                   style="background-color: var(--bg-secondary); color: var(--text-secondary);">
+                    <i class="fas fa-info-circle mr-2"></i> View Details
+                </a>
             </div>
         </div>
-        
+
         <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                 <div class="text-sm" style="color: var(--text-secondary);">Duration</div>
@@ -77,17 +104,21 @@
                     Estimated: {{ $activeMaintenance->estimated_duration_minutes }} minutes
                 </div>
             </div>
-            
+
             <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                 <div class="text-sm" style="color: var(--text-secondary);">Affected Users</div>
                 <div class="text-2xl font-semibold" style="color: var(--text-primary);">
                     {{ $activeMaintenance->affectedUsers()->count() }}
                 </div>
                 <div class="text-sm mt-1" style="color: var(--text-secondary);">
-                    {{ implode(', ', array_map(fn($type) => App\Models\User::getTypeLabel($type), $activeMaintenance->affected_user_types)) }}
+                    @php
+                        $userTypes = \App\Models\User::getUserTypes();
+                        $labels = array_map(fn($t) => $userTypes[$t] ?? "Type {$t}", $activeMaintenance->affected_user_types ?? []);
+                    @endphp
+                    {{ implode(', ', $labels) }}
                 </div>
             </div>
-            
+
             <div class="p-4 rounded-lg border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                 <div class="text-sm" style="color: var(--text-secondary);">Started By</div>
                 <div class="text-xl font-semibold flex items-center" style="color: var(--text-primary);">
@@ -99,7 +130,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="mt-6 p-4 rounded-lg" style="background: rgba(var(--warning-rgb), 0.05); border: 1px solid rgba(var(--warning-rgb), 0.2);">
             <div class="flex items-start">
                 <i class="fas fa-info-circle mt-1 mr-3" style="color: var(--warning);"></i>
@@ -112,115 +143,119 @@
     </div>
     @endif
 
-    <!-- Maintenance Statistics Cards -->
-    @php
-        $statistics = \App\Models\Maintenance::getStatistics();
-        $trends = \App\Models\Maintenance::getTrends();
-    @endphp
-    
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div class="card p-4" style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
+    {{-- ============================================================
+         | STATISTICS CARDS
+         * ============================================================ --}}
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="card p-4" style="background-color: rgba(var(--primary-rgb), 0.1); border: 1px solid rgba(var(--primary-rgb), 0.2); border-radius: 0.75rem;">
             <div class="flex justify-between items-center">
                 <div>
                     <div class="text-sm" style="color: var(--text-secondary);">Total Maintenance</div>
-                    <div class="text-2xl font-semibold">{{ $statistics['total'] ?? 0 }}</div>
+                    <div class="text-2xl font-semibold" style="color: var(--primary);">
+                        {{ $statistics['total'] ?? 0 }}
+                    </div>
                 </div>
-                <i class="fas fa-server text-2xl opacity-70"></i>
+                <i class="fas fa-server text-2xl opacity-70" style="color: var(--primary);"></i>
             </div>
         </div>
-        
-        <div class="card p-4" style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
+
+        <div class="card p-4" style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.2); border-radius: 0.75rem;">
             <div class="flex justify-between items-center">
                 <div>
                     <div class="text-sm" style="color: var(--text-secondary);">Average Duration</div>
-                    <div class="text-2xl font-semibold">{{ $statistics['avg_duration'] ?? 0 }} min</div>
+                    <div class="text-2xl font-semibold" style="color: var(--success);">
+                        {{ $statistics['avg_duration'] ?? 0 }} min
+                    </div>
                 </div>
-                <i class="fas fa-clock text-2xl opacity-70"></i>
+                <i class="fas fa-clock text-2xl opacity-70" style="color: var(--success);"></i>
             </div>
         </div>
-        
-        <div class="card p-4" style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);">
+
+        <div class="card p-4" style="background-color: rgba(var(--warning-rgb), 0.1); border: 1px solid rgba(var(--warning-rgb), 0.2); border-radius: 0.75rem;">
             <div class="flex justify-between items-center">
                 <div>
                     <div class="text-sm" style="color: var(--text-secondary);">Currently Active</div>
-                    <div class="text-2xl font-semibold">
+                    <div class="text-2xl font-semibold" style="color: var(--warning);">
                         {{ $activeMaintenance ? '1 Active' : '0 Active' }}
                     </div>
                 </div>
-                <i class="fas fa-sync-alt text-2xl opacity-70 @if($activeMaintenance) animate-spin @endif"></i>
+                <i class="fas fa-sync-alt text-2xl opacity-70 {{ $activeMaintenance ? 'animate-spin' : '' }}" style="color: var(--warning);"></i>
             </div>
         </div>
     </div>
 
-    <!-- Filters Card -->
-    <div class="card">
+    {{-- ============================================================
+         | FILTERS
+         * ============================================================ --}}
+    <div class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
         <div class="p-6">
             <form action="{{ route('developer.maintenance.index') }}" method="GET" class="space-y-4">
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>
                         <label class="block text-sm mb-2" style="color: var(--text-secondary);">Status</label>
-                        <select name="status" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                        <select name="status" class="w-full p-2 border rounded-lg"
+                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                             <option value="">All Status</option>
-                            <option value="draft" {{ request('status') == 'draft' ? 'selected' : '' }}>Draft</option>
-                            <option value="scheduled" {{ request('status') == 'scheduled' ? 'selected' : '' }}>Scheduled</option>
-                            <option value="in_progress" {{ request('status') == 'in_progress' ? 'selected' : '' }}>In Progress</option>
-                            <option value="completed" {{ request('status') == 'completed' ? 'selected' : '' }}>Completed</option>
-                            <option value="cancelled" {{ request('status') == 'cancelled' ? 'selected' : '' }}>Cancelled</option>
+                            @foreach(['draft' => 'Draft', 'scheduled' => 'Scheduled', 'in_progress' => 'In Progress', 'completed' => 'Completed', 'cancelled' => 'Cancelled'] as $value => $label)
+                                <option value="{{ $value }}" {{ request('status') === $value ? 'selected' : '' }}>{{ $label }}</option>
+                            @endforeach
                         </select>
                     </div>
-                    
+
                     <div>
                         <label class="block text-sm mb-2" style="color: var(--text-secondary);">Type</label>
-                        <select name="type" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                        <select name="type" class="w-full p-2 border rounded-lg"
+                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                             <option value="">All Types</option>
-                            <option value="planned" {{ request('type') == 'planned' ? 'selected' : '' }}>Planned</option>
-                            <option value="emergency" {{ request('type') == 'emergency' ? 'selected' : '' }}>Emergency</option>
-                            <option value="hotfix" {{ request('type') == 'hotfix' ? 'selected' : '' }}>Hotfix</option>
-                            <option value="upgrade" {{ request('type') == 'upgrade' ? 'selected' : '' }}>Upgrade</option>
-                            <option value="security" {{ request('type') == 'security' ? 'selected' : '' }}>Security</option>
+                            @foreach(['planned' => 'Planned', 'emergency' => 'Emergency', 'hotfix' => 'Hotfix', 'upgrade' => 'Upgrade', 'security' => 'Security'] as $value => $label)
+                                <option value="{{ $value }}" {{ request('type') === $value ? 'selected' : '' }}>{{ $label }}</option>
+                            @endforeach
                         </select>
                     </div>
-                    
+
                     <div>
                         <label class="block text-sm mb-2" style="color: var(--text-secondary);">Impact Level</label>
-                        <select name="impact" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                        <select name="impact" class="w-full p-2 border rounded-lg"
+                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                             <option value="">All Impact Levels</option>
-                            <option value="low" {{ request('impact') == 'low' ? 'selected' : '' }}>Low</option>
-                            <option value="medium" {{ request('impact') == 'medium' ? 'selected' : '' }}>Medium</option>
-                            <option value="high" {{ request('impact') == 'high' ? 'selected' : '' }}>High</option>
-                            <option value="critical" {{ request('impact') == 'critical' ? 'selected' : '' }}>Critical</option>
+                            @foreach(['low' => 'Low', 'medium' => 'Medium', 'high' => 'High', 'critical' => 'Critical'] as $value => $label)
+                                <option value="{{ $value }}" {{ request('impact') === $value ? 'selected' : '' }}>{{ $label }}</option>
+                            @endforeach
                         </select>
                     </div>
-                    
+
                     <div>
                         <label class="block text-sm mb-2" style="color: var(--text-secondary);">Search</label>
-                        <input type="text" name="search" value="{{ request('search') }}" 
-                               class="w-full p-2 border rounded" 
-                               placeholder="Search title, description..." 
+                        <input type="text" name="search" value="{{ request('search') }}"
+                               class="w-full p-2 border rounded-lg"
+                               placeholder="Search title, description..."
                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                     </div>
                 </div>
-                
+
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                         <label class="block text-sm mb-2" style="color: var(--text-secondary);">From Date</label>
-                        <input type="date" name="date_from" value="{{ request('date_from') }}" 
-                               class="w-full p-2 border rounded" 
+                        <input type="date" name="date_from" value="{{ request('date_from') }}"
+                               class="w-full p-2 border rounded-lg"
                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                     </div>
-                    
+
                     <div>
                         <label class="block text-sm mb-2" style="color: var(--text-secondary);">To Date</label>
-                        <input type="date" name="date_to" value="{{ request('date_to') }}" 
-                               class="w-full p-2 border rounded" 
+                        <input type="date" name="date_to" value="{{ request('date_to') }}"
+                               class="w-full p-2 border rounded-lg"
                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                     </div>
-                    
+
                     <div class="flex items-end space-x-2">
-                        <button type="submit" class="btn-primary w-full md:w-auto">
+                        <button type="submit" class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center flex-1"
+                                style="background-color: var(--primary); color: white;">
                             <i class="fas fa-filter mr-2"></i> Apply Filters
                         </button>
-                        <a href="{{ route('developer.maintenance.index') }}" class="btn-secondary w-full md:w-auto">
+                        <a href="{{ route('developer.maintenance.index') }}"
+                           class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                           style="background-color: var(--bg-secondary); color: var(--text-secondary);">
                             <i class="fas fa-times mr-2"></i> Clear
                         </a>
                     </div>
@@ -229,13 +264,15 @@
         </div>
     </div>
 
-    <!-- Maintenance List -->
-    <div class="card">
+    {{-- ============================================================
+         | MAINTENANCE LIST
+         * ============================================================ --}}
+    <div class="card" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
         <div class="p-6 border-b" style="border-color: var(--border-color);">
-            <div class="flex justify-between items-center">
+            <div class="flex justify-between items-center flex-wrap gap-2">
                 <div>
                     <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
-                        <i class="fas fa-list mr-2"></i> All Maintenance Events
+                        <i class="fas fa-list mr-2" style="color: var(--primary);"></i> All Maintenance Events
                     </h3>
                     <p class="text-sm mt-1" style="color: var(--text-secondary);">
                         Showing {{ $maintenances->firstItem() ?? 0 }} to {{ $maintenances->lastItem() ?? 0 }} of {{ $maintenances->total() }} records
@@ -246,304 +283,311 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="overflow-x-auto">
             <table class="w-full">
                 <thead>
                     <tr style="background-color: var(--bg-secondary);">
-                        <th class="p-3 text-left" style="color: var(--text-secondary);">Reference ID</th>
-                        <th class="p-3 text-left" style="color: var(--text-secondary);">Title</th>
-                        <th class="p-3 text-left" style="color: var(--text-secondary);">Type</th>
-                        <th class="p-3 text-left" style="color: var(--text-secondary);">Impact</th>
-                        <th class="p-3 text-left" style="color: var(--text-secondary);">Status</th>
-                        <th class="p-3 text-left" style="color: var(--text-secondary);">Schedule</th>
-                        <th class="p-3 text-left" style="color: var(--text-secondary);">Actions</th>
+                        <th class="p-3 text-left text-xs font-medium uppercase" style="color: var(--text-secondary);">Reference</th>
+                        <th class="p-3 text-left text-xs font-medium uppercase" style="color: var(--text-secondary);">Title</th>
+                        <th class="p-3 text-left text-xs font-medium uppercase" style="color: var(--text-secondary);">Type</th>
+                        <th class="p-3 text-left text-xs font-medium uppercase" style="color: var(--text-secondary);">Impact</th>
+                        <th class="p-3 text-left text-xs font-medium uppercase" style="color: var(--text-secondary);">Status</th>
+                        <th class="p-3 text-left text-xs font-medium uppercase" style="color: var(--text-secondary);">Schedule</th>
+                        <th class="p-3 text-left text-xs font-medium uppercase" style="color: var(--text-secondary);">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     @forelse($maintenances as $maintenance)
-                    <tr class="border-b hover:bg-opacity-5 transition-colors duration-200" style="border-color: var(--border-color); {{ $maintenance->status === 'in_progress' ? 'background: rgba(var(--warning-rgb), 0.03);' : '' }}">
-                        <td class="p-3" style="color: var(--text-primary);">
-                            <div class="font-mono text-sm">{{ $maintenance->reference_id }}</div>
-                            <div class="text-xs" style="color: var(--text-secondary);">
-                                {{ $maintenance->created_at->format('M d, Y') }}
-                            </div>
-                        </td>
-                        <td class="p-3">
-                            <div class="font-medium" style="color: var(--text-primary);">{{ Str::limit($maintenance->title, 50) }}</div>
-                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                {{ Str::limit($maintenance->description, 70) }}
-                            </div>
-                            @if($maintenance->is_emergency)
-                            <span class="inline-block px-2 py-0.5 mt-1 text-xs rounded-full bg-red-100 text-red-800">
-                                Emergency
-                            </span>
-                            @endif
-                        </td>
-                        <td class="p-3">
-                            <span class="px-2 py-1 text-xs rounded-full capitalize"
-                                style="background-color: {{ $maintenance->maintenance_type === 'emergency' ? 'rgba(var(--danger-rgb), 0.1)' : 
-                                                         ($maintenance->maintenance_type === 'hotfix' ? 'rgba(var(--warning-rgb), 0.1)' : 
-                                                         'rgba(var(--info-rgb), 0.1)') }};
-                                       color: {{ $maintenance->maintenance_type === 'emergency' ? 'var(--danger)' : 
-                                               ($maintenance->maintenance_type === 'hotfix' ? 'var(--warning)' : 'var(--info)') }};
-                                       border: 1px solid {{ $maintenance->maintenance_type === 'emergency' ? 'rgba(var(--danger-rgb), 0.3)' : 
-                                                         ($maintenance->maintenance_type === 'hotfix' ? 'rgba(var(--warning-rgb), 0.3)' : 
-                                                         'rgba(var(--info-rgb), 0.3)') }};">
-                                {{ str_replace('_', ' ', $maintenance->maintenance_type) }}
-                            </span>
-                        </td>
-                        <td class="p-3">
-                            <span class="px-2 py-1 text-xs rounded-full capitalize"
-                                style="background-color: {{ $maintenance->impact_level === 'critical' ? 'rgba(var(--danger-rgb), 0.1)' : 
-                                                         ($maintenance->impact_level === 'high' ? 'rgba(var(--warning-rgb), 0.1)' : 
-                                                         ($maintenance->impact_level === 'medium' ? 'rgba(var(--warning-rgb), 0.05)' : 
-                                                         'rgba(var(--success-rgb), 0.1)')) }};
-                                       color: {{ $maintenance->impact_level === 'critical' ? 'var(--danger)' : 
-                                               ($maintenance->impact_level === 'high' ? 'var(--warning)' : 
-                                               ($maintenance->impact_level === 'medium' ? 'var(--warning)' : 'var(--success)')) }};
-                                       border: 1px solid {{ $maintenance->impact_level === 'critical' ? 'rgba(var(--danger-rgb), 0.3)' : 
-                                                         ($maintenance->impact_level === 'high' ? 'rgba(var(--warning-rgb), 0.3)' : 
-                                                         ($maintenance->impact_level === 'medium' ? 'rgba(var(--warning-rgb), 0.2)' : 
-                                                         'rgba(var(--success-rgb), 0.3)')) }};">
-                                {{ $maintenance->impact_level }}
-                            </span>
-                        </td>
-                        <td class="p-3">
-                            <span class="px-2 py-1 text-xs rounded-full capitalize"
-                                style="background-color: {{ $maintenance->status === 'in_progress' ? 'rgba(var(--warning-rgb), 0.1)' : 
-                                                         ($maintenance->status === 'completed' ? 'rgba(var(--success-rgb), 0.1)' : 
-                                                         ($maintenance->status === 'cancelled' ? 'rgba(var(--danger-rgb), 0.1)' : 
-                                                         'rgba(var(--info-rgb), 0.1)')) }};
-                                       color: {{ $maintenance->status === 'in_progress' ? 'var(--warning)' : 
-                                               ($maintenance->status === 'completed' ? 'var(--success)' : 
-                                               ($maintenance->status === 'cancelled' ? 'var(--danger)' : 'var(--info)')) }};
-                                       border: 1px solid {{ $maintenance->status === 'in_progress' ? 'rgba(var(--warning-rgb), 0.3)' : 
-                                                         ($maintenance->status === 'completed' ? 'rgba(var(--success-rgb), 0.3)' : 
-                                                         ($maintenance->status === 'cancelled' ? 'rgba(var(--danger-rgb), 0.3)' : 
-                                                         'rgba(var(--info-rgb), 0.3)')) }};">
-                                {{ str_replace('_', ' ', $maintenance->status) }}
-                                @if($maintenance->status === 'scheduled')
-                                <br>
-                                <span class="text-xs opacity-75">
-                                    {{ $maintenance->scheduled_start->diffForHumans() }}
+                        @php
+                            $typeStyle = match ($maintenance->maintenance_type) {
+                                'emergency' => ['danger',   'var(--danger)'],
+                                'hotfix'    => ['warning',  'var(--warning)'],
+                                'upgrade'   => ['info',     'var(--info)'],
+                                'security'  => ['primary',  'var(--primary)'],
+                                default     => ['info',     'var(--info)'],
+                            };
+
+                            $impactStyle = match ($maintenance->impact_level) {
+                                'critical' => ['danger',   'var(--danger)'],
+                                'high'     => ['warning',  'var(--warning)'],
+                                'medium'   => ['warning',  'var(--warning)'],
+                                default    => ['success',  'var(--success)'],
+                            };
+
+                            $statusStyle = match ($maintenance->status) {
+                                'in_progress' => ['warning', 'var(--warning)'],
+                                'completed'   => ['success', 'var(--success)'],
+                                'cancelled'   => ['danger',  'var(--danger)'],
+                                'draft'       => ['info',    'var(--info)'],
+                                default       => ['info',    'var(--info)'],
+                            };
+                        @endphp
+
+                        <tr class="border-b transition-colors duration-200"
+                            style="border-color: var(--border-color); {{ $maintenance->status === 'in_progress' ? 'background: rgba(var(--warning-rgb), 0.03);' : '' }}">
+                            <td class="p-3" style="color: var(--text-primary);">
+                                <div class="font-mono text-sm">{{ $maintenance->reference_id }}</div>
+                                <div class="text-xs" style="color: var(--text-secondary);">
+                                    {{ $maintenance->created_at->format('M d, Y') }}
+                                </div>
+                            </td>
+                            <td class="p-3">
+                                <div class="font-medium" style="color: var(--text-primary);">
+                                    {{ Str::limit($maintenance->title, 50) }}
+                                </div>
+                                <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                    {{ Str::limit($maintenance->description, 70) }}
+                                </div>
+                                @if($maintenance->is_emergency)
+                                    <span class="inline-block px-2 py-0.5 mt-1 text-xs rounded-full"
+                                          style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);">
+                                        Emergency
+                                    </span>
+                                @endif
+                            </td>
+                            <td class="p-3">
+                                <span class="badge" style="background-color: rgba(var(--{{ $typeStyle[0] }}-rgb), 0.1); color: {{ $typeStyle[1] }}; border: 1px solid rgba(var(--{{ $typeStyle[0] }}-rgb), 0.3);">
+                                    {{ str_replace('_', ' ', $maintenance->maintenance_type) }}
                                 </span>
+                            </td>
+                            <td class="p-3">
+                                <span class="badge" style="background-color: rgba(var(--{{ $impactStyle[0] }}-rgb), 0.1); color: {{ $impactStyle[1] }}; border: 1px solid rgba(var(--{{ $impactStyle[0] }}-rgb), 0.3);">
+                                    {{ $maintenance->impact_level }}
+                                </span>
+                            </td>
+                            <td class="p-3">
+                                <span class="badge" style="background-color: rgba(var(--{{ $statusStyle[0] }}-rgb), 0.1); color: {{ $statusStyle[1] }}; border: 1px solid rgba(var(--{{ $statusStyle[0] }}-rgb), 0.3);">
+                                    {{ str_replace('_', ' ', $maintenance->status) }}
+                                </span>
+                                @if($maintenance->status === 'scheduled' && $maintenance->scheduled_start)
+                                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                        {{ $maintenance->scheduled_start->diffForHumans() }}
+                                    </div>
                                 @endif
-                            </span>
-                        </td>
-                        <td class="p-3" style="color: var(--text-primary);">
-                            @if($maintenance->status === 'in_progress' && $maintenance->actual_start)
-                            <div class="text-sm">Started: {{ $maintenance->actual_start->format('M d, H:i') }}</div>
-                            <div class="text-xs" style="color: var(--text-secondary);">
-                                {{ $maintenance->actual_start->diffForHumans() }}
-                            </div>
-                            @elseif($maintenance->scheduled_start)
-                            <div class="text-sm">{{ $maintenance->scheduled_start->format('M d, H:i') }}</div>
-                            <div class="text-xs" style="color: var(--text-secondary);">
-                                {{ $maintenance->scheduled_start->diffForHumans() }}
-                            </div>
-                            @else
-                            <span class="text-sm" style="color: var(--text-secondary);">Not scheduled</span>
-                            @endif
-                        </td>
-                        <td class="p-3">
-                            <div class="flex flex-wrap gap-1">
-                                <!-- View Button -->
-                                <a href="{{ route('developer.maintenance.show', $maintenance->id) }}" 
-                                   class="p-2 rounded hover:bg-opacity-20 transition-colors"
-                                   style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);"
-                                   title="View Details">
-                                    <i class="fas fa-eye"></i>
-                                </a>
-                                
-                                <!-- Edit Button (only for draft/scheduled) -->
-                                @if(in_array($maintenance->status, ['draft', 'scheduled']))
-                                <a href="{{ route('developer.maintenance.edit', $maintenance->id) }}" 
-                                   class="p-2 rounded hover:bg-opacity-20 transition-colors"
-                                   style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);"
-                                   title="Edit">
-                                    <i class="fas fa-edit"></i>
-                                </a>
+                            </td>
+                            <td class="p-3" style="color: var(--text-primary);">
+                                @if($maintenance->status === 'in_progress' && $maintenance->actual_start)
+                                    <div class="text-sm">Started: {{ $maintenance->actual_start->format('M d, H:i') }}</div>
+                                    <div class="text-xs" style="color: var(--text-secondary);">
+                                        {{ $maintenance->actual_start->diffForHumans() }}
+                                    </div>
+                                @elseif($maintenance->scheduled_start)
+                                    <div class="text-sm">{{ $maintenance->scheduled_start->format('M d, H:i') }}</div>
+                                    <div class="text-xs" style="color: var(--text-secondary);">
+                                        {{ $maintenance->scheduled_start->diffForHumans() }}
+                                    </div>
+                                @else
+                                    <span class="text-sm" style="color: var(--text-secondary);">Not scheduled</span>
                                 @endif
-                                
-                                <!-- Approve Button (only for draft) -->
-                                @if($maintenance->status === 'draft')
-                                <a href="{{ route('developer.maintenance.approve', $maintenance->id) }}" 
-                                   onclick="return confirm('Approve this maintenance schedule?')"
-                                   class="p-2 rounded hover:bg-opacity-20 transition-colors"
-                                   style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);"
-                                   title="Approve">
-                                    <i class="fas fa-check"></i>
-                                </a>
-                                @endif
-                                
-                                <!-- Start Button (only for scheduled) -->
-                                @if($maintenance->status === 'scheduled')
-                                <form action="{{ route('developer.maintenance.start', $maintenance->id) }}" method="POST" class="inline">
-                                    @csrf
-                                    <button type="submit" 
-                                            onclick="return confirm('Start this maintenance now?')"
-                                            class="p-2 rounded hover:bg-opacity-20 transition-colors"
-                                            style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);"
-                                            title="Start Now">
-                                        <i class="fas fa-play"></i>
-                                    </button>
-                                </form>
-                                @endif
-                                
-                                <!-- Complete Button (only for in_progress) -->
-                                @if($maintenance->status === 'in_progress')
-                                <form action="{{ route('developer.maintenance.complete', $maintenance->id) }}" method="POST" class="inline">
-                                    @csrf
-                                    <button type="submit" 
-                                            onclick="return confirmCompleteMaintenance()"
-                                            class="p-2 rounded hover:bg-opacity-20 transition-colors"
-                                            style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);"
-                                            title="Complete">
-                                        <i class="fas fa-check-circle"></i>
-                                    </button>
-                                </form>
-                                @endif
-                                
-                                <!-- Cancel Button (only for draft/scheduled) -->
-                                @if(in_array($maintenance->status, ['draft', 'scheduled']))
-                                <form action="{{ route('developer.maintenance.cancel', $maintenance->id) }}" method="POST" class="inline">
-                                    @csrf
-                                    <button type="submit" 
-                                            onclick="return confirm('Cancel this maintenance?')"
-                                            class="p-2 rounded hover:bg-opacity-20 transition-colors"
-                                            style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);"
-                                            title="Cancel">
-                                        <i class="fas fa-times"></i>
-                                    </button>
-                                </form>
-                                @endif
-                                
-                                <!-- Delete Button (only for draft) -->
-                                @if($maintenance->status === 'draft')
-                                <form action="{{ route('developer.maintenance.destroy', $maintenance->id) }}" method="POST" class="inline">
-                                    @csrf
-                                    @method('DELETE')
-                                    <button type="submit" 
-                                            onclick="return confirm('Are you sure you want to delete this maintenance schedule?')"
-                                            class="p-2 rounded hover:bg-opacity-20 transition-colors"
-                                            style="background-color: rgba(var(--danger-rgb), 0.2); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.3);"
-                                            title="Delete Permanently">
-                                        <i class="fas fa-trash-alt"></i>
-                                    </button>
-                                </form>
-                                @endif
-                            </div>
-                        </td>
-                    </tr>
+                            </td>
+                            <td class="p-3">
+                                <div class="flex flex-wrap gap-1">
+                                    {{-- View --}}
+                                    <a href="{{ route('developer.maintenance.show', $maintenance->id) }}"
+                                       class="action-btn" title="View Details"
+                                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+
+                                    {{-- Edit --}}
+                                    @if(in_array($maintenance->status, ['draft', 'scheduled'], true))
+                                        <a href="{{ route('developer.maintenance.edit', $maintenance->id) }}"
+                                           class="action-btn" title="Edit"
+                                           style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
+                                            <i class="fas fa-edit"></i>
+                                        </a>
+                                    @endif
+
+                                    {{-- Approve (draft) --}}
+                                    @if($maintenance->status === 'draft')
+                                        <form action="{{ route('developer.maintenance.approve', $maintenance->id) }}" method="POST" class="inline">
+                                            @csrf
+                                            <button type="submit"
+                                                    onclick="return confirm('Approve this maintenance schedule?')"
+                                                    class="action-btn" title="Approve"
+                                                    style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
+                                                <i class="fas fa-check"></i>
+                                            </button>
+                                        </form>
+                                    @endif
+
+                                    {{-- Start (scheduled) --}}
+                                    @if($maintenance->status === 'scheduled')
+                                        <form action="{{ route('developer.maintenance.start', $maintenance->id) }}" method="POST" class="inline">
+                                            @csrf
+                                            <input type="hidden" name="confirm_pre_checks" value="1">
+                                            <input type="hidden" name="start_notes" value="Started from index">
+                                            <button type="submit"
+                                                    onclick="return confirm('Start this maintenance now?')"
+                                                    class="action-btn" title="Start Now"
+                                                    style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);">
+                                                <i class="fas fa-play"></i>
+                                            </button>
+                                        </form>
+                                    @endif
+
+                                    {{-- Complete (in progress) --}}
+                                    @if($maintenance->status === 'in_progress')
+                                        <button type="button"
+                                                onclick="openCompleteModal({{ $maintenance->id }}, {{ $maintenance->estimated_duration_minutes }}, {{ $maintenance->estimated_affected_users ?? 0 }})"
+                                                class="action-btn" title="Complete"
+                                                style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
+                                            <i class="fas fa-check-circle"></i>
+                                        </button>
+                                    @endif
+
+                                    {{-- Cancel (draft/scheduled) --}}
+                                    @if(in_array($maintenance->status, ['draft', 'scheduled'], true))
+                                        <form action="{{ route('developer.maintenance.cancel', $maintenance->id) }}" method="POST" class="inline">
+                                            @csrf
+                                            <input type="hidden" name="cancellation_reason" value="Cancelled from index">
+                                            <button type="submit"
+                                                    onclick="return confirm('Cancel this maintenance?')"
+                                                    class="action-btn" title="Cancel"
+                                                    style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);">
+                                                <i class="fas fa-times"></i>
+                                            </button>
+                                        </form>
+                                    @endif
+
+                                    {{-- Delete (draft) --}}
+                                    @if($maintenance->status === 'draft')
+                                        <form action="{{ route('developer.maintenance.destroy', $maintenance->id) }}" method="POST" class="inline">
+                                            @csrf
+                                            @method('DELETE')
+                                            <button type="submit"
+                                                    onclick="return confirm('Are you sure you want to delete this maintenance schedule?')"
+                                                    class="action-btn" title="Delete"
+                                                    style="background-color: rgba(var(--danger-rgb), 0.2); color: var(--danger); border: 1px solid rgba(var(--danger-rgb), 0.3);">
+                                                <i class="fas fa-trash-alt"></i>
+                                            </button>
+                                        </form>
+                                    @endif
+                                </div>
+                            </td>
+                        </tr>
                     @empty
-                    <tr>
-                        <td colspan="7" class="p-8 text-center">
-                            <div class="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center"
-                                 style="background-color: rgba(var(--text-secondary), 0.1);">
-                                <i class="fas fa-tools" style="color: var(--text-secondary); font-size: 1.5rem;"></i>
-                            </div>
-                            <h4 class="font-medium mb-2" style="color: var(--text-primary);">No Maintenance Found</h4>
-                            <p class="text-sm mb-4" style="color: var(--text-secondary);">
-                                {{ request()->hasAny(['status', 'type', 'impact', 'search', 'date_from', 'date_to']) ? 'No maintenance events match your filters.' : 'No maintenance events have been scheduled yet.' }}
-                            </p>
-                            @if(request()->hasAny(['status', 'type', 'impact', 'search', 'date_from', 'date_to']))
-                            <a href="{{ route('developer.maintenance.index') }}" class="btn-primary">
-                                <i class="fas fa-times mr-2"></i> Clear Filters
-                            </a>
-                            @else
-                            <a href="{{ route('developer.maintenance.create') }}" class="btn-primary">
-                                <i class="fas fa-plus mr-2"></i> Schedule Maintenance
-                            </a>
-                            @endif
-                        </td>
-                    </tr>
+                        <tr>
+                            <td colspan="7" class="p-8 text-center">
+                                <div class="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center"
+                                     style="background-color: rgba(var(--text-secondary), 0.1);">
+                                    <i class="fas fa-tools" style="color: var(--text-secondary); font-size: 1.5rem;"></i>
+                                </div>
+                                <h4 class="font-medium mb-2" style="color: var(--text-primary);">No Maintenance Found</h4>
+                                <p class="text-sm mb-4" style="color: var(--text-secondary);">
+                                    {{ request()->hasAny(['status', 'type', 'impact', 'search', 'date_from', 'date_to'])
+                                        ? 'No maintenance events match your filters.'
+                                        : 'No maintenance events have been scheduled yet.' }}
+                                </p>
+                                @if(request()->hasAny(['status', 'type', 'impact', 'search', 'date_from', 'date_to']))
+                                    <a href="{{ route('developer.maintenance.index') }}"
+                                       class="px-4 py-2 rounded-lg text-sm inline-flex items-center"
+                                       style="background-color: var(--primary); color: white;">
+                                        <i class="fas fa-times mr-2"></i> Clear Filters
+                                    </a>
+                                @else
+                                    <a href="{{ route('developer.maintenance.create') }}"
+                                       class="px-4 py-2 rounded-lg text-sm inline-flex items-center"
+                                       style="background-color: var(--primary); color: white;">
+                                        <i class="fas fa-plus mr-2"></i> Schedule Maintenance
+                                    </a>
+                                @endif
+                            </td>
+                        </tr>
                     @endforelse
                 </tbody>
             </table>
         </div>
-        
+
         @if($maintenances->hasPages())
-        <div class="p-4 border-t" style="border-color: var(--border-color);">
-            {{ $maintenances->links() }}
-        </div>
+            <div class="p-4 border-t" style="border-color: var(--border-color);">
+                {{ $maintenances->links() }}
+            </div>
         @endif
     </div>
 </div>
 
-<!-- Complete Maintenance Modal -->
-<div id="completeMaintenanceModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-    <div class="card w-full max-w-lg">
+{{-- ============================================================
+     | COMPLETE MAINTENANCE MODAL
+     * ============================================================ --}}
+<div id="completeMaintenanceModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50 p-4">
+    <div class="card w-full max-w-lg" style="background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 0.75rem;">
         <div class="p-6">
-            <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary);">
-                <i class="fas fa-check-circle mr-2" style="color: var(--success);"></i>
-                Complete Maintenance
-            </h3>
-            
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-check-circle mr-2" style="color: var(--success);"></i>
+                    Complete Maintenance
+                </h3>
+                <button type="button" onclick="closeModal('completeMaintenanceModal')"
+                        class="p-2 rounded-lg hover:bg-opacity-20"
+                        style="background-color: rgba(var(--danger-rgb), 0.1); color: var(--danger);">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+
             <form id="completeMaintenanceForm" method="POST">
                 @csrf
-                
+
                 <div class="space-y-4 mb-6">
                     <div>
                         <label class="block text-sm mb-2" style="color: var(--text-secondary);">
                             Completion Notes <span style="color: var(--danger);">*</span>
                         </label>
-                        <textarea name="completion_notes" rows="3" 
-                                  class="w-full p-3 border rounded" 
+                        <textarea name="completion_notes" rows="3"
+                                  class="w-full p-3 border rounded-lg"
                                   style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                   placeholder="Describe what was done during maintenance..."
                                   required minlength="10"></textarea>
                         <div class="text-xs mt-1" style="color: var(--text-secondary);">Minimum 10 characters</div>
                     </div>
-                    
-                    <div>
-                        <label class="block text-sm mb-2" style="color: var(--text-secondary);">
-                            Actual Duration (minutes) <span style="color: var(--danger);">*</span>
-                        </label>
-                        <input type="number" name="actual_duration_minutes" 
-                               min="1" max="1440"
-                               class="w-full p-2 border rounded"
-                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                               required>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm mb-2" style="color: var(--text-secondary);">
+                                Actual Duration (min) <span style="color: var(--danger);">*</span>
+                            </label>
+                            <input type="number" name="actual_duration_minutes" id="modalDuration"
+                                   min="1" max="1440"
+                                   class="w-full p-2 border rounded-lg"
+                                   style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                                   required>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm mb-2" style="color: var(--text-secondary);">
+                                Affected Users <span style="color: var(--danger);">*</span>
+                            </label>
+                            <input type="number" name="actual_affected_users" id="modalUsers"
+                                   min="0"
+                                   class="w-full p-2 border rounded-lg"
+                                   style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                                   required>
+                        </div>
                     </div>
-                    
-                    <div>
-                        <label class="block text-sm mb-2" style="color: var(--text-secondary);">
-                            Actual Affected Users <span style="color: var(--danger);">*</span>
-                        </label>
-                        <input type="number" name="actual_affected_users" 
-                               min="0"
-                               class="w-full p-2 border rounded"
-                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                               required>
-                    </div>
-                    
+
                     <div>
                         <label class="block text-sm mb-2" style="color: var(--text-secondary);">
                             Downtime Minutes (if any)
                         </label>
-                        <input type="number" name="downtime_minutes" 
-                               min="0"
-                               class="w-full p-2 border rounded"
+                        <input type="number" name="downtime_minutes" min="0"
+                               class="w-full p-2 border rounded-lg"
                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                     </div>
-                    
-                    <div class="grid grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm mb-2" style="color: var(--text-secondary);">
-                                Estimated vs Actual
-                            </label>
-                            <select name="estimated_vs_actual" 
-                                    class="w-full p-2 border rounded"
-                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                    required>
-                                <option value="within_estimate">Within Estimate</option>
-                                <option value="under_estimate">Under Estimate</option>
-                                <option value="over_estimate">Over Estimate</option>
-                            </select>
-                        </div>
+
+                    <div>
+                        <label class="block text-sm mb-2" style="color: var(--text-secondary);">
+                            Estimated vs Actual <span style="color: var(--danger);">*</span>
+                        </label>
+                        <select name="estimated_vs_actual" class="w-full p-2 border rounded-lg"
+                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                                required>
+                            <option value="within_estimate">Within Estimate</option>
+                            <option value="under_estimate">Under Estimate</option>
+                            <option value="over_estimate">Over Estimate</option>
+                        </select>
                     </div>
-                    
+
                     <div class="flex items-center">
                         <input type="checkbox" id="post_checks_passed" name="post_checks_passed" value="1" required
                                class="h-4 w-4 rounded"
@@ -553,12 +597,16 @@
                         </label>
                     </div>
                 </div>
-                
+
                 <div class="flex justify-end space-x-2">
-                    <button type="button" onclick="closeModal('completeMaintenanceModal')" class="btn-secondary">
+                    <button type="button" onclick="closeModal('completeMaintenanceModal')"
+                            class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80"
+                            style="background-color: var(--bg-secondary); color: var(--text-secondary);">
                         Cancel
                     </button>
-                    <button type="submit" class="btn-primary flex items-center">
+                    <button type="submit"
+                            class="px-4 py-2 rounded-lg text-sm transition-all hover:opacity-80 flex items-center"
+                            style="background-color: var(--success); color: white;">
                         <i class="fas fa-check-circle mr-2"></i> Complete Maintenance
                     </button>
                 </div>
@@ -568,161 +616,117 @@
 </div>
 @endsection
 
-@section('scripts')
+@push('styles')
+<style>
+    /* Action button base */
+    .action-btn {
+        width: 32px;
+        height: 32px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 6px;
+        transition: all 0.2s ease;
+        cursor: pointer;
+        border: none;
+        padding: 0;
+    }
+    .action-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    /* Badge base */
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.25rem 0.6rem;
+        border-radius: 9999px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Table row hover */
+    tbody tr {
+        transition: background-color 0.2s ease;
+    }
+    tbody tr:hover {
+        background-color: rgba(var(--primary-rgb), 0.03) !important;
+    }
+
+    /* Card hover */
+    .card {
+        transition: box-shadow 0.2s ease;
+    }
+    .card:hover {
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08);
+    }
+
+    /* Focus rings */
+    input:focus, select:focus, textarea:focus {
+        outline: none;
+        box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
+    }
+
+    /* Responsive table adjustments */
+    @media (max-width: 768px) {
+        .overflow-x-auto { font-size: 0.85rem; }
+        .overflow-x-auto th,
+        .overflow-x-auto td { padding: 0.5rem 0.4rem; }
+        .action-btn { width: 28px; height: 28px; font-size: 0.8rem; }
+    }
+</style>
+@endpush
+
+@push('scripts')
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Setup filter form auto-submit on select changes
+(function () {
+    'use strict';
+
+    /* ---------- Auto-submit filters on select change ---------- */
     document.querySelectorAll('select[name="status"], select[name="type"], select[name="impact"]').forEach(select => {
-        select.addEventListener('change', function() {
+        select.addEventListener('change', function () {
             this.closest('form').submit();
         });
     });
-});
 
-function showMaintenanceDetails(maintenanceId) {
-    window.location.href = `/developer/maintenance/${maintenanceId}`;
-}
+    /* ---------- Modal open / close ---------- */
+    window.openCompleteModal = function (maintenanceId, estimatedDuration, estimatedUsers) {
+        const form    = document.getElementById('completeMaintenanceForm');
+        const modal   = document.getElementById('completeMaintenanceModal');
+        const durEl   = document.getElementById('modalDuration');
+        const usersEl = document.getElementById('modalUsers');
 
-function openCompleteModal(maintenanceId) {
-    const form = document.getElementById('completeMaintenanceForm');
-    form.action = `/developer/maintenance/${maintenanceId}/complete`;
-    document.getElementById('completeMaintenanceModal').classList.remove('hidden');
-}
+        form.action = `/developer/maintenance/${maintenanceId}/complete`;
 
-function closeModal(modalId) {
-    document.getElementById(modalId).classList.add('hidden');
-}
+        // Seed with sensible defaults from the schedule
+        if (durEl && !durEl.value) durEl.value = estimatedDuration || 60;
+        if (usersEl && !usersEl.value) usersEl.value = estimatedUsers || 0;
 
-function confirmCompleteMaintenance() {
-    return confirm('Are you sure you want to complete this maintenance? This action cannot be undone.');
-}
+        modal.classList.remove('hidden');
+    };
 
-// Close modal when clicking outside
-document.querySelectorAll('.fixed.inset-0').forEach(modal => {
-    modal.addEventListener('click', function(e) {
-        if (e.target === this) {
-            this.classList.add('hidden');
+    window.closeModal = function (modalId) {
+        const el = document.getElementById(modalId);
+        if (el) el.classList.add('hidden');
+    };
+
+    /* ---------- Close modal on backdrop click ---------- */
+    document.querySelectorAll('.fixed.inset-0').forEach(modal => {
+        modal.addEventListener('click', function (e) {
+            if (e.target === this) this.classList.add('hidden');
+        });
+    });
+
+    /* ---------- ESC closes modals ---------- */
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            closeModal('completeMaintenanceModal');
         }
     });
-});
-
-// Keyboard navigation
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        closeModal('completeMaintenanceModal');
-    }
-});
+})();
 </script>
-
-<style>
-/* Additional styling */
-.btn-primary, .btn-secondary, .btn-warning {
-    transition: all 0.2s ease-in-out;
-}
-
-.btn-primary:hover, .btn-secondary:hover, .btn-warning:hover {
-    transform: translateY(-1px);
-}
-
-/* Table row hover effect */
-tbody tr {
-    transition: background-color 0.2s ease;
-}
-
-tbody tr:hover {
-    background-color: rgba(var(--primary-rgb), 0.02) !important;
-}
-
-/* Status badge improvements */
-.px-2.py-1.rounded-full {
-    font-weight: 500;
-    text-transform: uppercase;
-    font-size: 0.7rem;
-    letter-spacing: 0.5px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 80px;
-}
-
-/* Action buttons styling */
-.flex.gap-1 a,
-.flex.gap-1 button {
-    width: 32px;
-    height: 32px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 6px;
-    transition: all 0.2s ease;
-}
-
-.flex.gap-1 a:hover,
-.flex.gap-1 button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-
-/* Delete button specific styling */
-.flex.gap-1 form button[title="Delete Permanently"]:hover {
-    background-color: rgba(var(--danger-rgb), 0.3) !important;
-    border-color: rgba(var(--danger-rgb), 0.5) !important;
-}
-
-/* Loading spinner animation */
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-.animate-spin {
-    animation: spin 1s linear infinite;
-}
-
-.animate-pulse {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-@keyframes pulse {
-    0%, 100% {
-        opacity: 1;
-    }
-    50% {
-        opacity: 0.7;
-    }
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-    .overflow-x-auto {
-        font-size: 0.875rem;
-    }
-    
-    .overflow-x-auto th,
-    .overflow-x-auto td {
-        padding: 0.75rem 0.5rem;
-    }
-    
-    .grid-cols-4 {
-        grid-template-columns: repeat(2, 1fr);
-    }
-    
-    .flex.space-x-2 {
-        flex-wrap: wrap;
-        gap: 0.5rem;
-    }
-    
-    /* Adjust action buttons for mobile */
-    .flex.gap-1 {
-        gap: 0.25rem;
-    }
-    
-    .flex.gap-1 a,
-    .flex.gap-1 button {
-        width: 28px;
-        height: 28px;
-        font-size: 0.8rem;
-    }
-}
-</style>
-@endsection
+@endpush

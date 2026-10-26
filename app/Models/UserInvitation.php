@@ -1308,4 +1308,38 @@ public function getInvitationUrl(): string
         
         return $validStatus && $hasContact && $this->is_active;
     }
+
+    /**
+ * Determine whether this invitation can still be used.
+ *
+ * An invitation is valid when:
+ *   • it has not been accepted yet
+ *   • it has not been cancelled
+ *   • it has not expired (when expires_at is set)
+ *
+ * Adjust the status constants to match whatever your model defines —
+ * they're usually `STATUS_PENDING`, `STATUS_SENT`, `STATUS_ACCEPTED`,
+ * `STATUS_EXPIRED`, `STATUS_CANCELLED`.
+ */
+public function isValid(): bool
+{
+    // Reject anything already accepted or explicitly cancelled.
+    $invalidStatuses = array_filter([
+        defined(static::class . '::STATUS_ACCEPTED') ? static::STATUS_ACCEPTED : 'accepted',
+        defined(static::class . '::STATUS_CANCELLED') ? static::STATUS_CANCELLED : 'cancelled',
+        defined(static::class . '::STATUS_EXPIRED') ? static::STATUS_EXPIRED : 'expired',
+    ]);
+
+    if (in_array($this->status, $invalidStatuses, true)) {
+        return false;
+    }
+
+    // Reject expired invitations.
+    if ($this->expires_at && $this->expires_at->isPast()) {
+        return false;
+    }
+
+    return true;
+}
+
 }

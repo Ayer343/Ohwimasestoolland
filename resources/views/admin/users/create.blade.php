@@ -7,13 +7,6 @@
      |--------------------------------------------------------------------------
      | Communication-channel availability
      |--------------------------------------------------------------------------
-     | Resolved once, up-front, with safe fallbacks. These flags drive the
-     | server-rendered disabled state of the invitation channel checkboxes so
-     | that the UI is correct even before JavaScript runs.
-     |
-     | NOTE: Avoid `//` inline comments inside @php blocks — they can confuse
-     | the Blade compiler on some Laravel versions and produce the parse error
-     | "unexpected token ':', expecting '('".
      */
     $smsReady      = (bool) ($smsStatus['system_ready'] ?? false);
     $whatsappReady = (bool) ($whatsappStatus['system_ready'] ?? false);
@@ -34,6 +27,35 @@
     $oldChannels = array_values(array_filter($oldChannels, function ($c) use ($channelAvailability) {
         return isset($channelAvailability[$c]) && $channelAvailability[$c]['ready'];
     }));
+
+    /*
+     |--------------------------------------------------------------------------
+     | Role auto-mapping
+     |--------------------------------------------------------------------------
+     | Auto-injects a hidden `roles[]` input on every user-type change. The
+     | controller still skips Spatie sync for security/sanitation types —
+     | that's intentional; the injected input guarantees that every other
+     | type carries its role slug.
+     */
+    $roleSlugByType = [
+        \App\Models\User::TYPE_ADMIN                => 'admin',
+        \App\Models\User::TYPE_LANDLORD             => 'landlord',
+        \App\Models\User::TYPE_TENANT               => 'tenant',
+        \App\Models\User::TYPE_FIELD_AGENT          => 'field-agent',
+        \App\Models\User::TYPE_SECURITY_PERSONNEL   => 'security-personnel',
+        \App\Models\User::TYPE_CONTRACTOR           => 'contractor',
+        \App\Models\User::TYPE_SANITATION_PERSONNEL => 'sanitation-personnel',
+    ];
+
+    $roleLabelBySlug = [
+        'admin'                => 'Admin',
+        'landlord'             => 'Landlord',
+        'tenant'               => 'Tenant',
+        'field-agent'          => 'Field Agent',
+        'security-personnel'   => 'Security Personnel',
+        'contractor'           => 'Contractor',
+        'sanitation-personnel' => 'Sanitation Personnel',
+    ];
 @endphp
 
 @section('content')
@@ -45,28 +67,24 @@
             <div class="flex items-center space-x-3">
                 <!-- Communication Service Status Indicators -->
                 <div class="flex items-center space-x-2">
-                    <!-- WhatsApp Status Indicator -->
                     <div class="flex items-center px-3 py-1 rounded-full text-sm font-medium"
                          style="background-color: {{ $whatsappReady ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--warning-rgb), 0.1)' }}; color: {{ $whatsappReady ? 'var(--success)' : 'var(--warning)' }};">
                         <i class="fab fa-whatsapp mr-1"></i>
                         WhatsApp: {{ $whatsappReady ? 'Ready' : 'Limited' }}
                     </div>
 
-                    <!-- SMS Status Indicator -->
                     <div class="flex items-center px-3 py-1 rounded-full text-sm font-medium"
                          style="background-color: {{ $smsReady ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--warning-rgb), 0.1)' }}; color: {{ $smsReady ? 'var(--success)' : 'var(--warning)' }};">
                         <i class="fas fa-comment-alt mr-1"></i>
                         SMS: {{ $smsReady ? 'Ready' : 'Limited' }}
                     </div>
 
-                    <!-- Email Status Indicator -->
                     <div class="flex items-center px-3 py-1 rounded-full text-sm font-medium"
                          style="background-color: {{ $emailReady ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--warning-rgb), 0.1)' }}; color: {{ $emailReady ? 'var(--success)' : 'var(--warning)' }};">
                         <i class="fas {{ $emailReady ? 'fa-envelope' : 'fa-envelope-open' }} mr-1"></i>
                         Email: {{ $emailReady ? 'Ready' : 'Limited' }}
                     </div>
 
-                    <!-- Fallback Status Indicator -->
                     <div class="flex items-center px-3 py-1 rounded-full text-sm font-medium"
                          style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
                         <i class="fas fa-redo-alt mr-1"></i>
@@ -111,9 +129,9 @@
                         </div>
                         @endif
 
-                        @if(session('created_user'))
+                        @if(session('last_created_user'))
                         <div class="mt-3 flex flex-wrap gap-3">
-                            <a href="{{ route('admin.users.show', session('created_user')['id']) }}" class="btn-primary btn-sm flex items-center">
+                            <a href="{{ route('admin.users.show', session('last_created_user')['id']) }}" class="btn-primary btn-sm flex items-center">
                                 <i class="fas fa-eye mr-2"></i> View Created User
                             </a>
                             <button type="button" onclick="resetForm()" class="btn-secondary btn-sm flex items-center">
@@ -155,6 +173,10 @@
 
     <form action="{{ route('admin.users.store') }}" method="POST" id="user-form" enctype="multipart/form-data">
         @csrf
+
+        {{-- AUTO-ROLE SUBMISSION CONTAINER --}}
+        <div id="auto-role-container"></div>
+
         <div class="grid grid-cols-1 gap-6">
             @if($errors->any())
                 <div class="card p-6">
@@ -192,6 +214,11 @@
                         @error('type')
                             <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                         @enderror
+
+                        <div id="auto-role-indicator" class="mt-2 text-xs hidden" style="color: var(--text-secondary);">
+                            <i class="fas fa-user-tag mr-1" style="color: var(--primary);"></i>
+                            <span>Role <strong id="auto-role-label"></strong> will be auto-assigned on create.</span>
+                        </div>
                     </div>
 
                     <!-- Status -->
@@ -232,22 +259,28 @@
                         @enderror
                     </div>
 
-                    <!-- Email -->
+                    <!-- Email (Optional) -->
                     <div>
-                        <label for="email" class="block mb-2 font-medium" style="color: var(--text-primary);">Email Address *</label>
+                        <label for="email" class="block mb-2 font-medium" style="color: var(--text-primary);">
+                            Email Address
+                            <span class="ml-1 text-xs font-normal px-2 py-0.5 rounded-full"
+                                  style="background-color: rgba(var(--info-rgb), 0.15); color: var(--info);">
+                                Optional
+                            </span>
+                        </label>
                         <div class="relative">
                             <input type="email" class="w-full p-2 border rounded @error('email') border-red-500 @enderror"
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                   id="email" name="email" value="{{ old('email') }}" required
-                                   placeholder="Enter email address">
+                                   id="email" name="email" value="{{ old('email') }}"
+                                   placeholder="Optional — user will log in via phone">
                             <div class="absolute right-3 top-1/2 transform -translate-y-1/2">
                                 <i class="fas fa-check text-green-500 hidden" id="email-valid-icon"></i>
                                 <i class="fas fa-times text-red-500 hidden" id="email-invalid-icon"></i>
                             </div>
                         </div>
                         <div class="text-sm mt-1" style="color: var(--text-secondary);" id="email-fallback-info">
-                            <i class="fas fa-shield-alt mr-1 text-green-500"></i>
-                            <span>Email required for fallback delivery</span>
+                            <i class="fas fa-info-circle mr-1" style="color: var(--info);"></i>
+                            <span>Phone number is now the primary identifier. Add an email only if the user needs email notifications or fallback delivery.</span>
                         </div>
                         @error('email')
                             <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
@@ -308,7 +341,6 @@
                 <!-- Password Section -->
                 <div id="password-section">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <!-- Password -->
                         <div>
                             <label for="password" class="block mb-2 font-medium" style="color: var(--text-primary);">Password *</label>
                             <input type="password" class="w-full p-2 border rounded @error('password') border-red-500 @enderror"
@@ -320,7 +352,6 @@
                             @enderror
                         </div>
 
-                        <!-- Password Confirmation -->
                         <div>
                             <label for="password_confirmation" class="block mb-2 font-medium" style="color: var(--text-primary);">Confirm Password *</label>
                             <input type="password" class="w-full p-2 border rounded"
@@ -352,12 +383,16 @@
 
                 <!-- Auto Verification Options -->
                 <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="flex items-center space-x-3">
+                    <div class="flex items-start space-x-3" id="auto-verify-email-wrapper">
                         <input type="checkbox" id="auto_verify_email" name="auto_verify_email" value="1"
-                               class="w-4 h-4 border-gray-300 rounded focus:ring-blue-500" style="color: var(--primary);"
+                               class="w-4 h-4 mt-1 border-gray-300 rounded focus:ring-blue-500" style="color: var(--primary);"
                                {{ old('auto_verify_email') ? 'checked' : '' }}>
-                        <label for="auto_verify_email" class="font-medium" style="color: var(--text-primary);">
+                        <label for="auto_verify_email" class="font-medium cursor-pointer" style="color: var(--text-primary);">
                             Auto-Verify Email Address
+                            <span class="block text-xs font-normal mt-1" id="auto-verify-email-hint" style="color: var(--text-secondary);">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                Requires an email address to be entered above
+                            </span>
                         </label>
                     </div>
                     <div class="flex items-center space-x-3">
@@ -372,7 +407,7 @@
             </div>
 
             <!-- ============================================================ -->
-            <!-- ========== 🔐 SECURITY PERSONNEL SUPERVISOR SECTION ========== -->
+            <!-- ========== SECURITY PERSONNEL SUPERVISOR SECTION ========== -->
             <!-- ============================================================ -->
             <div class="card p-6" id="security-supervisor-section" style="display: none;">
                 <div class="flex justify-between items-center mb-4">
@@ -406,11 +441,12 @@
                         <div class="flex items-start">
                             <i class="fas fa-info-circle text-blue-500 mt-0.5 mr-3"></i>
                             <div>
-                                <p class="text-sm text-blue-700 dark:text-blue-300 font-medium">Security Supervisor Eligibility</p>
+                                <p class="text-sm text-blue-700 dark:text-blue-300 font-medium">Head of Security Eligibility</p>
                                 <p class="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                                    Enable this to make the user eligible for security supervisor assignments.
-                                    <strong>Specific supervisor roles (Team Lead, Section Lead, Post Commander) will be assigned separately</strong>
-                                    through the Supervisor Assignment section.
+                                    Enable this to make the officer eligible for appointment as the
+                                    <strong>Head of Security</strong> of the community.
+                                    The actual appointment (start date, replacement of the previous head)
+                                    is done in <strong>Security → Supervisor Assignments</strong>.
                                 </p>
                             </div>
                         </div>
@@ -418,10 +454,14 @@
 
                     <div class="flex items-center justify-between p-4 rounded-lg" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                         <div>
-                            <p class="font-medium" style="color: var(--text-primary);">Can be assigned as a Security Supervisor</p>
+                            <p class="font-medium" style="color: var(--text-primary);">Can be appointed Head of Security</p>
                             <p class="text-xs mt-1" style="color: var(--text-secondary); max-width: 600px;">
                                 <i class="fas fa-arrow-right mr-1" style="color: var(--primary);"></i>
-                                When enabled, this user will appear in the "Available Security Supervisors" list for supervisor assignments.
+                                When enabled, this officer appears in the "Eligible Personnel" list in the
+                                Supervisor Assignments module.
+                                <br>
+                                <i class="fas fa-arrow-right mr-1" style="color: var(--primary);"></i>
+                                Only one officer can hold the Head of Security appointment at a time.
                             </p>
                         </div>
                         <div class="toggle-modern flex-shrink-0 ml-4">
@@ -431,81 +471,22 @@
                         </div>
                     </div>
 
-                    <div id="security-supervisor-role-section" class="{{ old('security_can_be_supervisor') ? '' : 'hidden' }} transition-all duration-300">
-                        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label for="security_supervisor_role" class="block mb-2 font-medium" style="color: var(--text-primary);">
-                                    Security Supervisor Level *
-                                </label>
-                                <select class="w-full p-2 border rounded @error('security_supervisor_role') border-red-500 @enderror"
-                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                        id="security_supervisor_role" name="security_supervisor_role">
-                                    <option value="">Select Supervisor Level</option>
-                                    <option value="team_lead" {{ old('security_supervisor_role') == 'team_lead' ? 'selected' : '' }}>
-                                        Team Lead (Level 1)
-                                    </option>
-                                    <option value="section_lead" {{ old('security_supervisor_role') == 'section_lead' ? 'selected' : '' }}>
-                                        Section Lead (Level 2)
-                                    </option>
-                                    <option value="post_commander" {{ old('security_supervisor_role') == 'post_commander' ? 'selected' : '' }}>
-                                        Post Commander (Level 3)
-                                    </option>
-                                </select>
-                                @error('security_supervisor_role')
-                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
-                                @enderror
-                            </div>
-
-                            <div>
-                                <label for="security_supervisor_score" class="block mb-2 font-medium" style="color: var(--text-primary);">
-                                    Supervisor Score (1-100)
-                                </label>
-                                <input type="number" class="w-full p-2 border rounded @error('security_supervisor_score') border-red-500 @enderror"
-                                       style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                       id="security_supervisor_score" name="security_supervisor_score"
-                                       value="{{ old('security_supervisor_score', 50) }}"
-                                       min="1" max="100" placeholder="Enter score 1-100">
-                                @error('security_supervisor_score')
-                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
-                                @enderror
-                            </div>
-                        </div>
-
-                        <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <div class="p-3 rounded-lg border" style="background-color: rgba(var(--info-rgb), 0.05); border-color: rgba(var(--info-rgb), 0.2);">
-                                <div class="flex items-center mb-1">
-                                    <i class="fas fa-user-tie mr-2" style="color: var(--primary);"></i>
-                                    <span class="font-semibold text-sm" style="color: var(--text-primary);">Team Lead</span>
-                                </div>
-                                <p class="text-xs" style="color: var(--text-secondary);">Manages a small security team. Basic supervisor permissions.</p>
-                            </div>
-                            <div class="p-3 rounded-lg border" style="background-color: rgba(var(--info-rgb), 0.05); border-color: rgba(var(--info-rgb), 0.2);">
-                                <div class="flex items-center mb-1">
-                                    <i class="fas fa-users mr-2" style="color: var(--primary);"></i>
-                                    <span class="font-semibold text-sm" style="color: var(--text-primary);">Section Lead</span>
-                                </div>
-                                <p class="text-xs" style="color: var(--text-secondary);">Oversees multiple security teams. Can assign officers to posts.</p>
-                            </div>
-                            <div class="p-3 rounded-lg border" style="background-color: rgba(var(--info-rgb), 0.05); border-color: rgba(var(--info-rgb), 0.2);">
-                                <div class="flex items-center mb-1">
-                                    <i class="fas fa-flag mr-2" style="color: var(--primary);"></i>
-                                    <span class="font-semibold text-sm" style="color: var(--text-primary);">Post Commander</span>
-                                </div>
-                                <p class="text-xs" style="color: var(--text-secondary);">Highest security supervisor level. Full access to all security features.</p>
-                            </div>
-                        </div>
-
-                        <div class="mt-4">
-                            <label for="security_supervisor_certifications" class="block mb-2 font-medium" style="color: var(--text-primary);">
-                                Certifications (JSON)
-                            </label>
-                            <textarea class="w-full p-2 border rounded @error('security_supervisor_certifications') border-red-500 @enderror"
-                                      style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color); font-family: monospace;"
-                                      id="security_supervisor_certifications" name="security_supervisor_certifications"
-                                      rows="3" placeholder='["Security Certification", "First Aid Training", "Team Leadership"]'>{{ old('security_supervisor_certifications') }}</textarea>
-                            @error('security_supervisor_certifications')
-                                <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
-                            @enderror
+                    <div class="mt-4">
+                        <label for="security_supervisor_certifications" class="block mb-2 font-medium" style="color: var(--text-primary);">
+                            Certifications / Notes
+                            <span class="text-xs font-normal" style="color: var(--text-secondary);">(optional)</span>
+                        </label>
+                        <textarea class="w-full p-2 border rounded @error('security_supervisor_certifications') border-red-500 @enderror"
+                                  style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                                  id="security_supervisor_certifications" name="security_supervisor_certifications"
+                                  rows="3"
+                                  placeholder="e.g. Security certification, first aid training, previous supervisory experience">{{ old('security_supervisor_certifications') }}</textarea>
+                        @error('security_supervisor_certifications')
+                            <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                        @enderror
+                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            Free-form. Recorded on the user's profile. Not used for permission decisions.
                         </div>
                     </div>
 
@@ -515,9 +496,11 @@
                             <div>
                                 <p class="text-sm font-medium" style="color: var(--text-primary);">What's next?</p>
                                 <ul class="text-xs mt-1 space-y-1" style="color: var(--text-secondary);">
-                                    <li>• User becomes eligible for security supervisor assignments</li>
-                                    <li>• Go to <strong>Security Supervisor Assignments</strong> to assign specific roles</li>
-                                    <li>• Assign: Team Lead (Level 1), Section Lead (Level 2), or Post Commander (Level 3)</li>
+                                    <li>• This officer becomes eligible for Head-of-Security appointment.</li>
+                                    <li>• In <strong>Supervisor Assignments</strong>, appoint this officer as head.</li>
+                                    <li>• Only one active Head of Security at a time.</li>
+                                    <li>• The head gets the full security management permission set automatically.</li>
+                                    <li>• Revoking eligibility later will deactivate their active appointment automatically.</li>
                                 </ul>
                             </div>
                         </div>
@@ -526,7 +509,7 @@
             </div>
 
             <!-- ================================================================ -->
-            <!-- ========== 🧹 SANITATION PERSONNEL SECTION ========== -->
+            <!-- ========== SANITATION PERSONNEL SECTION ========== -->
             <!-- ================================================================ -->
             <div class="card p-6" id="sanitation-supervisor-section" style="display: none;">
                 <div class="flex justify-between items-center mb-4">
@@ -568,7 +551,6 @@
                         </div>
                     </div>
 
-                    <!-- Eligibility toggle -->
                     <div class="flex items-center justify-between p-4 rounded-lg mb-4" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                         <div>
                             <p class="font-medium" style="color: var(--text-primary);">Enable Sanitation Personnel</p>
@@ -587,9 +569,7 @@
                         </div>
                     </div>
 
-                    <!-- ========== 🔥 SANITATION PERSONNEL ROLE SELECTION ========== -->
                     <div id="sanitation-supervisor-role-section" class="{{ old('sanitation_can_be_supervisor') ? '' : 'hidden' }} transition-all duration-300">
-                        <!-- Personnel Role -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label for="sanitation_personnel_role" class="block mb-2 font-medium" style="color: var(--text-primary);">
@@ -636,7 +616,6 @@
                             </div>
                         </div>
 
-                        <!-- ✅ NEW: Reports To (Supervisor) -->
                         <div class="mt-4">
                             <label for="sanitation_supervisor_id" class="block mb-2 font-medium" style="color: var(--text-primary);">
                                 <i class="fas fa-user-tie mr-1" style="color: var(--primary);"></i>
@@ -657,11 +636,10 @@
                             @enderror
                             <div class="text-xs mt-1" style="color: var(--text-secondary);">
                                 <i class="fas fa-info-circle mr-1"></i>
-                                Optional. Only personnel with a supervisor role appear here. The selected supervisor will be notified about this person's collection requests.
+                                Optional. Only personnel with a supervisor role appear here.
                             </div>
                         </div>
 
-                        <!-- Additional Personnel Fields -->
                         <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label for="sanitation_vehicle_number" class="block mb-2 font-medium" style="color: var(--text-primary);">
@@ -675,10 +653,6 @@
                                 @error('sanitation_vehicle_number')
                                     <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                                 @enderror
-                                <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                    <i class="fas fa-info-circle mr-1"></i>
-                                    Required for drivers
-                                </div>
                             </div>
 
                             <div>
@@ -697,10 +671,6 @@
                                 @error('sanitation_vehicle_type')
                                     <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                                 @enderror
-                                <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                    <i class="fas fa-info-circle mr-1"></i>
-                                    Required for drivers
-                                </div>
                             </div>
                         </div>
 
@@ -716,10 +686,6 @@
                             @error('sanitation_emergency_contact')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
-                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                <i class="fas fa-info-circle mr-1"></i>
-                                Format: Name: Phone Number (e.g., John Doe: +233241234567)
-                            </div>
                         </div>
 
                         <div class="mt-4">
@@ -733,39 +699,9 @@
                             @error('sanitation_hire_date')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
-                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                <i class="fas fa-info-circle mr-1"></i>
-                                Defaults to today if not specified
-                            </div>
-                        </div>
-
-                        <!-- Sanitation Role Descriptions -->
-                        <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <div class="p-3 rounded-lg border" style="background-color: rgba(var(--info-rgb), 0.05); border-color: rgba(var(--info-rgb), 0.2);">
-                                <div class="flex items-center mb-1">
-                                    <i class="fas fa-user-tie mr-2" style="color: var(--primary);"></i>
-                                    <span class="font-semibold text-sm" style="color: var(--text-primary);">Supervisor</span>
-                                </div>
-                                <p class="text-xs" style="color: var(--text-secondary);">Manages workers and collection requests. Full access to personnel management.</p>
-                            </div>
-                            <div class="p-3 rounded-lg border" style="background-color: rgba(var(--info-rgb), 0.05); border-color: rgba(var(--info-rgb), 0.2);">
-                                <div class="flex items-center mb-1">
-                                    <i class="fas fa-user mr-2" style="color: var(--primary);"></i>
-                                    <span class="font-semibold text-sm" style="color: var(--text-primary);">Worker</span>
-                                </div>
-                                <p class="text-xs" style="color: var(--text-secondary);">Performs waste collection tasks. Can update request statuses.</p>
-                            </div>
-                            <div class="p-3 rounded-lg border" style="background-color: rgba(var(--info-rgb), 0.05); border-color: rgba(var(--info-rgb), 0.2);">
-                                <div class="flex items-center mb-1">
-                                    <i class="fas fa-truck mr-2" style="color: var(--primary);"></i>
-                                    <span class="font-semibold text-sm" style="color: var(--text-primary);">Driver</span>
-                                </div>
-                                <p class="text-xs" style="color: var(--text-secondary);">Operates collection vehicles. Can update location and request statuses.</p>
-                            </div>
                         </div>
                     </div>
 
-                    <!-- Info: What happens next -->
                     <div class="mt-4 p-4 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.2);">
                         <div class="flex items-start">
                             <i class="fas fa-info-circle mr-2 mt-0.5" style="color: var(--info);"></i>
@@ -775,7 +711,6 @@
                                     <li>• A sanitation personnel record will be created with the selected role</li>
                                     <li>• The user will have access to sanitation features based on their role</li>
                                     <li>• Supervisors can manage workers and collection requests</li>
-                                    <li>• Workers and drivers can perform collection tasks and update request statuses</li>
                                 </ul>
                             </div>
                         </div>
@@ -815,16 +750,13 @@
                                     </div>
                                     <div class="flex items-center">
                                         <i class="fas fa-check-circle mr-1" style="color: var(--success);"></i>
-                                        <span>Automatic fallback to email</span>
+                                        <span>Fallback when email available</span>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    {{-- ============================================================ --}}
-                    {{-- 🚨 ALL CHANNELS UNAVAILABLE BANNER --}}
-                    {{-- ============================================================ --}}
                     @if(!$anyChannelReady)
                     <div class="rounded p-4 border-l-4" style="background-color: rgba(var(--danger-rgb), 0.1); border-left-color: var(--danger);">
                         <div class="flex items-start">
@@ -833,100 +765,13 @@
                                 <h4 class="font-medium mb-1" style="color: var(--danger);">No Delivery Channels Available</h4>
                                 <p class="text-sm mb-2" style="color: var(--text-secondary);">
                                     None of the communication services (SMS, WhatsApp, Email) are configured.
-                                    Invitations cannot be sent until at least one channel is set up. You can still create the user
-                                    without an invitation.
+                                    You can still create the user without an invitation.
                                 </p>
-                                @if(auth()->user()->isAdmin())
-                                <div class="mt-2 flex flex-wrap gap-2">
-                                    <a href="{{ route('admin.system-settings.index') }}#whatsapp-configuration" class="btn-secondary btn-sm flex items-center">
-                                        <i class="fas fa-cog mr-2"></i> Configure WhatsApp
-                                    </a>
-                                    <a href="{{ route('admin.system-settings.index') }}#sms-configuration" class="btn-secondary btn-sm flex items-center">
-                                        <i class="fas fa-cog mr-2"></i> Configure SMS
-                                    </a>
-                                    <a href="{{ route('admin.email-config.index') }}" class="btn-secondary btn-sm flex items-center">
-                                        <i class="fas fa-cog mr-2"></i> Configure Email
-                                    </a>
-                                </div>
-                                @endif
                             </div>
                         </div>
                     </div>
                     @endif
 
-                    @if(!$whatsappReady && $anyChannelReady)
-                    <div class="rounded p-3 border-l-4" style="background-color: rgba(var(--warning-rgb), 0.1); border-left-color: var(--warning);">
-                        <div class="flex items-start">
-                            <i class="fab fa-whatsapp mr-2 mt-0.5" style="color: #25D366;"></i>
-                            <div class="flex-1">
-                                <h4 class="font-medium mb-1" style="color: var(--text-primary);">WhatsApp Service Not Available</h4>
-                                <p class="text-sm mb-2" style="color: var(--text-secondary);">
-                                    WhatsApp invitations cannot be sent. The system will automatically fall back to email if configured.
-                                </p>
-                                <div class="text-xs" style="color: var(--text-secondary);">
-                                    <strong>Current Status:</strong> {{ $whatsappStatus['health'] ?? 'Not Configured' }} - {{ $whatsappStatus['message'] ?? 'WhatsApp service not configured in system settings' }}
-                                </div>
-                                @if(auth()->user()->isAdmin())
-                                <div class="mt-2">
-                                    <a href="{{ route('admin.system-settings.index') }}#whatsapp-configuration" class="btn-primary btn-sm flex items-center w-fit">
-                                        <i class="fas fa-cog mr-2"></i> Configure WhatsApp Service
-                                    </a>
-                                </div>
-                                @endif
-                            </div>
-                        </div>
-                    </div>
-                    @endif
-
-                    @if(!$smsReady && $anyChannelReady)
-                    <div class="rounded p-3 border-l-4" style="background-color: rgba(var(--warning-rgb), 0.1); border-left-color: var(--warning);">
-                        <div class="flex items-start">
-                            <i class="fas fa-comment-alt mr-2 mt-0.5" style="color: var(--warning);"></i>
-                            <div class="flex-1">
-                                <h4 class="font-medium mb-1" style="color: var(--text-primary);">SMS Service Not Available</h4>
-                                <p class="text-sm mb-2" style="color: var(--text-secondary);">
-                                    SMS invitations cannot be sent. The system will automatically fall back to email if configured.
-                                </p>
-                                <div class="text-xs" style="color: var(--text-secondary);">
-                                    <strong>Current Status:</strong> {{ $smsStatus['health'] ?? 'Not Configured' }} - {{ $smsStatus['message'] ?? 'SMS service not configured in system settings' }}
-                                </div>
-                                @if(auth()->user()->isAdmin())
-                                <div class="mt-2">
-                                    <a href="{{ route('admin.system-settings.index') }}#sms-configuration" class="btn-primary btn-sm flex items-center w-fit">
-                                        <i class="fas fa-cog mr-2"></i> Configure SMS Service
-                                    </a>
-                                </div>
-                                @endif
-                            </div>
-                        </div>
-                    </div>
-                    @endif
-
-                    @if(!$emailReady && $anyChannelReady)
-                    <div class="rounded p-3 border-l-4" style="background-color: rgba(var(--warning-rgb), 0.1); border-left-color: var(--warning);">
-                        <div class="flex items-start">
-                            <i class="fas fa-exclamation-triangle mr-2 mt-0.5" style="color: var(--warning);"></i>
-                            <div class="flex-1">
-                                <h4 class="font-medium mb-1" style="color: var(--text-primary);">Email Service Limited</h4>
-                                <p class="text-sm mb-2" style="color: var(--text-secondary);">
-                                    Email invitations may have limited delivery. Ensure user has a valid email address.
-                                </p>
-                                <div class="text-xs" style="color: var(--text-secondary);">
-                                    <strong>Current Status:</strong> {{ $emailStatus['health'] ?? 'unknown' }} - {{ $emailStatus['message'] ?? 'Email service not configured' }}
-                                </div>
-                                @if(auth()->user()->isAdmin())
-                                <div class="mt-2">
-                                    <a href="{{ route('admin.email-config.index') }}" class="btn-primary btn-sm flex items-center w-fit">
-                                        <i class="fas fa-cog mr-2"></i> Configure Email Service
-                                    </a>
-                                </div>
-                                @endif
-                            </div>
-                        </div>
-                    </div>
-                    @endif
-
-                    <!-- Invitation Toggle -->
                     <div class="mb-6">
                         <label class="block text-sm font-medium mb-3" style="color: var(--text-primary);">
                             Send Invitation to User
@@ -981,14 +826,10 @@
                         </div>
                     </div>
 
-                    <!-- Invitation Configuration -->
                     <div id="invitation-method-container" class="hidden space-y-6">
                         <div id="invitation-channels-section" class="hidden">
                             <label class="block mb-2 font-medium" style="color: var(--text-primary);">Invitation Channels *</label>
                             <div class="grid grid-cols-2 md:grid-cols-3 gap-3" id="invitation-channels-options">
-                                {{-- ============================================================ --}}
-                                {{-- SMS CHANNEL --}}
-                                {{-- ============================================================ --}}
                                 <label class="flex items-center p-3 border rounded cursor-pointer transition-all duration-200 invitation-channel-option {{ !$smsReady ? 'channel-disabled' : '' }}"
                                        style="background-color: {{ $smsReady ? 'var(--bg-secondary)' : 'rgba(var(--secondary-rgb), 0.1)' }}; border-color: var(--border-color);"
                                        data-channel="sms"
@@ -1009,9 +850,6 @@
                                     </div>
                                 </label>
 
-                                {{-- ============================================================ --}}
-                                {{-- WHATSAPP CHANNEL --}}
-                                {{-- ============================================================ --}}
                                 <label class="flex items-center p-3 border rounded cursor-pointer transition-all duration-200 invitation-channel-option {{ !$whatsappReady ? 'channel-disabled' : '' }}"
                                        style="background-color: {{ $whatsappReady ? 'var(--bg-secondary)' : 'rgba(var(--secondary-rgb), 0.1)' }}; border-color: var(--border-color);"
                                        data-channel="whatsapp"
@@ -1032,9 +870,6 @@
                                     </div>
                                 </label>
 
-                                {{-- ============================================================ --}}
-                                {{-- EMAIL CHANNEL --}}
-                                {{-- ============================================================ --}}
                                 <label class="flex items-center p-3 border rounded cursor-pointer transition-all duration-200 invitation-channel-option {{ !$emailReady ? 'channel-disabled' : '' }}"
                                        style="background-color: {{ $emailReady ? 'var(--bg-secondary)' : 'rgba(var(--secondary-rgb), 0.1)' }}; border-color: var(--border-color);"
                                        data-channel="email"
@@ -1054,48 +889,6 @@
                                         </div>
                                     </div>
                                 </label>
-                            </div>
-
-                            <div class="mt-3 p-3 rounded border" style="background-color: rgba(var(--info-rgb), 0.1); border-color: rgba(var(--info-rgb), 0.3);">
-                                <div class="text-sm" style="color: var(--text-primary);">
-                                    <i class="fas fa-info-circle mr-2" style="color: var(--info);"></i>
-                                    <span>Select one or more channels. SMS/WhatsApp will automatically fallback to email if needed.</span>
-                                </div>
-                            </div>
-
-                            <div id="email-service-details" class="mt-3 p-3 rounded border" style="background-color: rgba(var(--info-rgb), 0.1); border-color: rgba(var(--info-rgb), 0.3);">
-                                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                                    <div class="flex items-center">
-                                        <i class="fas fa-server mr-2" style="color: var(--info);"></i>
-                                        <div>
-                                            <span class="font-medium" style="color: var(--text-secondary);">Provider:</span>
-                                            <span class="ml-1" style="color: var(--text-primary);">{{ $emailStatus['provider'] ?? 'Unknown' }}</span>
-                                        </div>
-                                    </div>
-                                    <div class="flex items-center">
-                                        <i class="fas fa-heartbeat mr-2" style="color: {{ ($emailStatus['health'] ?? '') === 'healthy' ? 'var(--success)' : (($emailStatus['health'] ?? '') === 'degraded' ? 'var(--warning)' : 'var(--danger)') }};"></i>
-                                        <div>
-                                            <span class="font-medium" style="color: var(--text-secondary);">Status:</span>
-                                            <span class="ml-1 capitalize {{ ($emailStatus['health'] ?? '') === 'healthy' ? 'text-green-600' : (($emailStatus['health'] ?? '') === 'degraded' ? 'text-yellow-600' : 'text-red-600') }}">
-                                                {{ $emailStatus['health'] ?? 'unknown' }}
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <div class="flex items-center">
-                                        <i class="fas fa-chart-line mr-2" style="color: var(--info);"></i>
-                                        <div>
-                                            <span class="font-medium" style="color: var(--text-secondary);">Success Rate:</span>
-                                            <span class="ml-1" style="color: var(--text-primary);">{{ $emailStatus['statistics']['success_rate'] ?? 0 }}%</span>
-                                        </div>
-                                    </div>
-                                    <div class="flex items-center">
-                                        <i class="fas fa-envelope-open mr-2" style="color: var(--info);"></i>
-                                        <div>
-                                            <span class="font-medium" style="color: var(--text-secondary);">Today's Usage:</span>
-                                            <span class="ml-1" style="color: var(--text-primary);">{{ $emailStatus['limits']['daily_limit']['used_today'] ?? 0 }}/{{ $emailStatus['limits']['daily_limit']['max_emails_per_day'] ?? 0 }}</span>
-                                        </div>
-                                    </div>
-                                </div>
                             </div>
                         </div>
 
@@ -1132,7 +925,7 @@
                                       style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                       id="invitation_message" name="invitation_message"
                                       rows="4"
-                                      placeholder="Add a custom welcome message to the invitation (optional). You can include instructions, contact information, or specific details about the user's role."
+                                      placeholder="Add a custom welcome message to the invitation (optional)."
                                       maxlength="1000">{{ old('invitation_message') }}</textarea>
                             <div class="flex justify-between items-center mt-1">
                                 <div class="text-sm" style="color: var(--text-secondary);">
@@ -1156,8 +949,7 @@
                                     <i class="fas fa-envelope" style="color: var(--info);"></i>
                                 </div>
                             </div>
-                            <div class="rounded p-3 text-sm font-mono whitespace-pre-wrap" id="invitation-preview-content" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
-                            </div>
+                            <div class="rounded p-3 text-sm font-mono whitespace-pre-wrap" id="invitation-preview-content" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"></div>
                             <div class="mt-2 text-xs" style="color: var(--text-secondary);">
                                 <i class="fas fa-info-circle mr-1"></i>
                                 <span id="invitation-preview-note">This preview shows the invitation that will be sent to the user</span>
@@ -1189,7 +981,7 @@
                             </li>
                             <li class="flex items-center">
                                 <i class="fas fa-redo-alt mr-2 text-xs" style="color: var(--info);"></i>
-                                <strong>Automatic Fallback:</strong> SMS/WhatsApp failures fallback to email
+                                <strong>Fallback Delivery:</strong> SMS/WhatsApp failures fall back to email when the user has one
                             </li>
                         </ul>
                     </div>
@@ -1210,7 +1002,7 @@
                                 <h4 class="font-semibold text-sm" style="color: var(--text-primary);">SMS Fallback</h4>
                             </div>
                             <p class="text-xs" style="color: var(--text-secondary);">
-                                If SMS fails, system automatically attempts email delivery as fallback.
+                                If SMS fails, system automatically attempts email delivery as fallback (requires user email).
                             </p>
                         </div>
 
@@ -1220,7 +1012,7 @@
                                 <h4 class="font-semibold text-sm" style="color: var(--text-primary);">WhatsApp Fallback</h4>
                             </div>
                             <p class="text-xs" style="color: var(--text-secondary);">
-                                If WhatsApp fails, system automatically attempts email delivery as fallback.
+                                If WhatsApp fails, system automatically attempts email delivery as fallback (requires user email).
                             </p>
                         </div>
 
@@ -1267,9 +1059,7 @@
             <!-- Form Actions -->
             <div class="card p-6">
                 <div class="flex justify-between items-center">
-                    <div class="text-sm" style="color: var(--text-secondary);" id="form-status">
-                        <!-- Form status messages will appear here -->
-                    </div>
+                    <div class="text-sm" style="color: var(--text-secondary);" id="form-status"></div>
                     <div class="flex space-x-4">
                         <button type="submit" class="btn-primary flex items-center" id="submit-button">
                             <i class="fas fa-save mr-2"></i> Create User
@@ -1283,168 +1073,256 @@
 </div>
 @endsection
 
-{{-- ============================================================ --}}
-{{-- SCRIPTS — pushed to layout's @stack('scripts') so they render --}}
-{{-- AFTER the layout's own scripts, in the correct order. --}}
-{{-- ============================================================ --}}
 @push('scripts')
 <script>
-// Reset form function for "Create Another User" button
+const ROLE_SLUG_BY_TYPE  = @json($roleSlugByType);
+const ROLE_LABEL_BY_SLUG = @json($roleLabelBySlug);
+
+/**
+ * Inject the correct Spatie role slug for the selected user type.
+ */
+function syncAutoRoleInput() {
+    const typeSelect = document.getElementById('type');
+    const container  = document.getElementById('auto-role-container');
+    const indicator  = document.getElementById('auto-role-indicator');
+    const labelSpan  = document.getElementById('auto-role-label');
+
+    if (!typeSelect || !container) return;
+
+    container.innerHTML = '';
+
+    const selectedType = typeSelect.value;
+
+    if (!selectedType || !ROLE_SLUG_BY_TYPE[selectedType]) {
+        if (indicator) indicator.classList.add('hidden');
+        return;
+    }
+
+    const slug = ROLE_SLUG_BY_TYPE[selectedType];
+
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'roles[]';
+    input.value = slug;
+    input.dataset.autoAssigned = '1';
+    container.appendChild(input);
+
+    if (indicator && labelSpan) {
+        labelSpan.textContent = ROLE_LABEL_BY_SLUG[slug] || slug;
+        indicator.classList.remove('hidden');
+    }
+
+    console.log('[auto-role] type=' + selectedType + ' → roles[]=' + slug);
+}
+
 function resetForm() {
     const form = document.getElementById('user-form');
-    if (form) {
-        form.querySelectorAll('input:not([type="hidden"]), select, textarea').forEach(field => {
-            // Never touch disabled fields (channel checkboxes for unavailable services)
-            if (field.disabled) return;
-            if (field.type !== 'checkbox' && field.type !== 'radio') {
-                field.value = '';
-            } else if (field.type === 'checkbox' || field.type === 'radio') {
-                field.checked = false;
-            }
-        });
+    if (!form) return;
 
-        const statusSelect = document.getElementById('status');
-        if (statusSelect) statusSelect.value = 'active';
-
-        const sendInvitationNo = document.getElementById('send_invitation_no');
-        if (sendInvitationNo) sendInvitationNo.checked = true;
-
-        const typeSelect = document.getElementById('type');
-        if (typeSelect) typeSelect.dispatchEvent(new Event('change'));
-
-        const sendInvitationNoEvent = document.getElementById('send_invitation_no');
-        if (sendInvitationNoEvent) sendInvitationNoEvent.dispatchEvent(new Event('change'));
-
-        // Reset security supervisor toggle
-        const securityCheckbox = document.getElementById('security_can_be_supervisor');
-        const securityToggleCheckbox = document.getElementById('security_can_be_supervisor_toggle');
-        if (securityCheckbox && securityToggleCheckbox) {
-            securityCheckbox.checked = false;
-            securityToggleCheckbox.checked = false;
-            const toggleBtn = document.getElementById('security-supervisor-toggle-btn');
-            if (toggleBtn) toggleBtn.click();
+    form.querySelectorAll('input:not([type="hidden"]), select, textarea').forEach(field => {
+        if (field.disabled) return;
+        if (field.type !== 'checkbox' && field.type !== 'radio') {
+            field.value = '';
+        } else {
+            field.checked = false;
         }
+    });
 
-        // Reset sanitation supervisor toggle
-        const sanitationCheckbox = document.getElementById('sanitation_can_be_supervisor');
-        const sanitationToggleCheckbox = document.getElementById('sanitation_can_be_supervisor_toggle');
-        if (sanitationCheckbox && sanitationToggleCheckbox) {
-            sanitationCheckbox.checked = false;
-            sanitationToggleCheckbox.checked = false;
-            const toggleBtn = document.getElementById('sanitation-supervisor-toggle-btn');
-            if (toggleBtn) toggleBtn.click();
-        }
+    const statusSelect = document.getElementById('status');
+    if (statusSelect) statusSelect.value = 'active';
 
-        // Reset sanitation personnel fields
-        const sanitationRoleSelect = document.getElementById('sanitation_personnel_role');
-        if (sanitationRoleSelect) sanitationRoleSelect.value = 'supervisor';
+    const sendInvitationNo = document.getElementById('send_invitation_no');
+    if (sendInvitationNo) sendInvitationNo.checked = true;
 
-        const sanitationStatusSelect = document.getElementById('sanitation_personnel_status');
-        if (sanitationStatusSelect) sanitationStatusSelect.value = 'active';
-
-        const sanitationVehicleNumber = document.getElementById('sanitation_vehicle_number');
-        if (sanitationVehicleNumber) sanitationVehicleNumber.value = '';
-
-        const sanitationVehicleType = document.getElementById('sanitation_vehicle_type');
-        if (sanitationVehicleType) sanitationVehicleType.value = '';
-
-        const sanitationEmergencyContact = document.getElementById('sanitation_emergency_contact');
-        if (sanitationEmergencyContact) sanitationEmergencyContact.value = '';
-
-        const sanitationSupervisorSelect = document.getElementById('sanitation_supervisor_id');
-        if (sanitationSupervisorSelect) sanitationSupervisorSelect.value = '';
-
-        const successMessage = document.querySelector('[style*="border-left-color: var(--success);"]');
-        if (successMessage) successMessage.remove();
-
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+    const typeSelect = document.getElementById('type');
+    if (typeSelect) {
+        typeSelect.dispatchEvent(new Event('change'));
+        syncAutoRoleInput();
     }
+
+    if (sendInvitationNo) sendInvitationNo.dispatchEvent(new Event('change'));
+
+    // Reset security supervisor toggle
+    const securityCheckbox       = document.getElementById('security_can_be_supervisor');
+    const securityToggleCheckbox = document.getElementById('security_can_be_supervisor_toggle');
+    if (securityCheckbox && securityToggleCheckbox) {
+        securityCheckbox.checked       = false;
+        securityToggleCheckbox.checked = false;
+        const toggleBtn = document.getElementById('security-supervisor-toggle-btn');
+        if (toggleBtn) toggleBtn.click();
+    }
+
+    const securityCerts = document.getElementById('security_supervisor_certifications');
+    if (securityCerts) securityCerts.value = '';
+
+    // Reset sanitation supervisor toggle + fields
+    const sanitationCheckbox       = document.getElementById('sanitation_can_be_supervisor');
+    const sanitationToggleCheckbox = document.getElementById('sanitation_can_be_supervisor_toggle');
+    if (sanitationCheckbox && sanitationToggleCheckbox) {
+        sanitationCheckbox.checked       = false;
+        sanitationToggleCheckbox.checked = false;
+        const toggleBtn = document.getElementById('sanitation-supervisor-toggle-btn');
+        if (toggleBtn) toggleBtn.click();
+    }
+
+    const sanitationRoleSelect = document.getElementById('sanitation_personnel_role');
+    if (sanitationRoleSelect) sanitationRoleSelect.value = 'supervisor';
+
+    const sanitationStatusSelect = document.getElementById('sanitation_personnel_status');
+    if (sanitationStatusSelect) sanitationStatusSelect.value = 'active';
+
+    const sanitationVehicleNumber = document.getElementById('sanitation_vehicle_number');
+    if (sanitationVehicleNumber) sanitationVehicleNumber.value = '';
+
+    const sanitationVehicleType = document.getElementById('sanitation_vehicle_type');
+    if (sanitationVehicleType) sanitationVehicleType.value = '';
+
+    const sanitationEmergencyContact = document.getElementById('sanitation_emergency_contact');
+    if (sanitationEmergencyContact) sanitationEmergencyContact.value = '';
+
+    const sanitationSupervisorSelect = document.getElementById('sanitation_supervisor_id');
+    if (sanitationSupervisorSelect) sanitationSupervisorSelect.value = '';
+
+    const successMessage = document.querySelector('[style*="border-left-color: var(--success);"]');
+    if (successMessage) successMessage.remove();
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('Initializing user creation form with channel-availability gating...');
+    console.log('Initializing user creation form (simplified supervisor model)...');
 
-    // Service status from backend
-    const smsSystemReady = {{ $smsReady ? 'true' : 'false' }};
+    const smsSystemReady      = {{ $smsReady ? 'true' : 'false' }};
     const whatsappSystemReady = {{ $whatsappReady ? 'true' : 'false' }};
-    const emailSystemReady = {{ $emailReady ? 'true' : 'false' }};
-    const anyChannelReady = smsSystemReady || whatsappSystemReady || emailSystemReady;
+    const emailSystemReady    = {{ $emailReady ? 'true' : 'false' }};
+    const anyChannelReady     = smsSystemReady || whatsappSystemReady || emailSystemReady;
 
-    // Elements - Invitation & Password
-    const sendInvitationYes = document.getElementById('send_invitation_yes');
-    const sendInvitationNo = document.getElementById('send_invitation_no');
+    const sendInvitationYes         = document.getElementById('send_invitation_yes');
+    const sendInvitationNo          = document.getElementById('send_invitation_no');
     const invitationMethodContainer = document.getElementById('invitation-method-container');
     const invitationChannelsSection = document.getElementById('invitation-channels-section');
-    const passwordSection = document.getElementById('password-section');
-    const passwordNotice = document.getElementById('password-notice');
-    const passwordInput = document.getElementById('password');
+    const passwordSection           = document.getElementById('password-section');
+    const passwordNotice            = document.getElementById('password-notice');
+    const passwordInput             = document.getElementById('password');
     const passwordConfirmationInput = document.getElementById('password_confirmation');
-    const statusSelect = document.getElementById('status');
-    const formStatus = document.getElementById('form-status');
-    const emailInput = document.getElementById('email');
-    const phoneInput = document.getElementById('phone');
-    const emailFallbackInfo = document.getElementById('email-fallback-info');
-    const smsFallbackWarning = document.getElementById('sms-fallback-warning');
-    const typeSelect = document.getElementById('type');
+    const statusSelect              = document.getElementById('status');
+    const formStatus                = document.getElementById('form-status');
+    const emailInput                = document.getElementById('email');
+    const phoneInput                = document.getElementById('phone');
+    const emailFallbackInfo         = document.getElementById('email-fallback-info');
+    const smsFallbackWarning        = document.getElementById('sms-fallback-warning');
+    const typeSelect                = document.getElementById('type');
+    const autoVerifyEmail           = document.getElementById('auto_verify_email');
 
-    // Security personnel elements
-    const securitySection = document.getElementById('security-supervisor-section');
-    const securityToggleBtn = document.getElementById('security-supervisor-toggle-btn');
-    const securityCheckbox = document.getElementById('security_can_be_supervisor');
-    const securityToggleCheckbox = document.getElementById('security_can_be_supervisor_toggle');
+    // Security elements
+    const securitySection         = document.getElementById('security-supervisor-section');
+    const securityToggleBtn       = document.getElementById('security-supervisor-toggle-btn');
+    const securityCheckbox        = document.getElementById('security_can_be_supervisor');
+    const securityToggleCheckbox  = document.getElementById('security_can_be_supervisor_toggle');
     const securitySettingsContent = document.getElementById('security-supervisor-settings-content');
-    const securityRoleSection = document.getElementById('security-supervisor-role-section');
-    const securityPersonnelType = {{ \App\Models\User::TYPE_SECURITY_PERSONNEL ?? 3 }};
+    const securityPersonnelType   = {{ \App\Models\User::TYPE_SECURITY_PERSONNEL ?? 6 }};
 
-    // Sanitation personnel elements
-    const sanitationSection = document.getElementById('sanitation-supervisor-section');
-    const sanitationToggleBtn = document.getElementById('sanitation-supervisor-toggle-btn');
-    const sanitationCheckbox = document.getElementById('sanitation_can_be_supervisor');
-    const sanitationToggleCheckbox = document.getElementById('sanitation_can_be_supervisor_toggle');
+    // Sanitation elements
+    const sanitationSection         = document.getElementById('sanitation-supervisor-section');
+    const sanitationToggleBtn       = document.getElementById('sanitation-supervisor-toggle-btn');
+    const sanitationCheckbox        = document.getElementById('sanitation_can_be_supervisor');
+    const sanitationToggleCheckbox  = document.getElementById('sanitation_can_be_supervisor_toggle');
     const sanitationSettingsContent = document.getElementById('sanitation-supervisor-settings-content');
-    const sanitationRoleSection = document.getElementById('sanitation-supervisor-role-section');
-    const sanitationPersonnelType = {{ \App\Models\User::TYPE_SANITATION_PERSONNEL ?? 2 }};
+    const sanitationRoleSection     = document.getElementById('sanitation-supervisor-role-section');
+    const sanitationPersonnelType   = {{ \App\Models\User::TYPE_SANITATION_PERSONNEL ?? 9 }};
 
-    // ================================================================ //
-    // ========== SECURITY SUPERVISOR FUNCTIONS ========== //
-    // ================================================================ //
+    // Auto-role sync
+    if (typeSelect) {
+        syncAutoRoleInput();
+        typeSelect.addEventListener('change', syncAutoRoleInput);
+    }
+
+    function validateEmail(email) {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+
+    function syncAutoVerifyEmailState() {
+        if (!autoVerifyEmail) return;
+        const hasEmail = (emailInput?.value || '').trim().length > 0;
+        if (!hasEmail) {
+            autoVerifyEmail.checked = false;
+            autoVerifyEmail.setAttribute('disabled', 'disabled');
+            const hint = document.getElementById('auto-verify-email-hint');
+            if (hint) hint.innerHTML = '<i class="fas fa-info-circle mr-1"></i>Enter an email above to enable';
+        } else {
+            autoVerifyEmail.removeAttribute('disabled');
+            const hint = document.getElementById('auto-verify-email-hint');
+            if (hint) hint.innerHTML = '<i class="fas fa-info-circle mr-1"></i>Email will be marked as verified immediately';
+        }
+    }
+
+    function syncEmailChannelAvailability() {
+        const emailCheckbox = document.querySelector('input[name="invitation_channels[]"][value="email"]');
+        if (!emailCheckbox) return;
+
+        const emailOption = emailCheckbox.closest('.invitation-channel-option');
+        if (!emailSystemReady) return;
+
+        const userEmail    = (emailInput?.value || '').trim();
+        const emailIsValid = userEmail && validateEmail(userEmail);
+
+        if (!emailIsValid) {
+            emailCheckbox.disabled = true;
+            emailCheckbox.checked  = false;
+            if (emailOption) {
+                emailOption.classList.add('channel-disabled');
+                emailOption.setAttribute('aria-disabled', 'true');
+                emailOption.style.opacity = '0.55';
+                emailOption.style.cursor  = 'not-allowed';
+            }
+        } else {
+            emailCheckbox.disabled = false;
+            if (emailOption) {
+                emailOption.classList.remove('channel-disabled');
+                emailOption.removeAttribute('aria-disabled');
+                emailOption.style.opacity = '1';
+                emailOption.style.cursor  = 'pointer';
+            }
+        }
+    }
+
+    // ===== Security supervisor toggle =====
     function toggleSecuritySupervisorSection() {
-        if (typeSelect && securitySection) {
-            if (typeSelect.value == securityPersonnelType) {
-                securitySection.style.display = 'block';
-            } else {
-                securitySection.style.display = 'none';
-                if (securityToggleBtn && securityCheckbox) {
-                    setSecuritySupervisorToggleState(false);
-                }
+        if (!typeSelect || !securitySection) return;
+        if (typeSelect.value == securityPersonnelType) {
+            securitySection.style.display = 'block';
+        } else {
+            securitySection.style.display = 'none';
+            if (securityToggleBtn && securityCheckbox) {
+                setSecuritySupervisorToggleState(false);
             }
         }
     }
 
     function setSecuritySupervisorToggleState(enabled) {
-        if (securityCheckbox) securityCheckbox.checked = enabled;
-        if (securityToggleCheckbox) securityToggleCheckbox.checked = enabled;
+        if (securityCheckbox)        securityCheckbox.checked       = enabled;
+        if (securityToggleCheckbox)  securityToggleCheckbox.checked = enabled;
+
+        if (!securityToggleBtn || !securitySettingsContent) return;
 
         if (enabled) {
             securityToggleBtn.style.backgroundColor = 'var(--success)';
-            securityToggleBtn.style.borderColor = 'var(--success)';
-            securityToggleBtn.style.color = 'white';
-            securityToggleBtn.style.boxShadow = '0 2px 8px rgba(var(--success-rgb), 0.3)';
+            securityToggleBtn.style.borderColor     = 'var(--success)';
+            securityToggleBtn.style.color           = 'white';
+            securityToggleBtn.style.boxShadow       = '0 2px 8px rgba(var(--success-rgb), 0.3)';
             securityToggleBtn.querySelector('i').className = 'fas fa-toggle-on mr-2 text-lg';
             securityToggleBtn.querySelector('.toggle-text').textContent = 'Eligible';
             securityToggleBtn.querySelector('.toggle-indicator').className = 'ml-2 w-2 h-2 rounded-full bg-white toggle-indicator';
             securitySettingsContent.classList.remove('opacity-50', 'pointer-events-none');
-            securityRoleSection.classList.remove('hidden');
         } else {
             securityToggleBtn.style.backgroundColor = 'var(--bg-secondary)';
-            securityToggleBtn.style.borderColor = 'var(--border-color)';
-            securityToggleBtn.style.color = 'var(--text-secondary)';
-            securityToggleBtn.style.boxShadow = 'none';
+            securityToggleBtn.style.borderColor     = 'var(--border-color)';
+            securityToggleBtn.style.color           = 'var(--text-secondary)';
+            securityToggleBtn.style.boxShadow       = 'none';
             securityToggleBtn.querySelector('i').className = 'fas fa-toggle-off mr-2 text-lg';
             securityToggleBtn.querySelector('.toggle-text').textContent = 'Not Eligible';
             securityToggleBtn.querySelector('.toggle-indicator').className = 'ml-2 w-2 h-2 rounded-full bg-gray-400 toggle-indicator';
             securitySettingsContent.classList.add('opacity-50', 'pointer-events-none');
-            securityRoleSection.classList.add('hidden');
         }
     }
 
@@ -1455,38 +1333,36 @@ document.addEventListener('DOMContentLoaded', function() {
             setSecuritySupervisorToggleState(!securityCheckbox.checked);
         });
     }
-
     if (securityToggleCheckbox) {
         securityToggleCheckbox.addEventListener('change', function() {
             setSecuritySupervisorToggleState(this.checked);
         });
     }
 
-    // ================================================================ //
-    // ========== SANITATION FUNCTIONS ========== //
-    // ================================================================ //
+    // ===== Sanitation toggle =====
     function toggleSanitationSection() {
-        if (typeSelect && sanitationSection) {
-            if (typeSelect.value == sanitationPersonnelType) {
-                sanitationSection.style.display = 'block';
-            } else {
-                sanitationSection.style.display = 'none';
-                if (sanitationToggleBtn && sanitationCheckbox) {
-                    setSanitationToggleState(false);
-                }
+        if (!typeSelect || !sanitationSection) return;
+        if (typeSelect.value == sanitationPersonnelType) {
+            sanitationSection.style.display = 'block';
+        } else {
+            sanitationSection.style.display = 'none';
+            if (sanitationToggleBtn && sanitationCheckbox) {
+                setSanitationToggleState(false);
             }
         }
     }
 
     function setSanitationToggleState(enabled) {
-        if (sanitationCheckbox) sanitationCheckbox.checked = enabled;
+        if (sanitationCheckbox)       sanitationCheckbox.checked       = enabled;
         if (sanitationToggleCheckbox) sanitationToggleCheckbox.checked = enabled;
+
+        if (!sanitationToggleBtn || !sanitationSettingsContent) return;
 
         if (enabled) {
             sanitationToggleBtn.style.backgroundColor = 'var(--success)';
-            sanitationToggleBtn.style.borderColor = 'var(--success)';
-            sanitationToggleBtn.style.color = 'white';
-            sanitationToggleBtn.style.boxShadow = '0 2px 8px rgba(var(--success-rgb), 0.3)';
+            sanitationToggleBtn.style.borderColor     = 'var(--success)';
+            sanitationToggleBtn.style.color           = 'white';
+            sanitationToggleBtn.style.boxShadow       = '0 2px 8px rgba(var(--success-rgb), 0.3)';
             sanitationToggleBtn.querySelector('i').className = 'fas fa-toggle-on mr-2 text-lg';
             sanitationToggleBtn.querySelector('.toggle-text').textContent = 'Enabled';
             sanitationToggleBtn.querySelector('.toggle-indicator').className = 'ml-2 w-2 h-2 rounded-full bg-white toggle-indicator';
@@ -1494,9 +1370,9 @@ document.addEventListener('DOMContentLoaded', function() {
             sanitationRoleSection.classList.remove('hidden');
         } else {
             sanitationToggleBtn.style.backgroundColor = 'var(--bg-secondary)';
-            sanitationToggleBtn.style.borderColor = 'var(--border-color)';
-            sanitationToggleBtn.style.color = 'var(--text-secondary)';
-            sanitationToggleBtn.style.boxShadow = 'none';
+            sanitationToggleBtn.style.borderColor     = 'var(--border-color)';
+            sanitationToggleBtn.style.color           = 'var(--text-secondary)';
+            sanitationToggleBtn.style.boxShadow       = 'none';
             sanitationToggleBtn.querySelector('i').className = 'fas fa-toggle-off mr-2 text-lg';
             sanitationToggleBtn.querySelector('.toggle-text').textContent = 'Disabled';
             sanitationToggleBtn.querySelector('.toggle-indicator').className = 'ml-2 w-2 h-2 rounded-full bg-gray-400 toggle-indicator';
@@ -1512,16 +1388,12 @@ document.addEventListener('DOMContentLoaded', function() {
             setSanitationToggleState(!sanitationCheckbox.checked);
         });
     }
-
     if (sanitationToggleCheckbox) {
         sanitationToggleCheckbox.addEventListener('change', function() {
             setSanitationToggleState(this.checked);
         });
     }
 
-    // ================================================================ //
-    // ========== TYPE SELECT CHANGE HANDLER ========== //
-    // ================================================================ //
     if (typeSelect) {
         typeSelect.addEventListener('change', function() {
             toggleSecuritySupervisorSection();
@@ -1531,81 +1403,7 @@ document.addEventListener('DOMContentLoaded', function() {
         toggleSanitationSection();
     }
 
-    // ================================================================ //
-    // ========== INVITATION SYSTEM ========== //
-    // ================================================================ //
-    initializeServiceStatus();
-    initializeInvitationSystem();
-    initializeFallbackSystem();
-
-    function initializeServiceStatus() {
-        updateInvitationChannelAvailability();
-    }
-
-    /**
-     * Enforce channel availability purely from the *server-rendered* state.
-     *
-     * IMPORTANT: We do NOT re-enable a checkbox that the server disabled
-     * (that would let an admin select a channel whose service is down).
-     * We only *tighten* the UI: if the server disabled it, we ensure it's
-     * unchecked and its parent card is visually marked as disabled.
-     */
-    function updateInvitationChannelAvailability() {
-        const channelCheckboxes = document.querySelectorAll('input[name="invitation_channels[]"]');
-
-        channelCheckboxes.forEach(checkbox => {
-            const channel = checkbox.value;
-            let isAvailable = false;
-
-            switch (channel) {
-                case 'sms':      isAvailable = smsSystemReady;      break;
-                case 'whatsapp': isAvailable = whatsappSystemReady; break;
-                case 'email':    isAvailable = emailSystemReady;    break;
-            }
-
-            const option = checkbox.closest('.invitation-channel-option');
-            if (!option) return;
-
-            if (!isAvailable) {
-                // Force-disable & uncheck — the server likely already did,
-                // but keep this as a belt-and-braces measure.
-                checkbox.disabled = true;
-                checkbox.checked = false;
-                option.classList.add('channel-disabled');
-                option.setAttribute('aria-disabled', 'true');
-                option.style.opacity = '0.5';
-                option.style.cursor = 'not-allowed';
-                option.style.backgroundColor = 'rgba(var(--secondary-rgb), 0.1)';
-            } else {
-                // Only re-enable if the server rendered it as enabled.
-                // (Server-side disabled attribute is the source of truth.)
-                if (!option.hasAttribute('data-server-disabled')) {
-                    checkbox.disabled = false;
-                    option.classList.remove('channel-disabled');
-                    option.removeAttribute('aria-disabled');
-                    option.style.opacity = '1';
-                    option.style.cursor = 'pointer';
-                    option.style.backgroundColor = 'var(--bg-secondary)';
-                }
-            }
-        });
-    }
-
-    function validateEmail(email) {
-        const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        return re.test(email);
-    }
-
-    function initializeInvitationSystem() {
-        if (sendInvitationYes && sendInvitationNo) {
-            sendInvitationYes.addEventListener('change', toggleInvitationOptions);
-            sendInvitationNo.addEventListener('change', toggleInvitationOptions);
-            toggleInvitationOptions();
-        }
-        setupInvitationChannels();
-        setupInvitationEvents();
-    }
-
+    // ===== Invitation system =====
     function toggleInvitationOptions() {
         if (sendInvitationYes && sendInvitationYes.checked) {
             invitationMethodContainer.classList.remove('hidden');
@@ -1626,253 +1424,18 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         updateRadioVisualState(sendInvitationYes);
         updateRadioVisualState(sendInvitationNo);
-        updateInvitationPreview();
-        updateFallbackSystem();
     }
 
-    function setupInvitationChannels() {
-        const channelCheckboxes = document.querySelectorAll('input[name="invitation_channels[]"]');
-        channelCheckboxes.forEach(checkbox => {
-            updateChannelVisualState(checkbox);
-            checkbox.addEventListener('change', function() {
-                updateChannelVisualState(this);
-                updateInvitationPreview();
-                updateFallbackSystem();
-            });
-        });
-
-        document.querySelectorAll('.invitation-channel-option').forEach(option => {
-            option.addEventListener('click', function(e) {
-                // Ignore clicks on already-disabled cards
-                if (this.classList.contains('channel-disabled') ||
-                    this.style.opacity === '0.5') {
-                    return;
-                }
-                if (e.target.type === 'checkbox') return;
-                const checkbox = this.querySelector('input[type="checkbox"]');
-                if (checkbox && !checkbox.disabled) {
-                    checkbox.checked = !checkbox.checked;
-                    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            });
-        });
-    }
-
-    function updateChannelVisualState(checkbox) {
-        const option = checkbox.closest('.invitation-channel-option');
-        if (!option) return;
-        if (checkbox.disabled) return; // never style disabled cards as "selected"
-        if (checkbox.checked) {
-            option.style.borderColor = 'var(--primary)';
-            option.style.backgroundColor = 'rgba(var(--primary-rgb), 0.05)';
-            option.classList.add('channel-selected');
-        } else {
-            option.style.borderColor = 'var(--border-color)';
-            option.style.backgroundColor = 'var(--bg-secondary)';
-            option.classList.remove('channel-selected');
-        }
+    function updateRadioVisualState(radio) {
+        if (!radio) return;
+        const option = radio.closest('.modern-radio-option');
+        if (option) option.classList.toggle('modern-radio-option--checked', radio.checked);
     }
 
     function getSelectedChannels() {
         return Array.from(document.querySelectorAll('input[name="invitation_channels[]"]:checked'))
             .filter(cb => !cb.disabled)
             .map(cb => cb.value);
-    }
-
-    function setupInvitationEvents() {
-        const nameInput = document.getElementById('name');
-        const invitationTypeSelect = document.getElementById('invitation_type');
-        const invitationMessage = document.getElementById('invitation_message');
-
-        if (nameInput) nameInput.addEventListener('input', updateInvitationPreview);
-        if (emailInput) emailInput.addEventListener('input', function() {
-            updateInvitationPreview();
-            updateFallbackSystem();
-        });
-        if (phoneInput) phoneInput.addEventListener('input', function() {
-            updateInvitationPreview();
-            updateFallbackSystem();
-        });
-        if (invitationTypeSelect) invitationTypeSelect.addEventListener('change', updateInvitationPreview);
-        if (invitationMessage) {
-            invitationMessage.addEventListener('input', function() {
-                updateCharCount();
-                updateInvitationPreview();
-            });
-        }
-    }
-
-    function updateCharCount() {
-        const invitationMessage = document.getElementById('invitation_message');
-        const charCount = document.getElementById('char-count');
-        if (invitationMessage && charCount) {
-            const length = invitationMessage.value.length;
-            charCount.textContent = length;
-            charCount.style.color = length > 950 ? 'var(--danger)'
-                : length > 900 ? 'var(--warning)'
-                : 'var(--text-secondary)';
-        }
-    }
-
-    function updateInvitationPreview() {
-        const invitationPreviewContainer = document.getElementById('invitation-preview-container');
-        const invitationPreviewContent = document.getElementById('invitation-preview-content');
-        const invitationChannelBadge = document.getElementById('invitation-channel-badge');
-        const invitationPreviewNote = document.getElementById('invitation-preview-note');
-
-        if (!sendInvitationYes || !sendInvitationYes.checked) {
-            if (invitationPreviewContainer) invitationPreviewContainer.classList.add('hidden');
-            return;
-        }
-
-        const selectedChannels = getSelectedChannels();
-        if (selectedChannels.length === 0) {
-            if (invitationPreviewContainer) invitationPreviewContainer.classList.add('hidden');
-            return;
-        }
-
-        const name = document.getElementById('name')?.value || 'User';
-        const email = emailInput?.value || 'user@example.com';
-        const phone = phoneInput?.value || '';
-        const invitationType = document.getElementById('invitation_type')?.value || 'welcome';
-        const customMessage = document.getElementById('invitation_message')?.value || '';
-
-        let invitationContent = '';
-        switch (invitationType) {
-            case 'welcome':
-                invitationContent = `👋 Hello ${name}!\n\n🎉 You've been invited to join our platform!\n\nYour account has been created. Please set up your password to activate your account.\n\n`;
-                break;
-            case 'registration':
-                invitationContent = `👋 Hello ${name}!\n\n📋 Account Registration\n\nYour registration is complete. Please set your password to finalize your account setup.\n\n`;
-                break;
-            case 'account_setup':
-                invitationContent = `👋 Hello ${name}!\n\n⚙️ Account Setup Required\n\nPlease complete your account setup by creating your password.\n\n`;
-                break;
-            case 'password_setup':
-                invitationContent = `👋 Hello ${name}!\n\n🔐 Password Setup Required\n\nPlease set your password to activate your account.\n\n`;
-                break;
-        }
-
-        invitationContent += `📧 Email: ${email}\n`;
-        if (phone) invitationContent += `📱 Phone: ${phone}\n`;
-        invitationContent += `📨 Delivery Channel(s): ${selectedChannels.map(c => c.toUpperCase()).join(', ')}\n\n`;
-        if (customMessage) invitationContent += `💬 Message:\n${customMessage}\n\n`;
-        invitationContent += `🔐 SECURE INVITATION LINK WILL BE SENT VIA SELECTED CHANNELS`;
-
-        if (invitationPreviewContent) invitationPreviewContent.textContent = invitationContent;
-        if (invitationPreviewContainer) invitationPreviewContainer.classList.remove('hidden');
-        if (invitationChannelBadge) invitationChannelBadge.textContent = selectedChannels.map(c => c.toUpperCase()).join(' + ');
-        if (invitationPreviewNote) {
-            invitationPreviewNote.textContent = selectedChannels.includes('sms') || selectedChannels.includes('whatsapp')
-                ? 'SMS/WhatsApp invitations will automatically fallback to email if delivery fails.'
-                : 'This invitation will be sent via the selected channels.';
-        }
-        updateFormStatus();
-    }
-
-    function updateFormStatus() {
-        if (!formStatus) return;
-
-        const selectedChannels = getSelectedChannels();
-        const userEmail = emailInput?.value.trim() || '';
-        const isEmailValid = userEmail && validateEmail(userEmail);
-
-        let statusMessage = '';
-        if (selectedChannels.length > 0) {
-            statusMessage = `User will be created with invitation sent via ${selectedChannels.map(c => c.toUpperCase()).join(', ')}.`;
-        } else {
-            statusMessage = anyChannelReady
-                ? 'Select invitation channels to send invitation.'
-                : 'No delivery channels available. User will be created without invitation.';
-        }
-
-        const serviceWarnings = [];
-        if (selectedChannels.includes('sms') && !smsSystemReady) serviceWarnings.push('SMS service not available');
-        if (selectedChannels.includes('whatsapp') && !whatsappSystemReady) serviceWarnings.push('WhatsApp service not available');
-        if (selectedChannels.includes('email') && !emailSystemReady) serviceWarnings.push('Email service limited');
-
-        if (selectedChannels.some(c => ['sms', 'whatsapp'].includes(c)) && isEmailValid && emailSystemReady) {
-            statusMessage += ` ┄ Will fallback to email if needed.`;
-        }
-
-        if (serviceWarnings.length > 0) statusMessage += ` ⚠️ ${serviceWarnings.join(', ')}`;
-
-        formStatus.innerHTML = `<div class="flex items-center"><i class="fas ${selectedChannels.length > 0 ? 'fa-user-check text-green-600' : 'fa-exclamation-triangle text-yellow-600'} mr-2"></i><span>${statusMessage}</span></div>`;
-    }
-
-    function updateRadioVisualState(radio) {
-        if (!radio) return;
-        const option = radio.closest('.modern-radio-option');
-        if (option) {
-            if (radio.checked) option.classList.add('modern-radio-option--checked');
-            else option.classList.remove('modern-radio-option--checked');
-        }
-    }
-
-    function initializeFallbackSystem() {
-        if (emailInput) emailInput.addEventListener('input', function() { validateEmailForFallback(this.value); updateFallbackSystem(); });
-        if (phoneInput) phoneInput.addEventListener('input', function() { validatePhoneForFallback(this.value); updateFallbackSystem(); });
-        updateFallbackSystem();
-    }
-
-    function validateEmailForFallback(email) {
-        const isValid = validateEmail(email);
-        const emailValidIcon = document.getElementById('email-valid-icon');
-        const emailInvalidIcon = document.getElementById('email-invalid-icon');
-        if (emailValidIcon && emailInvalidIcon) {
-            if (isValid) { emailValidIcon.classList.remove('hidden'); emailInvalidIcon.classList.add('hidden'); }
-            else if (email.length > 0) { emailValidIcon.classList.add('hidden'); emailInvalidIcon.classList.remove('hidden'); }
-            else { emailValidIcon.classList.add('hidden'); emailInvalidIcon.classList.add('hidden'); }
-        }
-        return isValid;
-    }
-
-    function validatePhoneForFallback(phone) {
-        const phoneValidIcon = document.getElementById('phone-valid-icon');
-        const phoneInvalidIcon = document.getElementById('phone-invalid-icon');
-        const isValid = phone.length >= 10;
-        if (phoneValidIcon && phoneInvalidIcon) {
-            if (isValid) { phoneValidIcon.classList.remove('hidden'); phoneInvalidIcon.classList.add('hidden'); }
-            else if (phone.length > 0) { phoneValidIcon.classList.add('hidden'); phoneInvalidIcon.classList.remove('hidden'); }
-            else { phoneValidIcon.classList.add('hidden'); phoneInvalidIcon.classList.add('hidden'); }
-        }
-        return isValid;
-    }
-
-    function updateFallbackSystem() {
-        const userEmail = emailInput?.value.trim() || '';
-        const userPhone = phoneInput?.value.trim() || '';
-        const isEmailValid = validateEmail(userEmail);
-        const isPhoneValid = userPhone.length >= 10;
-        const selectedChannels = getSelectedChannels();
-
-        if (emailFallbackInfo) {
-            emailFallbackInfo.innerHTML = isEmailValid && emailSystemReady
-                ? '<i class="fas fa-shield-alt mr-1 text-green-500"></i><span>Email ready for fallback delivery</span>'
-                : '<i class="fas fa-exclamation-triangle mr-1 text-amber-500"></i><span>Valid email required for fallback delivery</span>';
-        }
-
-        const smsOrWhatsappSelected = selectedChannels.some(c => ['sms', 'whatsapp'].includes(c));
-        if (smsFallbackWarning) {
-            if (smsOrWhatsappSelected && isPhoneValid && (!isEmailValid || !emailSystemReady)) {
-                smsFallbackWarning.classList.remove('hidden');
-                smsFallbackWarning.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> ${!isEmailValid ? 'No valid email for fallback' : 'Email service unavailable for fallback'}`;
-            } else {
-                smsFallbackWarning.classList.add('hidden');
-            }
-        }
-
-        const fallbackDeliveryInfo = document.getElementById('fallback-delivery-info');
-        if (fallbackDeliveryInfo) {
-            if (smsOrWhatsappSelected && isEmailValid && emailSystemReady) fallbackDeliveryInfo.classList.remove('hidden');
-            else fallbackDeliveryInfo.classList.add('hidden');
-        }
-
-        const emailServiceDetails = document.getElementById('email-service-details');
-        if (emailServiceDetails) {
-            if (selectedChannels.includes('email')) emailServiceDetails.classList.remove('hidden');
-            else emailServiceDetails.classList.add('hidden');
-        }
     }
 
     function validateForm() {
@@ -1886,405 +1449,151 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Please select at least one invitation channel.');
                 return false;
             }
-
-            if (selectedChannels.includes('email') && !isEmailValid) {
-                alert('Valid email address is required for email invitations.');
+            if (selectedChannels.includes('email') && (!userEmail || !isEmailValid)) {
+                alert('Please enter a valid email address for the email invitation channel.');
                 emailInput.focus();
                 return false;
             }
-
             if ((selectedChannels.includes('whatsapp') || selectedChannels.includes('sms')) && !userPhone) {
                 alert('Phone number is required for SMS/WhatsApp invitations.');
                 phoneInput.focus();
                 return false;
             }
-
-            // Defence in depth: even if a disabled channel slipped through,
-            // reject it here.
             for (const ch of selectedChannels) {
-                if (ch === 'sms' && !smsSystemReady) { alert('SMS service is not available.'); return false; }
+                if (ch === 'sms'      && !smsSystemReady)      { alert('SMS service is not available.');      return false; }
                 if (ch === 'whatsapp' && !whatsappSystemReady) { alert('WhatsApp service is not available.'); return false; }
-                if (ch === 'email' && !emailSystemReady) { alert('Email service is not available.'); return false; }
+                if (ch === 'email'    && !emailSystemReady)    { alert('Email service is not available.');    return false; }
             }
         }
         return true;
     }
 
+    if (sendInvitationYes && sendInvitationNo) {
+        sendInvitationYes.addEventListener('change', toggleInvitationOptions);
+        sendInvitationNo.addEventListener('change', toggleInvitationOptions);
+        toggleInvitationOptions();
+    }
+
+    if (emailInput) {
+        emailInput.addEventListener('input', function() {
+            syncAutoVerifyEmailState();
+            syncEmailChannelAvailability();
+        });
+    }
+
+    syncAutoVerifyEmailState();
+    syncEmailChannelAvailability();
+
     const form = document.getElementById('user-form');
     if (form) {
         form.addEventListener('submit', function(e) {
+            const typeSelectEl = document.getElementById('type');
+            const container    = document.getElementById('auto-role-container');
+            const selectedType = typeSelectEl?.value;
+
+            if (selectedType && ROLE_SLUG_BY_TYPE[selectedType]) {
+                const roleInputs = container?.querySelectorAll('input[name="roles[]"]') || [];
+                if (roleInputs.length === 0) {
+                    console.warn('[auto-role] roles[] missing at submit — re-injecting');
+                    syncAutoRoleInput();
+                }
+            }
             if (!validateForm()) e.preventDefault();
         });
     }
 
-    updateCharCount();
-    console.log('User creation form initialization complete (channel gating active)');
+    console.log('User creation form ready (simplified supervisor model).');
 });
 </script>
 @endpush
 
-{{-- ============================================================ --}}
-{{-- STYLES — pushed to layout's @stack('styles') so they render in --}}
-{{-- <head>, scoped, and don't leak into the header/sidebar. --}}
-{{-- ============================================================ --}}
 @push('styles')
 <style>
-/* ============================================================ */
-/* CHANNEL AVAILABILITY STYLING                                  */
-/* ============================================================ */
-
-.invitation-channel-option {
-    transition: all 0.3s ease;
-    cursor: pointer;
-    position: relative;
-}
-
-.invitation-channel-option:hover:not(.channel-disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    border-color: var(--primary);
-}
-
-/* Disabled/unavailable channel — greyed out, non-interactive */
-.invitation-channel-option.channel-disabled {
-    cursor: not-allowed !important;
-    opacity: 0.55;
-    background-color: rgba(var(--secondary-rgb), 0.08) !important;
-    border-style: dashed !important;
-    position: relative;
-}
-
-.invitation-channel-option.channel-disabled::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image: repeating-linear-gradient(
-        45deg,
-        rgba(0, 0, 0, 0.03),
-        rgba(0, 0, 0, 0.03) 10px,
-        transparent 10px,
-        transparent 20px
-    );
-    pointer-events: none;
-    border-radius: inherit;
-}
-
-.invitation-channel-option.channel-disabled input {
-    cursor: not-allowed;
-}
-
-.invitation-channel-option.channel-disabled .text-green-600,
-.invitation-channel-option.channel-disabled .text-red-600 {
-    font-weight: 600;
-}
-
-/* Disabled send-invitation radio card */
-.modern-radio-option--disabled {
-    opacity: 0.55;
-    cursor: not-allowed !important;
-}
-
-.modern-radio-option--disabled .modern-radio-label {
-    cursor: not-allowed;
-}
-
-.channel-selected {
-    border-color: var(--primary) !important;
-    background-color: rgba(var(--primary-rgb), 0.05) !important;
-}
-
-/* WhatsApp specific styling */
-.fa-whatsapp {
-    color: #25D366;
-}
-
-/* Channel availability colors */
-.text-green-600 { color: #16a34a; }
-.text-red-600   { color: #dc2626; }
-.text-yellow-600{ color: #ca8a04; }
-.text-blue-600  { color: #2563eb; }
-
-/* Email service details styling */
-#email-service-details {
-    border-left: 4px solid var(--info);
-}
-
-/* Fallback delivery info styling */
-#fallback-delivery-info {
-    border-left: 4px solid var(--info);
-}
-
-/* Invitation preview styling */
-#invitation-preview-content {
-    font-family: 'Courier New', monospace;
-    line-height: 1.4;
-    max-height: 200px;
-    overflow-y: auto;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-}
-
-/* Modern Radio Button Styles */
-.modern-radio-option {
-    position: relative;
-    transition: all 0.3s ease;
-    border: 2px solid var(--border-color);
-    border-radius: 12px;
-    background-color: var(--bg-secondary);
-    cursor: pointer;
-    overflow: hidden;
-}
-
-.modern-radio-option:hover:not(.modern-radio-option--disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-    border-color: var(--primary);
-}
-
-.modern-radio-option--checked {
-    border-color: var(--primary) !important;
-    background: linear-gradient(135deg, rgba(114, 103, 240, 0.1), rgba(114, 103, 240, 0.05)) !important;
-    box-shadow: 0 8px 25px rgba(114, 103, 240, 0.15) !important;
-    transform: translateY(-2px);
-}
-
-.modern-radio-input {
-    position: absolute;
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
-.modern-radio-label {
-    display: block;
-    cursor: pointer;
-    padding: 0;
-    margin: 0;
-}
-
-.modern-radio-content {
-    display: flex;
-    align-items: center;
-    padding: 20px;
-    position: relative;
-}
-
-.modern-radio-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 16px;
-    font-size: 20px;
-    transition: all 0.3s ease;
-    background: var(--bg-tertiary);
-}
-
-.modern-radio-option--checked .modern-radio-icon {
-    background: linear-gradient(135deg, var(--primary), var(--secondary)) !important;
-    color: white !important;
-    transform: scale(1.1);
-}
-
-.modern-radio-text { flex: 1; }
-
-.modern-radio-title {
-    font-weight: 600;
-    font-size: 16px;
-    color: var(--text-primary);
-    margin-bottom: 4px;
-}
-
-.modern-radio-description {
-    font-size: 14px;
-    color: var(--text-secondary);
-    line-height: 1.4;
-}
-
-.modern-radio-check {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    border: 2px solid var(--border-color);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.3s ease;
-    background: white;
-}
-
-.modern-radio-option--checked .modern-radio-check {
-    background: var(--primary) !important;
-    border-color: var(--primary) !important;
-    color: white !important;
-    transform: scale(1.1);
-}
-
-.modern-radio-check i {
-    font-size: 12px;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-}
-
-.modern-radio-option--checked .modern-radio-check i {
-    opacity: 1 !important;
-}
-
-/* ========== SUPERVISOR TOGGLE BUTTON STYLES ========== */
-#security-supervisor-toggle-btn,
-#sanitation-supervisor-toggle-btn {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-}
-
-#security-supervisor-toggle-btn:hover,
-#sanitation-supervisor-toggle-btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-#security-supervisor-toggle-btn:active,
-#sanitation-supervisor-toggle-btn:active {
-    transform: translateY(0);
-}
-
-#security-supervisor-toggle-btn .toggle-indicator,
-#sanitation-supervisor-toggle-btn .toggle-indicator {
-    transition: all 0.3s ease;
-}
-
-#security-supervisor-toggle-btn:hover .toggle-indicator,
-#sanitation-supervisor-toggle-btn:hover .toggle-indicator {
-    transform: scale(1.2);
-}
-
-/* ========== MODERN TOGGLE SWITCH STYLES ========== */
-.toggle-modern {
-    position: relative;
-    display: inline-block;
-    width: 50px;
-    height: 26px;
-}
-
-.toggle-modern input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
-.toggle-slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: #d1d5db;
-    border: 2px solid #d1d5db;
-    transition: .4s;
-    border-radius: 34px;
-}
-
-.toggle-slider:before {
-    position: absolute;
-    content: "";
-    height: 18px;
-    width: 18px;
-    left: 2px;
-    bottom: 2px;
-    background-color: white;
-    transition: .4s;
-    border-radius: 50%;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-.toggle-modern input:checked + .toggle-slider {
-    background-color: var(--success);
-    border-color: var(--success);
-}
-
-.toggle-modern input:checked + .toggle-slider:before {
-    transform: translateX(24px);
-}
-
-.toggle-modern input:focus + .toggle-slider {
-    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.3);
-}
-
-/* Dark mode toggle styles */
-[data-theme="dark"] .toggle-slider {
-    background-color: #4b5563;
-    border-color: #4b5563;
-}
-
-[data-theme="dark"] .toggle-slider:before {
-    background-color: #e5e7eb;
-}
-
-[data-theme="dark"] #security-supervisor-toggle-btn:not([style*="background-color: var(--success)"]),
-[data-theme="dark"] #sanitation-supervisor-toggle-btn:not([style*="background-color: var(--success)"]) {
-    background-color: #2d3748 !important;
-    border-color: #4a5568 !important;
-    color: #a0aec0 !important;
-}
-
-[data-theme="dark"] #security-supervisor-toggle-btn:not([style*="background-color: var(--success)"]) .toggle-indicator,
-[data-theme="dark"] #sanitation-supervisor-toggle-btn:not([style*="background-color: var(--success)"]) .toggle-indicator {
-    background-color: #a0aec0 !important;
-}
-
-[data-theme="dark"] .invitation-channel-option.channel-disabled {
-    background-color: rgba(255, 255, 255, 0.03) !important;
-    border-color: #374151 !important;
-}
-
-/* ========== SCOPED .hidden OVERRIDE ========== */
-/* Previously this was a global `.hidden { display: none !important; }`
- * which leaked out of this view and forcibly hid the header's search bar.
- * Now it's scoped to only the elements this page controls. */
+/* Scoped .hidden override (does not leak into layout header) */
 #invitation-method-container.hidden,
 #invitation-channels-section.hidden,
 #password-section.hidden,
 #password-notice.hidden,
 #invitation-preview-container.hidden,
 #fallback-delivery-info.hidden,
-#email-service-details.hidden,
-#security-supervisor-role-section.hidden,
+#security-supervisor-settings-content.hidden,
 #sanitation-supervisor-role-section.hidden,
 #email-valid-icon.hidden,
 #email-invalid-icon.hidden,
 #phone-valid-icon.hidden,
-#phone-invalid-icon.hidden {
+#phone-invalid-icon.hidden,
+#auto-role-indicator.hidden {
     display: none !important;
 }
 
-/* Responsive design */
-@media (max-width: 768px) {
-    .grid.grid-cols-1.md\:grid-cols-2 { grid-template-columns: 1fr; }
-    .grid.grid-cols-1.md\:grid-cols-3 { grid-template-columns: 1fr; }
-    .grid.grid-cols-2.md\:grid-cols-3 { grid-template-columns: 1fr; }
-
-    .modern-radio-content { padding: 16px; }
-    .modern-radio-icon { width: 40px; height: 40px; font-size: 18px; margin-right: 12px; }
-    .modern-radio-title { font-size: 14px; }
-    .modern-radio-description { font-size: 12px; }
-
-    #security-supervisor-toggle-btn,
-    #sanitation-supervisor-toggle-btn {
-        padding: 0.25rem 0.75rem;
-        font-size: 12px;
-    }
-
-    .toggle-modern { width: 40px; height: 20px; }
-    .toggle-slider:before { height: 14px; width: 14px; left: 1px; bottom: 1px; }
-    .toggle-modern input:checked + .toggle-slider:before { transform: translateX(20px); }
+.invitation-channel-option.channel-disabled {
+    cursor: not-allowed !important;
+    opacity: 0.55;
+    background-color: rgba(var(--secondary-rgb), 0.08) !important;
+    border-style: dashed !important;
 }
 
-/* Focus styles — scoped so it doesn't affect header elements */
+.modern-radio-option--disabled {
+    opacity: 0.55;
+    cursor: not-allowed !important;
+}
+
+.toggle-modern {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 26px;
+}
+.toggle-modern input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: #d1d5db;
+    border: 2px solid #d1d5db;
+    transition: .4s;
+    border-radius: 34px;
+}
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px; width: 18px;
+    left: 2px; bottom: 2px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.toggle-modern input:checked + .toggle-slider {
+    background-color: var(--success);
+    border-color: var(--success);
+}
+.toggle-modern input:checked + .toggle-slider:before {
+    transform: translateX(24px);
+}
+
+#security-supervisor-toggle-btn,
+#sanitation-supervisor-toggle-btn {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#security-supervisor-toggle-btn:hover,
+#sanitation-supervisor-toggle-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+#auto-role-indicator {
+    padding: 6px 10px;
+    border-radius: 6px;
+    background-color: rgba(var(--primary-rgb), 0.08);
+    border-left: 3px solid var(--primary);
+    animation: role-fade-in 0.3s ease-out;
+}
+@keyframes role-fade-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
 #user-form input:focus,
 #user-form select:focus,
 #user-form textarea:focus {
@@ -2293,24 +1602,8 @@ document.addEventListener('DOMContentLoaded', function() {
     box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);
 }
 
-.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
-
-/* Loading state */
-#submit-button.loading { opacity: 0.7; cursor: not-allowed; }
-#submit-button.loading i { animation: spin 1s linear infinite; }
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
-}
-
-/* Accessibility improvements */
 @media (prefers-reduced-motion: reduce) {
-    * {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
-    }
+    * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 </style>
 @endpush

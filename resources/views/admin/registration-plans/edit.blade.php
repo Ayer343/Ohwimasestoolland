@@ -5,21 +5,13 @@
 @php
     /*
      |--------------------------------------------------------------------------
-     | Communication-channel availability
+     | Communication-channel availability (mirrors the controller)
      |--------------------------------------------------------------------------
-     | Priority for each channel:
-     |   1. The status array passed by the controller (preferred).
-     |   2. A live service call, if the variable wasn't passed.
-     |   3. A per-service fallback key (e.g. `configured`) when
-     |      `system_ready` is missing or null.
-     |
-     | NOTE: the codebase has THREE different key conventions:
-     |   - SmsService::getSystemStatus()                 → `system_ready`
-     |   - WhatsAppService::getSystemStatus()            → `system_ready`
-     |   - SystemSetting::getEmailConfigurationStatus()  → `configured`
+     | NOTE: No arrow functions anywhere in this block — Blade's @php
+     | directive feeds the body directly into the compiled view and some
+     | PHP builds choke on `fn ($x) => ...` inside that context.
      */
 
-    // ---------- SMS ----------
     if (!isset($smsStatus) || !is_array($smsStatus)) {
         try {
             $smsStatus = app(\App\Services\SmsService::class)->getSystemStatus();
@@ -33,8 +25,13 @@
         ?? $smsStatus['ready']
         ?? false
     );
+    $smsStatus['system_ready'] = $smsReady;
+    $smsStatus['can_send']     = $smsStatus['can_send'] ?? $smsReady;
+    $smsStatus['health']       = $smsStatus['health']  ?? ($smsReady ? 'healthy' : 'degraded');
+    $smsStatus['message']      = $smsStatus['message'] ?? ($smsReady
+        ? 'SMS service is operational'
+        : 'SMS service is not configured or not ready');
 
-    // ---------- WhatsApp ----------
     if (!isset($whatsappStatus) || !is_array($whatsappStatus)) {
         try {
             $whatsappStatus = app(\App\Services\WhatsAppService::class)->getSystemStatus();
@@ -48,12 +45,16 @@
         ?? $whatsappStatus['configured']
         ?? false
     );
+    $whatsappStatus['system_ready'] = $whatsappReady;
+    $whatsappStatus['can_send']     = $whatsappStatus['can_send'] ?? $whatsappReady;
+    $whatsappStatus['health']       = $whatsappStatus['health']  ?? ($whatsappReady ? 'healthy' : 'not_configured');
+    $whatsappStatus['message']      = $whatsappStatus['message'] ?? ($whatsappReady
+        ? 'WhatsApp service is operational'
+        : 'WhatsApp service is not configured');
 
-    // ---------- Email ----------
     if (!isset($emailStatus) || !is_array($emailStatus)) {
         try {
-            $emailStatus = \App\Models\SystemSetting::getSettings()
-                ->getEmailConfigurationStatus();
+            $emailStatus = \App\Models\SystemSetting::getSettings()->getEmailConfigurationStatus();
             if (!is_array($emailStatus)) {
                 $emailStatus = [];
             }
@@ -61,72 +62,104 @@
             $emailStatus = [];
         }
     }
-
     $emailReady = (bool) (
         $emailStatus['system_ready']
         ?? $emailStatus['can_send']
         ?? $emailStatus['configured']
         ?? false
     );
-
-    // Normalize so downstream markup / JS always sees a consistent shape.
     $emailStatus['system_ready'] = $emailReady;
-    $emailStatus['can_send']     = $emailReady;
-    if (!isset($emailStatus['health'])) {
-        $emailStatus['health'] = $emailReady ? 'healthy' : 'degraded';
-    }
-    if (!isset($emailStatus['message'])) {
-        $emailStatus['message'] = $emailReady
-            ? 'Email service is operational'
-            : 'Email service is not configured or not ready';
-    }
-    if (!isset($emailStatus['provider'])) {
-        $emailStatus['provider'] = $emailStatus['system_email'] ?? 'N/A';
-    }
+    $emailStatus['can_send']     = $emailStatus['can_send'] ?? $emailReady;
+    $emailStatus['configured']   = $emailStatus['configured'] ?? $emailReady;
+    $emailStatus['health']       = $emailStatus['health']  ?? ($emailReady ? 'healthy' : 'degraded');
+    $emailStatus['message']      = $emailStatus['message'] ?? ($emailReady
+        ? 'Email service is operational'
+        : 'Email service is not configured or not ready');
+    $emailStatus['provider']     = $emailStatus['provider'] ?? ($emailStatus['system_email'] ?? 'N/A');
 
-    // ---------- Rollup ----------
     $anyChannelReady = $smsReady || $whatsappReady || $emailReady;
+
+    // ---------- Channel filter helper (no arrow functions) ----------
+    if (!function_exists('_regPlanFilterReadyChannels')) {
+        function _regPlanFilterReadyChannels($channels, $smsReady, $whatsappReady, $emailReady)
+        {
+            $out = [];
+            foreach ((array) $channels as $c) {
+                if ($c === 'sms'      && $smsReady)      { $out[] = $c; }
+                if ($c === 'whatsapp' && $whatsappReady) { $out[] = $c; }
+                if ($c === 'email'    && $emailReady)    { $out[] = $c; }
+            }
+            return array_values(array_unique($out));
+        }
+    }
 
     $oldInvitationChannels = old('invitation_channels', []);
     if (!is_array($oldInvitationChannels)) {
         $oldInvitationChannels = [];
     }
-    $oldInvitationChannels = array_values(array_filter(
-        $oldInvitationChannels,
-        function ($c) use ($smsReady, $whatsappReady, $emailReady) {
-            if ($c === 'sms')      return $smsReady;
-            if ($c === 'whatsapp') return $whatsappReady;
-            if ($c === 'email')    return $emailReady;
-            return false;
-        }
-    ));
+    $oldInvitationChannels = _regPlanFilterReadyChannels(
+        $oldInvitationChannels, $smsReady, $whatsappReady, $emailReady
+    );
 
     /*
      |--------------------------------------------------------------------------
-     | FIX: status select stale-old-input guard
+     | Status select — trust the DB unless the request explicitly downgraded
      |--------------------------------------------------------------------------
-     | If the last submission errored, old('status') may be 'draft' even
-     | though the DB now holds 'assigned' (or vice versa). Trust the DB
-     | unless the requested value is a deliberate downgrade by the admin.
-     |
-     | Priority:
-     |   1. If validation errors exist AND old('status') is one of the
-     |      allowed values, use old('status').
-     |   2. Otherwise use the DB value.
      */
     $allowedStatuses = ['draft', 'assigned', 'in_progress'];
-
     $dbStatus = $registrationPlan->status;
     if (!in_array($dbStatus, $allowedStatuses, true)) {
         $dbStatus = 'draft';
     }
-
     $requestedOldStatus = old('status');
     $statusValue = $dbStatus;
-
     if ($errors->any() && $requestedOldStatus && in_array($requestedOldStatus, $allowedStatuses, true)) {
         $statusValue = $requestedOldStatus;
     }
+
+    /*
+     |--------------------------------------------------------------------------
+     | Active agent pre-loading (avoid N+1 in the blade loops)
+     |--------------------------------------------------------------------------
+     */
+    $existingAssignments = $registrationPlan->assignedAgents->where('is_active', true)->values();
+    $existingAssignmentsCount = $existingAssignments->count();
+
+    $assignedAgentIdSet = $existingAssignments->pluck('agent_id')->all();
+    $assignedAgentIdSetLookup = array_flip($assignedAgentIdSet);
+
+    // Per-row channel preselection for multi-agent
+    $rowChannelsByIndex = [];
+    foreach ($existingAssignments as $idx => $assignment) {
+        $fromOld = old("agent_invitation_channels.{$idx}", []);
+        if (!is_array($fromOld) || empty($fromOld)) {
+            $fromOld = is_array($registrationPlan->invitation_channels)
+                ? $registrationPlan->invitation_channels
+                : [];
+        }
+        $rowChannelsByIndex[$idx] = _regPlanFilterReadyChannels(
+            $fromOld, $smsReady, $whatsappReady, $emailReady
+        );
+    }
+
+    // Preselect single-mode channel checkboxes from last saved invitation
+    // OR from old() input — never clobber a user's failed submission.
+    if (empty($oldInvitationChannels)) {
+        $dbChannels = is_array($registrationPlan->invitation_channels)
+            ? $registrationPlan->invitation_channels
+            : [];
+        $oldInvitationChannels = _regPlanFilterReadyChannels(
+            $dbChannels, $smsReady, $whatsappReady, $emailReady
+        );
+    }
+
+    // JSON payloads for JS (precomputed — never @json() with arrow functions)
+    $channelsPayload = [
+        'sms'      => $smsReady,
+        'whatsapp' => $whatsappReady,
+        'email'    => $emailReady,
+    ];
+    $assignedAgentIdsPayload = $assignedAgentIdSet;
 @endphp
 
 @section('content')
@@ -136,23 +169,17 @@
         <div class="flex justify-between items-center p-6">
             <h2 class="text-xl font-semibold" style="color: var(--text-primary);">Edit Registration Plan</h2>
             <div class="flex items-center space-x-3">
-                <!-- Communication Service Status Indicators -->
                 <div class="flex items-center space-x-2">
-                    <!-- WhatsApp Status Indicator -->
                     <div class="flex items-center px-3 py-1 rounded-full text-sm font-medium"
                          style="background-color: {{ $whatsappReady ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--warning-rgb), 0.1)' }}; color: {{ $whatsappReady ? 'var(--success)' : 'var(--warning)' }};">
                         <i class="fab fa-whatsapp mr-1"></i>
                         WhatsApp: {{ $whatsappReady ? 'Ready' : 'Limited' }}
                     </div>
-
-                    <!-- SMS Status Indicator -->
                     <div class="flex items-center px-3 py-1 rounded-full text-sm font-medium"
                          style="background-color: {{ $smsReady ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--warning-rgb), 0.1)' }}; color: {{ $smsReady ? 'var(--success)' : 'var(--warning)' }};">
                         <i class="fas fa-comment-alt mr-1"></i>
                         SMS: {{ $smsReady ? 'Ready' : 'Limited' }}
                     </div>
-
-                    <!-- Email Status Indicator -->
                     <div class="flex items-center px-3 py-1 rounded-full text-sm font-medium"
                          style="background-color: {{ $emailReady ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--warning-rgb), 0.1)' }}; color: {{ $emailReady ? 'var(--success)' : 'var(--warning)' }};">
                         <i class="fas {{ $emailReady ? 'fa-envelope' : 'fa-envelope-open' }} mr-1"></i>
@@ -170,7 +197,7 @@
         </div>
     </div>
 
-    <form action="{{ route('registration-plans.update', $registrationPlan->id) }}" method="POST" id="registration-plan-form">
+    <form action="{{ route('registration-plans.update', $registrationPlan->id) }}" method="POST" id="registration-plan-form" novalidate>
         @csrf
         @method('PUT')
 
@@ -218,7 +245,7 @@
                 </div>
             @endif
 
-            <!-- Enhanced Communication System Status Card -->
+            <!-- Communication System Status Card -->
             <div class="card p-6 border-l-4" style="border-left-color: var(--success);">
                 <div class="flex items-start">
                     <i class="fas fa-comments text-xl mr-3 mt-1" style="color: var(--success);"></i>
@@ -228,9 +255,7 @@
                             Invitation links will be sent automatically via the channels you select.
                         </p>
 
-                        <!-- Enhanced Service Status Grid -->
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                            <!-- WhatsApp Status Card -->
                             <div class="p-4 rounded border" style="background-color: rgba(var(--success-rgb), 0.05); border-color: {{ $whatsappReady ? 'var(--success)' : 'var(--warning)' }};">
                                 <div class="flex items-center mb-2">
                                     <i class="fab fa-whatsapp mr-2 text-lg" style="color: #25D366;"></i>
@@ -256,7 +281,6 @@
                                 </div>
                             </div>
 
-                            <!-- SMS Status Card -->
                             <div class="p-4 rounded border" style="background-color: rgba(var(--info-rgb), 0.05); border-color: {{ $smsReady ? 'var(--info)' : 'var(--warning)' }};">
                                 <div class="flex items-center mb-2">
                                     <i class="fas fa-comment-alt mr-2 text-lg" style="color: var(--info);"></i>
@@ -280,7 +304,6 @@
                                 </div>
                             </div>
 
-                            <!-- Email Status Card -->
                             <div class="p-4 rounded border" style="background-color: rgba(var(--primary-rgb), 0.05); border-color: {{ $emailReady ? 'var(--primary)' : 'var(--warning)' }};">
                                 <div class="flex items-center mb-2">
                                     <i class="fas fa-envelope mr-2 text-lg" style="color: var(--primary);"></i>
@@ -305,7 +328,6 @@
                             </div>
                         </div>
 
-                        <!-- Overall System Status -->
                         <div class="flex items-center justify-between p-3 rounded" style="background-color: rgba(var(--success-rgb), 0.05);">
                             <div class="flex items-center">
                                 <i class="fas fa-signal mr-2" style="color: var(--success);"></i>
@@ -334,9 +356,9 @@
                         <select class="w-full p-2 border rounded @error('agent_assignment_type') border-red-500 @enderror"
                                 style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                 id="agent_assignment_type" name="agent_assignment_type" required
-                                @if(!$registrationPlan->can_be_edited) disabled @endif>
-                            <option value="single" {{ old('agent_assignment_type', $registrationPlan->agent_assignment_type) == 'single' ? 'selected' : '' }}>Single Agent</option>
-                            <option value="multiple" {{ old('agent_assignment_type', $registrationPlan->agent_assignment_type) == 'multiple' ? 'selected' : '' }}>Multiple Agents</option>
+                                @disabled(!$registrationPlan->can_be_edited)>
+                            <option value="single" @selected(old('agent_assignment_type', $registrationPlan->agent_assignment_type) == 'single')>Single Agent</option>
+                            <option value="multiple" @selected(old('agent_assignment_type', $registrationPlan->agent_assignment_type) == 'multiple')>Multiple Agents</option>
                         </select>
                         <p class="text-sm mt-1" style="color: var(--text-secondary);">
                             <i class="fas fa-info-circle mr-1"></i>
@@ -365,7 +387,7 @@
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                    id="zone" name="zone" value="{{ old('zone', $registrationPlan->zone) }}" required
                                    placeholder="e.g., Zone A, North Sector"
-                                   @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                   @disabled(!$registrationPlan->can_be_edited)>
                             @error('zone')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
@@ -376,7 +398,7 @@
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                    id="section" name="section" value="{{ old('section', $registrationPlan->section) }}"
                                    placeholder="e.g., Section 1, Residential Block"
-                                   @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                   @disabled(!$registrationPlan->can_be_edited)>
                             @error('section')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
@@ -387,7 +409,7 @@
                                       style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                       id="boundaries_description" name="boundaries_description" rows="3"
                                       placeholder="Describe the physical boundaries of this area..."
-                                      @if(!$registrationPlan->can_be_edited) disabled @endif>{{ old('boundaries_description', $registrationPlan->boundaries_description) }}</textarea>
+                                      @disabled(!$registrationPlan->can_be_edited)>{{ old('boundaries_description', $registrationPlan->boundaries_description) }}</textarea>
                             @error('boundaries_description')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
@@ -407,10 +429,10 @@
                             <select class="w-full p-2 border rounded @error('naming_pattern') border-red-500 @enderror"
                                     style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                     id="naming_pattern" name="naming_pattern" required
-                                    @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                    @disabled(!$registrationPlan->can_be_edited)>
                                 <option value="">Select a pattern...</option>
                                 @foreach($namingPatterns as $value => $label)
-                                    <option value="{{ $value }}" {{ old('naming_pattern', $registrationPlan->naming_pattern) == $value ? 'selected' : '' }}>
+                                    <option value="{{ $value }}" @selected(old('naming_pattern', $registrationPlan->naming_pattern) == $value)>
                                         {{ $label }}
                                     </option>
                                 @endforeach
@@ -418,12 +440,13 @@
                             <div id="custom_pattern_container" class="mt-2 {{ (old('naming_pattern', $registrationPlan->naming_pattern) == 'custom') ? '' : 'hidden' }}">
                                 <input type="text" class="w-full p-2 border rounded @error('custom_pattern') border-red-500 @enderror"
                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                       id="custom_pattern" name="custom_pattern" value="{{ old('custom_pattern', $registrationPlan->naming_pattern == 'custom' ? $registrationPlan->naming_pattern : '') }}"
+                                       id="custom_pattern" name="custom_pattern"
+                                       value="{{ old('custom_pattern', $registrationPlan->naming_pattern == 'custom' ? $registrationPlan->naming_pattern : '') }}"
                                        placeholder="e.g., APT-{letter}{number}, BLOCK-{number}-UNIT-{letter}"
-                                       @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                       @disabled(!$registrationPlan->can_be_edited)>
                                 <p class="text-sm mt-1" style="color: var(--text-secondary);">
-                                    Use <code class="px-1 rounded" style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">{letter}</code> for alphabetical sequencing,
-                                    <code class="px-1 rounded" style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">{number}</code> for numerical sequencing, or combine both
+                                    Use <code>{letter}</code> for alphabetical sequencing,
+                                    <code>{number}</code> for numerical sequencing, or combine both
                                 </p>
                                 @error('custom_pattern')
                                     <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
@@ -434,16 +457,15 @@
                             @enderror
                         </div>
 
-                        <!-- Enhanced Starting Point Section -->
                         <div>
                             <label for="starting_point" class="block mb-2 font-medium" style="color: var(--text-primary);">Starting Point *</label>
                             <input type="text" class="w-full p-2 border rounded @error('starting_point') border-red-500 @enderror"
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                   id="starting_point" name="starting_point" value="{{ old('starting_point', $registrationPlan->starting_point) }}" required
+                                   id="starting_point" name="starting_point"
+                                   value="{{ old('starting_point', $registrationPlan->starting_point) }}" required
                                    placeholder="e.g., A, 1, A1, B5"
-                                   @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                   @disabled(!$registrationPlan->can_be_edited)>
 
-                            <!-- Enhanced Helper Text with Sequence Type Information -->
                             <div class="mt-2 space-y-1">
                                 <div class="flex items-start">
                                     <i class="fas fa-info-circle mr-2 mt-0.5" style="color: var(--info);"></i>
@@ -458,7 +480,6 @@
                                     </div>
                                 </div>
 
-                                <!-- Sequence Type Examples -->
                                 <div id="sequence_examples" class="text-xs space-y-1 hidden">
                                     <div class="font-medium" style="color: var(--text-primary);">Examples for your sequence type:</div>
                                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-1 mt-1">
@@ -467,7 +488,6 @@
                                     </div>
                                 </div>
 
-                                <!-- Current Next Available Name -->
                                 @if($registrationPlan->next_available_name && $registrationPlan->next_available_name !== $registrationPlan->starting_point)
                                 <div class="flex items-center text-sm mt-2" style="color: var(--success);">
                                     <i class="fas fa-arrow-right mr-2"></i>
@@ -486,7 +506,7 @@
                                 <input type="number" class="w-full p-2 border rounded @error('estimated_houses') border-red-500 @enderror"
                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                        id="estimated_houses" name="estimated_houses" value="{{ old('estimated_houses', $registrationPlan->estimated_houses) }}" min="1" max="1000" required
-                                       @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                       @disabled(!$registrationPlan->can_be_edited)>
                                 @error('estimated_houses')
                                     <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                                 @enderror
@@ -496,10 +516,10 @@
                                 <select class="w-full p-2 border rounded @error('sequence_type') border-red-500 @enderror"
                                         style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                         id="sequence_type" name="sequence_type" required
-                                        @if(!$registrationPlan->can_be_edited) disabled @endif>
-                                    <option value="sequential" {{ old('sequence_type', $registrationPlan->sequence_type) == 'sequential' ? 'selected' : '' }}>Sequential (1,2,3...)</option>
-                                    <option value="even_only" {{ old('sequence_type', $registrationPlan->sequence_type) == 'even_only' ? 'selected' : '' }}>Even Numbers Only (2,4,6...)</option>
-                                    <option value="odd_only" {{ old('sequence_type', $registrationPlan->sequence_type) == 'odd_only' ? 'selected' : '' }}>Odd Numbers Only (1,3,5...)</option>
+                                        @disabled(!$registrationPlan->can_be_edited)>
+                                    <option value="sequential" @selected(old('sequence_type', $registrationPlan->sequence_type) == 'sequential')>Sequential (1,2,3...)</option>
+                                    <option value="even_only" @selected(old('sequence_type', $registrationPlan->sequence_type) == 'even_only')>Even Numbers Only (2,4,6...)</option>
+                                    <option value="odd_only" @selected(old('sequence_type', $registrationPlan->sequence_type) == 'odd_only')>Odd Numbers Only (1,3,5...)</option>
                                 </select>
                                 <div id="sequence-type-note" class="text-xs mt-1 hidden">
                                     <i class="fas fa-info-circle mr-1" style="color: var(--info);"></i>
@@ -511,7 +531,6 @@
                             </div>
                         </div>
 
-                        <!-- Progress Information -->
                         <div class="p-4 rounded border" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                             <div class="flex justify-between items-center mb-2">
                                 <p class="text-sm font-medium" style="color: var(--text-primary);">Current Progress</p>
@@ -534,13 +553,10 @@
                             </div>
                         </div>
 
-                        <!-- Pattern Preview Section -->
                         <div id="pattern-preview-container" class="p-4 rounded border hidden" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                             <div class="flex justify-between items-center mb-2">
                                 <p class="text-sm font-medium" style="color: var(--text-primary);">Pattern Preview:</p>
-                                <span class="text-xs px-2 py-1 rounded" style="background-color: rgba(var(--primary-rgb), 0.2); color: var(--primary);" id="pattern-type-badge">
-                                    Sequential
-                                </span>
+                                <span class="text-xs px-2 py-1 rounded" style="background-color: rgba(var(--primary-rgb), 0.2); color: var(--primary);" id="pattern-type-badge">Sequential</span>
                             </div>
                             <div class="space-y-2">
                                 <div class="flex items-center justify-between text-sm">
@@ -557,14 +573,11 @@
                                 </div>
                                 <div class="border-t pt-2 mt-2" style="border-color: var(--border-color);">
                                     <p class="text-sm font-medium mb-2" style="color: var(--text-primary);">Sequence Preview:</p>
-                                    <div class="flex flex-wrap gap-2" id="sequence-preview">
-                                        <!-- Sequence items will be generated here -->
-                                    </div>
+                                    <div class="flex flex-wrap gap-2" id="sequence-preview"></div>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Pattern Validation Message -->
                         <div id="pattern-validation" class="hidden">
                             <div class="flex items-center p-3 rounded border" style="background-color: rgba(var(--warning-rgb), 0.1); border-color: rgba(var(--warning-rgb), 0.3);">
                                 <i class="fas fa-exclamation-triangle mr-2" style="color: var(--warning);"></i>
@@ -575,7 +588,7 @@
                 </div>
             </div>
 
-            <!-- Enhanced Assignment & Invitation Card -->
+            <!-- Agent Assignment & Invitation -->
             <div class="card p-6">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="text-lg font-semibold" style="color: var(--text-primary);">Agent Assignment & Invitation</h3>
@@ -585,7 +598,6 @@
                     </div>
                 </div>
                 <div class="space-y-4">
-                    <!-- Secure Invitation System Notice -->
                     <div class="rounded p-3" style="background-color: rgba(var(--info-rgb), 0.1); border: 1px solid rgba(var(--info-rgb), 0.3);">
                         <div class="flex items-start">
                             <i class="fas fa-shield-alt mr-2 mt-0.5" style="color: var(--info);"></i>
@@ -615,7 +627,6 @@
                         </div>
                     </div>
 
-                    {{-- ALL CHANNELS UNAVAILABLE BANNER --}}
                     @if(!$anyChannelReady)
                     <div class="rounded p-4 border-l-4" style="background-color: rgba(var(--danger-rgb), 0.1); border-left-color: var(--danger);">
                         <div class="flex items-start">
@@ -645,7 +656,6 @@
                     </div>
                     @endif
 
-                    <!-- WhatsApp Service Alert -->
                     @if(!$whatsappReady && $anyChannelReady)
                     <div class="rounded p-3 border-l-4" style="background-color: rgba(var(--warning-rgb), 0.1); border-left-color: var(--warning);">
                         <div class="flex items-start">
@@ -670,7 +680,6 @@
                     </div>
                     @endif
 
-                    <!-- Email Service Alert -->
                     @if(!$emailReady && $anyChannelReady)
                     <div class="rounded p-3 border-l-4" style="background-color: rgba(var(--warning-rgb), 0.1); border-left-color: var(--warning);">
                         <div class="flex items-start">
@@ -695,87 +704,89 @@
                     </div>
                     @endif
 
-                    <!-- Multiple Agent Assignment Section -->
+                    <!-- MULTIPLE AGENTS SECTION -->
                     <div id="multiple-agents-section" class="space-y-4 {{ old('agent_assignment_type', $registrationPlan->agent_assignment_type) == 'multiple' ? '' : 'hidden' }}">
                         <div class="flex justify-between items-center">
                             <h4 class="font-medium" style="color: var(--text-primary);">Assign Multiple Agents</h4>
                             <button type="button" id="add-agent-btn" class="btn-primary btn-sm flex items-center"
-                                    @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                    @disabled(!$registrationPlan->can_be_edited)>
                                 <i class="fas fa-plus mr-1"></i> Add Agent
                             </button>
                         </div>
 
                         <div id="agents-container">
-                            @php
-                                $existingAssignments = $registrationPlan->assignedAgents->where('is_active', true);
-                            @endphp
-
-                            @if($existingAssignments->count() > 0)
+                            @if($existingAssignmentsCount > 0)
                                 @foreach($existingAssignments as $index => $assignment)
-                                <div class="agent-row border rounded p-4 mb-3" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
+                                @php $rowChannels = $rowChannelsByIndex[$index] ?? []; @endphp
+                                <div class="agent-row border rounded p-4 mb-3" style="background-color: var(--bg-secondary); border-color: var(--border-color);" data-row-index="{{ $index }}">
                                     <div class="flex justify-between items-center mb-3">
-                                        <h5 class="font-medium" style="color: var(--text-primary);">Agent #{{ $loop->iteration }}</h5>
+                                        <h5 class="font-medium" style="color: var(--text-primary);">Agent #<span class="agent-number">{{ $loop->iteration }}</span></h5>
                                         @if($registrationPlan->can_be_edited)
                                         <button type="button" class="remove-agent-btn text-red-500 hover:text-red-700">
                                             <i class="fas fa-times"></i>
                                         </button>
                                         @endif
                                     </div>
+
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
                                         <div>
                                             <label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">Agent Type</label>
-                                            <select name="agent_types[]" class="w-full p-2 border rounded text-sm agent-type-select"
+                                            <select name="agent_types[{{ $index }}]" class="w-full p-2 border rounded text-sm agent-type-select"
                                                     style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                                    @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                                    @disabled(!$registrationPlan->can_be_edited)>
                                                 <option value="existing" selected>Existing Agent</option>
                                                 <option value="new">New Agent</option>
                                             </select>
                                         </div>
                                         <div>
                                             <label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">
-                                                Invitation Channels *
+                                                Invitation Channels <span class="text-xs font-normal text-gray-500">(optional)</span>
                                             </label>
                                             <div class="flex space-x-3 text-xs">
                                                 <label class="flex items-center space-x-1">
                                                     <input type="checkbox"
-                                                           name="agent_invitation_channels[{{ $assignment->agent_id }}][]"
+                                                           name="agent_invitation_channels[{{ $index }}][]"
                                                            value="sms"
                                                            class="mr-1 multiple-agent-channel"
-                                                           data-agent-id="{{ $assignment->agent_id }}"
-                                                           {{ $smsReady ? '' : 'disabled' }}>
+                                                           data-row-index="{{ $index }}"
+                                                           @disabled(!$smsReady)
+                                                           @checked(in_array('sms', $rowChannels, true) && $smsReady)>
                                                     <span style="color: var(--text-primary);">SMS{{ $smsReady ? '' : ' (N/A)' }}</span>
                                                 </label>
                                                 <label class="flex items-center space-x-1">
                                                     <input type="checkbox"
-                                                           name="agent_invitation_channels[{{ $assignment->agent_id }}][]"
+                                                           name="agent_invitation_channels[{{ $index }}][]"
                                                            value="whatsapp"
                                                            class="mr-1 multiple-agent-channel"
-                                                           data-agent-id="{{ $assignment->agent_id }}"
-                                                           {{ $whatsappReady ? '' : 'disabled' }}>
+                                                           data-row-index="{{ $index }}"
+                                                           @disabled(!$whatsappReady)
+                                                           @checked(in_array('whatsapp', $rowChannels, true) && $whatsappReady)>
                                                     <span style="color: var(--text-primary);">WhatsApp{{ $whatsappReady ? '' : ' (N/A)' }}</span>
                                                 </label>
                                                 <label class="flex items-center space-x-1">
                                                     <input type="checkbox"
-                                                           name="agent_invitation_channels[{{ $assignment->agent_id }}][]"
+                                                           name="agent_invitation_channels[{{ $index }}][]"
                                                            value="email"
                                                            class="mr-1 multiple-agent-channel"
-                                                           data-agent-id="{{ $assignment->agent_id }}"
-                                                           {{ $emailReady ? '' : 'disabled' }}>
+                                                           data-row-index="{{ $index }}"
+                                                           @disabled(!$emailReady)
+                                                           @checked(in_array('email', $rowChannels, true) && $emailReady)>
                                                     <span style="color: var(--text-primary);">Email{{ $emailReady ? '' : ' (N/A)' }}</span>
                                                 </label>
                                             </div>
                                         </div>
                                     </div>
+
                                     <div class="existing-agent-fields">
                                         <div class="mb-3">
                                             <label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">Select Existing Agent</label>
-                                            <select name="assigned_agent_ids[]" class="w-full p-2 border rounded text-sm existing-agent-select"
+                                            <select name="assigned_agent_ids[{{ $index }}]" class="w-full p-2 border rounded text-sm existing-agent-select"
                                                     style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                                    @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                                    @disabled(!$registrationPlan->can_be_edited)>
                                                 <option value="">Select Agent</option>
                                                 @foreach($fieldAgents as $agent)
                                                     <option value="{{ $agent->id }}"
-                                                            {{ $assignment->agent_id == $agent->id ? 'selected' : '' }}
+                                                            @selected($assignment->agent_id == $agent->id)
                                                             data-phone="{{ $agent->phone }}"
                                                             data-email="{{ $agent->email }}">
                                                         {{ $agent->name }} @if($agent->phone)({{ $agent->phone }})@endif
@@ -788,19 +799,19 @@
                                         <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
                                             <div>
                                                 <label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">Name *</label>
-                                                <input type="text" name="agent_names[]" class="w-full p-2 border rounded text-sm"
+                                                <input type="text" name="agent_names[{{ $index }}]" class="w-full p-2 border rounded text-sm"
                                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                        placeholder="Agent Name">
                                             </div>
                                             <div>
                                                 <label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">Phone *</label>
-                                                <input type="tel" name="agent_phones[]" class="w-full p-2 border rounded text-sm"
+                                                <input type="tel" name="agent_phones[{{ $index }}]" class="w-full p-2 border rounded text-sm"
                                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                        placeholder="+233XXXXXXXXX">
                                             </div>
                                             <div>
                                                 <label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">Email</label>
-                                                <input type="email" name="agent_emails[]" class="w-full p-2 border rounded text-sm"
+                                                <input type="email" name="agent_emails[{{ $index }}]" class="w-full p-2 border rounded text-sm"
                                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                        placeholder="agent@example.com">
                                             </div>
@@ -816,37 +827,42 @@
                             You can assign multiple agents to work on different parts of this area.
                         </div>
 
-                        <!-- Multiple Agent Conditional Fields -->
-                        <div id="multiple-agent-conditional-fields" class="grid grid-cols-1 md:grid-cols-3 gap-6 {{ ($existingAssignments->count() > 0) ? '' : 'hidden' }}">
+                        <div id="multiple-agent-conditional-fields" class="grid grid-cols-1 md:grid-cols-3 gap-6 {{ ($existingAssignmentsCount > 0) ? '' : 'hidden' }}">
                             <div>
-                                <label for="registration_start_date_multiple" class="block mb-2 font-medium" style="color: var(--text-primary);">Start Date *</label>
+                                <label for="registration_start_date_multiple" class="block mb-2 font-medium" style="color: var(--text-primary);">
+                                    Start Date <span class="text-xs font-normal text-gray-500">(optional)</span>
+                                </label>
                                 <input type="date" class="w-full p-2 border rounded @error('registration_start_date') border-red-500 @enderror"
                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                        id="registration_start_date_multiple" name="registration_start_date"
                                        value="{{ old('registration_start_date', $registrationPlan->registration_start_date ? $registrationPlan->registration_start_date->format('Y-m-d') : '') }}"
-                                       @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                       @disabled(!$registrationPlan->can_be_edited)>
                                 @error('registration_start_date')
                                     <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                                 @enderror
                             </div>
                             <div>
-                                <label for="registration_end_date_multiple" class="block mb-2 font-medium" style="color: var(--text-primary);">End Date *</label>
+                                <label for="registration_end_date_multiple" class="block mb-2 font-medium" style="color: var(--text-primary);">
+                                    End Date <span class="text-xs font-normal text-gray-500">(optional)</span>
+                                </label>
                                 <input type="date" class="w-full p-2 border rounded @error('registration_end_date') border-red-500 @enderror"
                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                        id="registration_end_date_multiple" name="registration_end_date"
                                        value="{{ old('registration_end_date', $registrationPlan->registration_end_date ? $registrationPlan->registration_end_date->format('Y-m-d') : '') }}"
-                                       @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                       @disabled(!$registrationPlan->can_be_edited)>
                                 @error('registration_end_date')
                                     <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                                 @enderror
                             </div>
                             <div>
-                                <label for="instructions_multiple" class="block mb-2 font-medium" style="color: var(--text-primary);">Instructions for Field Agents</label>
+                                <label for="instructions_multiple" class="block mb-2 font-medium" style="color: var(--text-primary);">
+                                    Instructions for Field Agents <span class="text-xs font-normal text-gray-500">(optional)</span>
+                                </label>
                                 <textarea class="w-full p-2 border rounded @error('instructions') border-red-500 @enderror"
                                           style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                           id="instructions_multiple" name="instructions" rows="4"
                                           placeholder="Provide specific instructions for all field agents..."
-                                          @if(!$registrationPlan->can_be_edited) disabled @endif>{{ old('instructions', $registrationPlan->instructions) }}</textarea>
+                                          @disabled(!$registrationPlan->can_be_edited)>{{ old('instructions', $registrationPlan->instructions) }}</textarea>
                                 @error('instructions')
                                     <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                                 @enderror
@@ -854,13 +870,12 @@
                         </div>
                     </div>
 
-                    <!-- Single Agent Assignment Section -->
+                    <!-- SINGLE AGENT SECTION -->
                     <div id="single-agent-section" class="space-y-4 {{ old('agent_assignment_type', $registrationPlan->agent_assignment_type) == 'single' ? '' : 'hidden' }}">
-                        <!-- Multi-channel Invitation Section -->
-                        <div id="invitation-method-section" class="{{ ($registrationPlan->assignedAgents->where('is_active', true)->count() > 0) ? '' : 'hidden' }}">
+                        <div id="invitation-method-section" class="{{ ($existingAssignmentsCount > 0) ? '' : 'hidden' }}">
                             <label class="block mb-2 font-medium" style="color: var(--text-primary);">
-                                Invitation Channels *
-                                <span class="text-xs font-normal text-gray-500 ml-1">(Select one or more channels)</span>
+                                Invitation Channels
+                                <span class="text-xs font-normal text-gray-500 ml-1">(Optional for existing agents — select one or more to also send SMS / Email / WhatsApp)</span>
                             </label>
 
                             @if(!$anyChannelReady)
@@ -873,7 +888,6 @@
                             @endif
 
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-3" id="invitation-channels-options">
-                                {{-- SMS --}}
                                 <label class="flex items-start p-3 border rounded cursor-pointer transition-all duration-200 invitation-channel-option {{ !$smsReady ? 'channel-disabled' : '' }}"
                                        style="background-color: {{ $smsReady ? 'var(--bg-secondary)' : 'rgba(var(--secondary-rgb), 0.1)' }}; border-color: var(--border-color);"
                                        data-channel="sms"
@@ -883,8 +897,8 @@
                                            value="sms"
                                            class="mr-2 invitation-channel-checkbox"
                                            style="color: var(--primary);"
-                                           {{ $smsReady ? '' : 'disabled' }}
-                                           @if($registrationPlan->can_be_edited) {{ in_array('sms', $oldInvitationChannels, true) ? 'checked' : '' }} @endif>
+                                           @disabled(!$smsReady)
+                                           @checked(in_array('sms', $oldInvitationChannels, true) && $smsReady)>
                                     <div class="flex-1">
                                         <div class="flex items-center">
                                             <i class="fas fa-comment-alt mr-2 text-lg" style="color: var(--info);"></i>
@@ -900,7 +914,6 @@
                                     </div>
                                 </label>
 
-                                {{-- WhatsApp --}}
                                 <label class="flex items-start p-3 border rounded cursor-pointer transition-all duration-200 invitation-channel-option {{ !$whatsappReady ? 'channel-disabled' : '' }}"
                                        style="background-color: {{ $whatsappReady ? 'var(--bg-secondary)' : 'rgba(var(--secondary-rgb), 0.1)' }}; border-color: var(--border-color);"
                                        data-channel="whatsapp"
@@ -910,8 +923,8 @@
                                            value="whatsapp"
                                            class="mr-2 invitation-channel-checkbox"
                                            style="color: var(--primary);"
-                                           {{ $whatsappReady ? '' : 'disabled' }}
-                                           @if($registrationPlan->can_be_edited) {{ in_array('whatsapp', $oldInvitationChannels, true) ? 'checked' : '' }} @endif>
+                                           @disabled(!$whatsappReady)
+                                           @checked(in_array('whatsapp', $oldInvitationChannels, true) && $whatsappReady)>
                                     <div class="flex-1">
                                         <div class="flex items-center">
                                             <i class="fab fa-whatsapp mr-2 text-lg" style="color: #25D366;"></i>
@@ -934,7 +947,6 @@
                                     </div>
                                 </label>
 
-                                {{-- Email --}}
                                 <label class="flex items-start p-3 border rounded cursor-pointer transition-all duration-200 invitation-channel-option {{ !$emailReady ? 'channel-disabled' : '' }}"
                                        style="background-color: {{ $emailReady ? 'var(--bg-secondary)' : 'rgba(var(--secondary-rgb), 0.1)' }}; border-color: var(--border-color);"
                                        data-channel="email"
@@ -944,8 +956,8 @@
                                            value="email"
                                            class="mr-2 invitation-channel-checkbox"
                                            style="color: var(--primary);"
-                                           {{ $emailReady ? '' : 'disabled' }}
-                                           @if($registrationPlan->can_be_edited) {{ in_array('email', $oldInvitationChannels, true) ? 'checked' : '' }} @endif>
+                                           @disabled(!$emailReady)
+                                           @checked(in_array('email', $oldInvitationChannels, true) && $emailReady)>
                                     <div class="flex-1">
                                         <div class="flex items-center">
                                             <i class="fas fa-envelope mr-2 text-lg" style="color: var(--primary);"></i>
@@ -962,7 +974,6 @@
                                 </label>
                             </div>
 
-                            <!-- Enhanced Channel Requirements Information -->
                             <div id="channel-requirements" class="mt-3 p-3 rounded border hidden" style="background-color: rgba(var(--info-rgb), 0.1); border-color: rgba(var(--info-rgb), 0.3);">
                                 <div class="text-sm" style="color: var(--text-primary);">
                                     <i class="fas fa-info-circle mr-2" style="color: var(--info);"></i>
@@ -970,7 +981,6 @@
                                 </div>
                             </div>
 
-                            <!-- Email Service Status for Selected Channel -->
                             <div id="email-service-details" class="mt-3 p-3 rounded border hidden" style="background-color: rgba(var(--info-rgb), 0.1); border-color: rgba(var(--info-rgb), 0.3);">
                                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                                     <div class="flex items-center">
@@ -1007,22 +1017,17 @@
                             </div>
                         </div>
 
-                        <!-- Agent Selection Options -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <!-- Existing Agent Selection -->
                             <div>
                                 <label for="assigned_agent_id" class="block mb-2 font-medium" style="color: var(--text-primary);">Assign Existing Field Agent</label>
                                 <select class="w-full p-2 border rounded @error('assigned_agent_id') border-red-500 @enderror"
                                         style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                         id="assigned_agent_id" name="assigned_agent_id"
-                                        @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                        @disabled(!$registrationPlan->can_be_edited)>
                                     <option value="">Select Existing Agent</option>
                                     @foreach($fieldAgents as $agent)
-                                        @php
-                                            $isAssigned = $registrationPlan->assignedAgents->where('agent_id', $agent->id)->where('is_active', true)->first();
-                                        @endphp
                                         <option value="{{ $agent->id }}"
-                                                {{ (old('assigned_agent_id') == $agent->id || $isAssigned) ? 'selected' : '' }}
+                                                @selected(old('assigned_agent_id') == $agent->id || isset($assignedAgentIdSetLookup[$agent->id]))
                                                 data-phone="{{ $agent->phone }}"
                                                 data-email="{{ $agent->email }}"
                                                 data-status="{{ $agent->status }}"
@@ -1059,7 +1064,6 @@
                                 @enderror
                             </div>
 
-                            <!-- New Agent Creation -->
                             <div>
                                 <label class="block mb-2 font-medium" style="color: var(--text-primary);">Create New Field Agent</label>
                                 <div class="space-y-3">
@@ -1068,7 +1072,7 @@
                                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                id="agent_name" name="agent_name" value="{{ old('agent_name') }}"
                                                placeholder="Agent Full Name *"
-                                               @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                               @disabled(!$registrationPlan->can_be_edited)>
                                         @error('agent_name')
                                             <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                                         @enderror
@@ -1078,7 +1082,7 @@
                                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                id="agent_email" name="agent_email" value="{{ old('agent_email') }}"
                                                placeholder="Email Address (required for email invitations)"
-                                               @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                               @disabled(!$registrationPlan->can_be_edited)>
                                         <div class="text-xs mt-1" style="color: var(--text-secondary);" id="email-requirement-note">
                                             Required if selecting email channel
                                         </div>
@@ -1092,7 +1096,7 @@
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    id="agent_phone" name="agent_phone" value="{{ old('agent_phone') }}"
                                                    placeholder="Phone Number with Country Code *"
-                                                   @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                                   @disabled(!$registrationPlan->can_be_edited)>
                                             <div id="phone-validation" class="absolute right-3 top-1/2 transform -translate-y-1/2 hidden">
                                                 <i class="fas fa-check" id="phone-valid-icon" style="color: var(--success);"></i>
                                                 <i class="fas fa-times" id="phone-invalid-icon" style="color: var(--danger);"></i>
@@ -1133,52 +1137,57 @@
                             <span class="text-sm" style="color: var(--text-secondary);">OR</span>
                         </div>
 
-                        <!-- No Agent Option -->
                         <div class="text-center">
                             <p class="text-sm" style="color: var(--text-secondary);">
-                                Leave both fields empty to keep as draft plan without agent assignment
+                                Leave both fields empty to keep this plan without agent assignment
                             </p>
                         </div>
                     </div>
 
-                    <!-- Single Agent Conditional Fields Container -->
-                    <div id="single-agent-conditional-fields" class="grid grid-cols-1 md:grid-cols-3 gap-6 {{ ($registrationPlan->assignedAgents->where('is_active', true)->count() > 0) ? '' : 'hidden' }}">
+                    <!-- Single-mode conditional fields (dates OPTIONAL) -->
+                    <div id="single-agent-conditional-fields" class="grid grid-cols-1 md:grid-cols-3 gap-6 {{ ($existingAssignmentsCount > 0) ? '' : 'hidden' }}">
                         <div>
-                            <label for="registration_start_date" class="block mb-2 font-medium" style="color: var(--text-primary);">Start Date *</label>
+                            <label for="registration_start_date" class="block mb-2 font-medium" style="color: var(--text-primary);">
+                                Start Date <span class="text-xs font-normal text-gray-500">(optional)</span>
+                            </label>
                             <input type="date" class="w-full p-2 border rounded @error('registration_start_date') border-red-500 @enderror"
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                    id="registration_start_date" name="registration_start_date"
                                    value="{{ old('registration_start_date', $registrationPlan->registration_start_date ? $registrationPlan->registration_start_date->format('Y-m-d') : '') }}"
-                                   @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                   @disabled(!$registrationPlan->can_be_edited)>
                             @error('registration_start_date')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
                         </div>
                         <div>
-                            <label for="registration_end_date" class="block mb-2 font-medium" style="color: var(--text-primary);">End Date *</label>
+                            <label for="registration_end_date" class="block mb-2 font-medium" style="color: var(--text-primary);">
+                                End Date <span class="text-xs font-normal text-gray-500">(optional)</span>
+                            </label>
                             <input type="date" class="w-full p-2 border rounded @error('registration_end_date') border-red-500 @enderror"
                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                    id="registration_end_date" name="registration_end_date"
                                    value="{{ old('registration_end_date', $registrationPlan->registration_end_date ? $registrationPlan->registration_end_date->format('Y-m-d') : '') }}"
-                                   @if(!$registrationPlan->can_be_edited) disabled @endif>
+                                   @disabled(!$registrationPlan->can_be_edited)>
                             @error('registration_end_date')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
                         </div>
                         <div>
-                            <label for="instructions" class="block mb-2 font-medium" style="color: var(--text-primary);">Instructions for Field Agent</label>
+                            <label for="instructions" class="block mb-2 font-medium" style="color: var(--text-primary);">
+                                Instructions for Field Agent <span class="text-xs font-normal text-gray-500">(optional)</span>
+                            </label>
                             <textarea class="w-full p-2 border rounded @error('instructions') border-red-500 @enderror"
                                       style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                       id="instructions" name="instructions" rows="4"
                                       placeholder="Provide specific instructions for the field agent..."
-                                      @if(!$registrationPlan->can_be_edited) disabled @endif>{{ old('instructions', $registrationPlan->instructions) }}</textarea>
+                                      @disabled(!$registrationPlan->can_be_edited)>{{ old('instructions', $registrationPlan->instructions) }}</textarea>
                             @error('instructions')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
                         </div>
                     </div>
 
-                    <!-- Enhanced Invitation Preview -->
+                    <!-- Invitation Preview -->
                     <div id="invitation-preview-container" class="rounded p-4 hidden" style="background-color: rgba(var(--info-rgb), 0.1); border: 1px solid rgba(var(--info-rgb), 0.3);">
                         <div class="flex justify-between items-center mb-2">
                             <h4 class="font-semibold" style="color: var(--text-primary);">Invitation Preview</h4>
@@ -1190,15 +1199,12 @@
                                 <i class="fas fa-envelope" style="color: var(--info);"></i>
                             </div>
                         </div>
-                        <div class="rounded p-3 text-sm font-mono whitespace-pre-wrap" id="invitation-preview-content" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
-                            <!-- Invitation content will be generated here -->
-                        </div>
+                        <div class="rounded p-3 text-sm font-mono whitespace-pre-wrap" id="invitation-preview-content" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);"></div>
                         <div class="mt-2 text-xs" style="color: var(--text-secondary);">
                             <i class="fas fa-info-circle mr-1"></i>
                             <span id="invitation-preview-note">This preview shows the invitation that will be sent to the field agent</span>
                         </div>
 
-                        <!-- Email Delivery Information -->
                         <div id="email-delivery-info" class="mt-3 p-2 rounded border hidden" style="background-color: rgba(var(--success-rgb), 0.1); border-color: rgba(var(--success-rgb), 0.3);">
                             <div class="flex items-center text-sm">
                                 <i class="fas fa-paper-plane mr-2" style="color: var(--success);"></i>
@@ -1222,9 +1228,9 @@
                         <select class="w-full p-2 border rounded @error('status') border-red-500 @enderror"
                                 style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                 id="status" name="status">
-                            <option value="draft"       {{ $statusValue === 'draft'       ? 'selected' : '' }}>Draft</option>
-                            <option value="assigned"    {{ $statusValue === 'assigned'    ? 'selected' : '' }}>Assigned</option>
-                            <option value="in_progress" {{ $statusValue === 'in_progress' ? 'selected' : '' }}>In Progress</option>
+                            <option value="draft" @selected($statusValue === 'draft')>Draft</option>
+                            <option value="assigned" @selected($statusValue === 'assigned')>Assigned</option>
+                            <option value="in_progress" @selected($statusValue === 'in_progress')>In Progress</option>
                         </select>
                         <p class="text-sm mt-1" style="color: var(--text-secondary);">
                             Status will auto-update based on agent assignment
@@ -1237,8 +1243,8 @@
                         <div class="rounded p-3" style="background-color: rgba(var(--info-rgb), 0.1); border: 1px solid rgba(var(--info-rgb), 0.3);">
                             <p class="text-sm" style="color: var(--text-primary);">
                                 <i class="fas fa-info-circle mr-1" style="color: var(--info);"></i>
-                                @if($registrationPlan->assignedAgents->where('is_active', true)->count() > 0)
-                                    Currently assigned to: <strong>{{ $registrationPlan->assignedAgents->where('is_active', true)->count() }} agent(s)</strong>
+                                @if($existingAssignmentsCount > 0)
+                                    Currently assigned to: <strong>{{ $existingAssignmentsCount }} agent(s)</strong>
                                 @else
                                     No agents currently assigned
                                 @endif
@@ -1278,759 +1284,860 @@
 @endsection
 
 {{-- ============================================================ --}}
-{{-- SCRIPTS — unchanged; layout's @yield('scripts') handles it. --}}
+{{-- SCRIPTS                                                      --}}
 {{-- ============================================================ --}}
 @section('scripts')
 <script>
-// ==================== GLOBAL CHANNEL AVAILABILITY ====================
-const SMS_SYSTEM_READY      = {{ $smsReady ? 'true' : 'false' }};
-const WHATSAPP_SYSTEM_READY = {{ $whatsappReady ? 'true' : 'false' }};
-const EMAIL_SYSTEM_READY    = {{ $emailReady ? 'true' : 'false' }};
-const ANY_CHANNEL_READY     = SMS_SYSTEM_READY || WHATSAPP_SYSTEM_READY || EMAIL_SYSTEM_READY;
+(function () {
+    'use strict';
 
-function isChannelGloballyReady(channel) {
-    if (channel === 'sms')      return SMS_SYSTEM_READY;
-    if (channel === 'whatsapp') return WHATSAPP_SYSTEM_READY;
-    if (channel === 'email')    return EMAIL_SYSTEM_READY;
-    return false;
-}
+    const CHANNELS     = {!! json_encode($channelsPayload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) !!};
+    const ASSIGNED_IDS = {!! json_encode($assignedAgentIdsPayload, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) !!};
 
-document.addEventListener('DOMContentLoaded', function() {
-    // Keep the hidden status mirror in sync with the select
-    const statusSelect = document.getElementById('status');
-    const statusMirror = document.getElementById('status-mirror');
-    if (statusSelect && statusMirror) {
-        statusSelect.addEventListener('change', function () {
-            statusMirror.value = this.value;
-        });
-        const form = document.getElementById('registration-plan-form');
-        if (form) {
-            form.addEventListener('submit', function () {
-                statusMirror.value = statusSelect.value;
-            });
+    document.addEventListener('DOMContentLoaded', function () {
+        const statusSelect = document.getElementById('status');
+        const statusMirror = document.getElementById('status-mirror');
+        if (statusSelect && statusMirror) {
+            statusSelect.addEventListener('change', function () { statusMirror.value = this.value; });
+            const form = document.getElementById('registration-plan-form');
+            if (form) {
+                form.addEventListener('submit', function () { statusMirror.value = statusSelect.value; });
+            }
         }
-    }
 
-    // Helpers
-    function isNumberThenLetterPattern(pattern) {
-        return pattern.includes('{number}') && pattern.includes('{letter}') &&
-               pattern.indexOf('{number}') < pattern.indexOf('{letter}');
-    }
-
-    function isLetterThenNumberPattern(pattern) {
-        return pattern.includes('{letter}') && pattern.includes('{number}') &&
-               pattern.indexOf('{letter}') < pattern.indexOf('{number}');
-    }
-
-    function validatePhoneNumber(phone) {
-        const cleaned = phone.trim();
-        const plus233Regex = /^\+\d{1,4}\d{6,}$/;
-        const localFormatRegex = /^0\d{9,}$/;
-        const countryCodeNoPlusRegex = /^233\d{9,}$/;
-        return plus233Regex.test(cleaned) || localFormatRegex.test(cleaned) || countryCodeNoPlusRegex.test(cleaned);
-    }
-
-    function formatPhoneNumber(phone) {
-        const cleaned = phone.trim().replace(/\s+/g, '');
-        if (cleaned.startsWith('+233') && cleaned.length === 13) return cleaned;
-        if (cleaned.startsWith('233') && cleaned.length === 12) return '+' + cleaned;
-        if (cleaned.startsWith('0') && cleaned.length === 10) return '+233' + cleaned.substring(1);
-        if (cleaned.startsWith('+') && cleaned.length >= 11) return cleaned;
-        return phone;
-    }
-
-    // Elements
-    const namingPatternSelect = document.getElementById('naming_pattern');
-    const customPatternContainer = document.getElementById('custom_pattern_container');
-    const customPatternInput = document.getElementById('custom_pattern');
-    const startingPointInput = document.getElementById('starting_point');
-    const startingPointHelper = document.getElementById('starting_point_helper');
-    const sequenceTypeRequirements = document.getElementById('sequence_type_requirements');
-    const sequenceRequirementsText = document.getElementById('sequence_requirements_text');
-    const sequenceExamples = document.getElementById('sequence_examples');
-    const validExamples = document.getElementById('valid_examples');
-    const invalidExamples = document.getElementById('invalid_examples');
-    const sequenceTypeInput = document.getElementById('sequence_type');
-    const patternPreviewContainer = document.getElementById('pattern-preview-container');
-    const selectedPatternDisplay = document.getElementById('selected-pattern-display');
-    const startingPointDisplay = document.getElementById('starting-point-display');
-    const sequenceTypeDisplay = document.getElementById('sequence-type-display');
-    const sequencePreview = document.getElementById('sequence-preview');
-    const patternTypeBadge = document.getElementById('pattern-type-badge');
-    const patternValidation = document.getElementById('pattern-validation');
-    const validationMessage = document.getElementById('validation-message');
-
-    const agentSelect = document.getElementById('assigned_agent_id');
-    const agentPhoneInput = document.getElementById('agent_phone');
-    const agentNameInput = document.getElementById('agent_name');
-    const agentEmailInput = document.getElementById('agent_email');
-    const existingAgentInfo = document.getElementById('existing-agent-info');
-    const agentPhoneInfo = document.getElementById('agent-phone-info');
-    const agentPhoneText = document.getElementById('agent-phone-text');
-    const agentEmailInfo = document.getElementById('agent-email-info');
-    const agentEmailText = document.getElementById('agent-email-text');
-    const agentStatusInfo = document.getElementById('agent-status-info');
-    const agentStatusText = document.getElementById('agent-status-text');
-    const agentVerificationInfo = document.getElementById('agent-verification-info');
-    const agentVerificationText = document.getElementById('agent-verification-text');
-    const phoneValidation = document.getElementById('phone-validation');
-    const phoneValidIcon = document.getElementById('phone-valid-icon');
-    const phoneInvalidIcon = document.getElementById('phone-invalid-icon');
-    const invitationPreviewContainer = document.getElementById('invitation-preview-container');
-    const invitationPreviewContent = document.getElementById('invitation-preview-content');
-    const invitationMethodSection = document.getElementById('invitation-method-section');
-    const channelRequirements = document.getElementById('channel-requirements');
-    const requirementsText = document.getElementById('requirements-text');
-    const invitationChannelBadge = document.getElementById('invitation-channel-badge');
-    const invitationPreviewNote = document.getElementById('invitation-preview-note');
-    const emailRequirementNote = document.getElementById('email-requirement-note');
-    const emailServiceDetails = document.getElementById('email-service-details');
-    const emailDeliveryInfo = document.getElementById('email-delivery-info');
-    const phoneFormattedInfo = document.getElementById('phone-formatted-info');
-    const formattedPhoneSpan = document.getElementById('formatted-phone');
-
-    // ============================================================
-    // MULTI-CHANNEL HELPERS
-    // ============================================================
-    function getSelectedChannels() {
-        return Array.from(
-            document.querySelectorAll('input[name="invitation_channels[]"]:checked')
-        ).filter(cb => !cb.disabled && isChannelGloballyReady(cb.value)).map(cb => cb.value);
-    }
-
-    function updateChannelVisualState(checkbox) {
-        const option = checkbox.closest('.invitation-channel-option');
-        if (!option) return;
-        if (checkbox.disabled) {
-            option.classList.remove('channel-selected');
-            return;
+        function isNumberThenLetterPattern(pattern) {
+            return pattern.includes('{number}') && pattern.includes('{letter}') &&
+                   pattern.indexOf('{number}') < pattern.indexOf('{letter}');
         }
-        if (checkbox.checked) {
-            option.classList.add('channel-selected');
-            option.style.borderColor = 'var(--primary)';
-            option.style.backgroundColor = 'rgba(var(--primary-rgb), 0.05)';
-        } else {
-            option.classList.remove('channel-selected');
-            option.style.borderColor = 'var(--border-color)';
-            option.style.backgroundColor = 'var(--bg-secondary)';
+        function isLetterThenNumberPattern(pattern) {
+            return pattern.includes('{letter}') && pattern.includes('{number}') &&
+                   pattern.indexOf('{letter}') < pattern.indexOf('{number}');
         }
-    }
+        function isChannelGloballyReady(channel) { return CHANNELS[channel] === true; }
+        function validatePhoneNumber(phone) {
+            const cleaned = phone.trim();
+            return /^\+\d{1,4}\d{6,}$/.test(cleaned)
+                || /^0\d{9,}$/.test(cleaned)
+                || /^233\d{9,}$/.test(cleaned);
+        }
+        function formatPhoneNumber(phone) {
+            const cleaned = phone.trim().replace(/\s+/g, '');
+            if (cleaned.startsWith('+233') && cleaned.length === 13) return cleaned;
+            if (cleaned.startsWith('233') && cleaned.length === 12) return '+' + cleaned;
+            if (cleaned.startsWith('0') && cleaned.length === 10) return '+233' + cleaned.substring(1);
+            if (cleaned.startsWith('+') && cleaned.length >= 11) return cleaned;
+            return phone;
+        }
 
-    function updateInvitationChannelsAvailability() {
-        document.querySelectorAll('.invitation-channel-option').forEach(option => {
-            const channel = option.dataset.channel;
-            const checkbox = option.querySelector('.invitation-channel-checkbox');
-            if (!checkbox) return;
+        const el = {
+            form:                   document.getElementById('registration-plan-form'),
+            namingPatternSelect:    document.getElementById('naming_pattern'),
+            customPatternContainer: document.getElementById('custom_pattern_container'),
+            customPatternInput:     document.getElementById('custom_pattern'),
+            startingPointInput:     document.getElementById('starting_point'),
+            startingPointHelper:    document.getElementById('starting_point_helper'),
+            sequenceTypeRequirements: document.getElementById('sequence_type_requirements'),
+            sequenceRequirementsText: document.getElementById('sequence_requirements_text'),
+            sequenceExamples:       document.getElementById('sequence_examples'),
+            validExamples:          document.getElementById('valid_examples'),
+            invalidExamples:        document.getElementById('invalid_examples'),
+            sequenceTypeInput:      document.getElementById('sequence_type'),
+            patternPreviewContainer: document.getElementById('pattern-preview-container'),
+            selectedPatternDisplay: document.getElementById('selected-pattern-display'),
+            startingPointDisplay:   document.getElementById('starting-point-display'),
+            sequenceTypeDisplay:    document.getElementById('sequence-type-display'),
+            sequencePreview:        document.getElementById('sequence-preview'),
+            patternTypeBadge:       document.getElementById('pattern-type-badge'),
+            patternValidation:      document.getElementById('pattern-validation'),
+            validationMessage:      document.getElementById('validation-message'),
+            agentSelect:            document.getElementById('assigned_agent_id'),
+            agentPhoneInput:        document.getElementById('agent_phone'),
+            agentNameInput:         document.getElementById('agent_name'),
+            agentEmailInput:        document.getElementById('agent_email'),
+            existingAgentInfo:      document.getElementById('existing-agent-info'),
+            agentPhoneInfo:         document.getElementById('agent-phone-info'),
+            agentPhoneText:         document.getElementById('agent-phone-text'),
+            agentEmailInfo:         document.getElementById('agent-email-info'),
+            agentEmailText:         document.getElementById('agent-email-text'),
+            agentStatusInfo:        document.getElementById('agent-status-info'),
+            agentStatusText:        document.getElementById('agent-status-text'),
+            agentVerificationInfo:  document.getElementById('agent-verification-info'),
+            agentVerificationText:  document.getElementById('agent-verification-text'),
+            phoneValidation:        document.getElementById('phone-validation'),
+            phoneValidIcon:         document.getElementById('phone-valid-icon'),
+            phoneInvalidIcon:       document.getElementById('phone-invalid-icon'),
+            invitationPreviewContainer: document.getElementById('invitation-preview-container'),
+            invitationPreviewContent: document.getElementById('invitation-preview-content'),
+            invitationMethodSection: document.getElementById('invitation-method-section'),
+            channelRequirements:    document.getElementById('channel-requirements'),
+            requirementsText:       document.getElementById('requirements-text'),
+            invitationChannelBadge: document.getElementById('invitation-channel-badge'),
+            emailRequirementNote:   document.getElementById('email-requirement-note'),
+            emailServiceDetails:    document.getElementById('email-service-details'),
+            emailDeliveryInfo:      document.getElementById('email-delivery-info'),
+            phoneFormattedInfo:     document.getElementById('phone-formatted-info'),
+            formattedPhoneSpan:     document.getElementById('formatted-phone'),
+            assignmentType:         document.getElementById('agent_assignment_type'),
+            singleSection:          document.getElementById('single-agent-section'),
+            multipleSection:        document.getElementById('multiple-agents-section'),
+            singleConditional:      document.getElementById('single-agent-conditional-fields'),
+            multipleConditional:    document.getElementById('multiple-agent-conditional-fields'),
+            agentsContainer:        document.getElementById('agents-container'),
+            addAgentBtn:            document.getElementById('add-agent-btn'),
+            submitBtn:              document.getElementById('submit-button'),
+        };
 
-            const globallyReady = isChannelGloballyReady(channel);
+        function getSelectedChannels() {
+            return Array.from(
+                document.querySelectorAll('input[name="invitation_channels[]"]:checked')
+            ).filter(cb => !cb.disabled && isChannelGloballyReady(cb.value)).map(cb => cb.value);
+        }
 
-            if (!globallyReady) {
-                checkbox.disabled = true;
-                checkbox.checked = false;
-                option.classList.add('channel-disabled');
-                option.setAttribute('aria-disabled', 'true');
-                option.style.opacity = '0.5';
-                option.style.cursor = 'not-allowed';
-                option.style.backgroundColor = 'rgba(var(--secondary-rgb), 0.1)';
+        function updateChannelVisualState(checkbox) {
+            const option = checkbox.closest('.invitation-channel-option');
+            if (!option) return;
+            if (checkbox.disabled) { option.classList.remove('channel-selected'); return; }
+            if (checkbox.checked) {
+                option.classList.add('channel-selected');
+                option.style.borderColor = 'var(--primary)';
+                option.style.backgroundColor = 'rgba(var(--primary-rgb), 0.05)';
             } else {
-                checkbox.disabled = false;
-                option.classList.remove('channel-disabled');
-                option.removeAttribute('aria-disabled');
-                option.style.opacity = '1';
-                option.style.cursor = 'pointer';
+                option.classList.remove('channel-selected');
+                option.style.borderColor = 'var(--border-color)';
                 option.style.backgroundColor = 'var(--bg-secondary)';
             }
+        }
 
-            updateChannelVisualState(checkbox);
-        });
-    }
+        function updateInvitationChannelsAvailability() {
+            document.querySelectorAll('.invitation-channel-option').forEach(option => {
+                const channel = option.dataset.channel;
+                const checkbox = option.querySelector('.invitation-channel-checkbox');
+                if (!checkbox) return;
+                const globallyReady = isChannelGloballyReady(channel);
+                if (!globallyReady) {
+                    checkbox.disabled = true;
+                    checkbox.checked = false;
+                    option.classList.add('channel-disabled');
+                    option.setAttribute('aria-disabled', 'true');
+                    option.style.opacity = '0.5';
+                    option.style.cursor = 'not-allowed';
+                    option.style.backgroundColor = 'rgba(var(--secondary-rgb), 0.1)';
+                } else {
+                    checkbox.disabled = false;
+                    option.classList.remove('channel-disabled');
+                    option.removeAttribute('aria-disabled');
+                    option.style.opacity = '1';
+                    option.style.cursor = 'pointer';
+                    option.style.backgroundColor = 'var(--bg-secondary)';
+                }
+                updateChannelVisualState(checkbox);
+            });
 
-    function updatePhoneValidation() {
-        const phone = agentPhoneInput.value.trim();
-        if (phone === '') {
-            phoneValidation.classList.add('hidden');
-            phoneFormattedInfo.classList.add('hidden');
+            document.querySelectorAll('.multiple-agent-channel').forEach(cb => {
+                if (!isChannelGloballyReady(cb.value)) { cb.disabled = true; cb.checked = false; }
+            });
+        }
+
+        function updatePhoneValidation() {
+            if (!el.agentPhoneInput) return;
+            const phone = el.agentPhoneInput.value.trim();
+            if (phone === '') {
+                el.phoneValidation.classList.add('hidden');
+                el.phoneFormattedInfo.classList.add('hidden');
+                updateInvitationChannelsUI();
+                return;
+            }
+            el.phoneValidation.classList.remove('hidden');
+            if (validatePhoneNumber(phone)) {
+                el.phoneValidIcon.classList.remove('hidden');
+                el.phoneInvalidIcon.classList.add('hidden');
+                el.agentPhoneInput.classList.remove('border-red-500');
+                el.agentPhoneInput.classList.add('border-green-500');
+                el.formattedPhoneSpan.textContent = formatPhoneNumber(phone);
+                el.phoneFormattedInfo.classList.remove('hidden');
+            } else {
+                el.phoneValidIcon.classList.add('hidden');
+                el.phoneInvalidIcon.classList.remove('hidden');
+                el.agentPhoneInput.classList.remove('border-green-500');
+                el.agentPhoneInput.classList.add('border-red-500');
+                el.phoneFormattedInfo.classList.add('hidden');
+            }
             updateInvitationChannelsUI();
-            return;
         }
 
-        phoneValidation.classList.remove('hidden');
+        function updateExistingAgentInfo() {
+            if (!el.agentSelect) return;
+            const opt = el.agentSelect.options[el.agentSelect.selectedIndex];
+            if (!opt || !opt.value) { el.existingAgentInfo.classList.add('hidden'); updateInvitationChannelsUI(); return; }
+            el.existingAgentInfo.classList.remove('hidden');
 
-        if (validatePhoneNumber(phone)) {
-            phoneValidIcon.classList.remove('hidden');
-            phoneInvalidIcon.classList.add('hidden');
-            agentPhoneInput.classList.remove('border-red-500');
-            agentPhoneInput.classList.add('border-green-500');
-            formattedPhoneSpan.textContent = formatPhoneNumber(phone);
-            phoneFormattedInfo.classList.remove('hidden');
-        } else {
-            phoneValidIcon.classList.add('hidden');
-            phoneInvalidIcon.classList.remove('hidden');
-            agentPhoneInput.classList.remove('border-green-500');
-            agentPhoneInput.classList.add('border-red-500');
-            phoneFormattedInfo.classList.add('hidden');
-        }
-        updateInvitationChannelsUI();
-    }
+            const phone    = opt.getAttribute('data-phone');
+            const email    = opt.getAttribute('data-email');
+            const status   = opt.getAttribute('data-status');
+            const verified = opt.getAttribute('data-verified') === 'true';
+            const accepted = opt.getAttribute('data-invitation-accepted') === 'true';
 
-    function updateExistingAgentInfo() {
-        const selectedOption = agentSelect.options[agentSelect.selectedIndex];
-        if (selectedOption.value) {
-            const phone = selectedOption.getAttribute('data-phone');
-            const email = selectedOption.getAttribute('data-email');
-            const status = selectedOption.getAttribute('data-status');
-            const verified = selectedOption.getAttribute('data-verified') === 'true';
-            const invitationAccepted = selectedOption.getAttribute('data-invitation-accepted') === 'true';
+            if (phone) { el.agentPhoneInfo.classList.remove('hidden'); el.agentPhoneText.textContent = phone; el.agentPhoneText.className = verified ? 'text-green-600' : 'text-yellow-600'; }
+            else { el.agentPhoneInfo.classList.add('hidden'); }
 
-            existingAgentInfo.classList.remove('hidden');
+            if (email) { el.agentEmailInfo.classList.remove('hidden'); el.agentEmailText.textContent = email; }
+            else { el.agentEmailInfo.classList.add('hidden'); }
 
-            if (phone) {
-                agentPhoneInfo.classList.remove('hidden');
-                agentPhoneText.textContent = phone;
-                agentPhoneText.className = verified ? 'text-green-600' : 'text-yellow-600';
-            } else {
-                agentPhoneInfo.classList.add('hidden');
-            }
-
-            if (email) {
-                agentEmailInfo.classList.remove('hidden');
-                agentEmailText.textContent = email;
-            } else {
-                agentEmailInfo.classList.add('hidden');
-            }
-
-            agentStatusInfo.classList.remove('hidden');
-            let statusColor = 'text-gray-600';
-            let statusText = status;
+            el.agentStatusInfo.classList.remove('hidden');
+            let statusColor = 'text-gray-600', statusText = status;
             if (status === 'active') { statusColor = 'text-green-600'; statusText = 'Active'; }
             else if (status === 'pending') { statusColor = 'text-yellow-600'; statusText = 'Pending Invitation'; }
             else if (status === 'suspended') { statusColor = 'text-red-600'; statusText = 'Suspended'; }
-            agentStatusText.innerHTML = `<span class="${statusColor}">${statusText}</span>`;
+            el.agentStatusText.innerHTML = '<span class="' + statusColor + '">' + statusText + '</span>';
 
-            agentVerificationInfo.classList.remove('hidden');
-            if (invitationAccepted) {
-                agentVerificationText.innerHTML = '<span class="text-green-600">Invitation Accepted</span>';
+            el.agentVerificationInfo.classList.remove('hidden');
+            if (accepted) {
+                el.agentVerificationText.innerHTML = '<span class="text-green-600">Invitation Accepted</span>';
             } else if (verified) {
-                agentVerificationText.innerHTML = '<span class="text-blue-600">Phone Verified - Pending Invitation</span>';
+                el.agentVerificationText.innerHTML = '<span class="text-blue-600">Phone Verified - Pending Invitation</span>';
             } else {
-                agentVerificationText.innerHTML = '<span class="text-yellow-600">Pending Verification</span>';
+                el.agentVerificationText.innerHTML = '<span class="text-yellow-600">Pending Verification</span>';
             }
-        } else {
-            existingAgentInfo.classList.add('hidden');
-        }
-        updateInvitationChannelsUI();
-    }
-
-    function updateInvitationChannelsUI() {
-        const selectedChannels = getSelectedChannels();
-        const agentPhone = agentPhoneInput.value.trim();
-        const agentEmail = agentEmailInput.value.trim();
-        const hasExistingAgent = agentSelect.value;
-
-        document.querySelectorAll('.invitation-channel-option').forEach(option => {
-            const checkbox = option.querySelector('.invitation-channel-checkbox');
-            if (checkbox) updateChannelVisualState(checkbox);
-        });
-
-        if (selectedChannels.includes('email')) {
-            emailServiceDetails.classList.remove('hidden');
-            emailDeliveryInfo.classList.remove('hidden');
-        } else {
-            emailServiceDetails.classList.add('hidden');
-            emailDeliveryInfo.classList.add('hidden');
+            updateInvitationChannelsUI();
         }
 
-        if (selectedChannels.length > 0 && !hasExistingAgent) {
-            const needsPhone = selectedChannels.some(c => ['sms', 'whatsapp'].includes(c));
-            const needsEmail = selectedChannels.includes('email');
+        function updateInvitationChannelsUI() {
+            if (!el.singleSection) return;
 
-            if ((needsPhone && !agentPhone) || (needsEmail && !agentEmail)) {
-                channelRequirements.classList.remove('hidden');
-                const missing = [];
-                if (needsPhone && !agentPhone) missing.push('phone number');
-                if (needsEmail && !agentEmail) missing.push('email address');
-                requirementsText.textContent = `A valid ${missing.join(' and ')} is required for the selected channels.`;
+            const selectedChannels = getSelectedChannels();
+            const agentPhone    = el.agentPhoneInput ? el.agentPhoneInput.value.trim() : '';
+            const agentEmail    = el.agentEmailInput ? el.agentEmailInput.value.trim() : '';
+            const hasExisting   = el.agentSelect && el.agentSelect.value !== '';
+            const hasNewAgent   = !!(agentPhone && el.agentNameInput && el.agentNameInput.value.trim());
+
+            document.querySelectorAll('.invitation-channel-option').forEach(option => {
+                const cb = option.querySelector('.invitation-channel-checkbox');
+                if (cb) updateChannelVisualState(cb);
+            });
+
+            if (selectedChannels.includes('email')) {
+                el.emailServiceDetails.classList.remove('hidden');
+                el.emailDeliveryInfo.classList.remove('hidden');
             } else {
-                channelRequirements.classList.add('hidden');
+                el.emailServiceDetails.classList.add('hidden');
+                el.emailDeliveryInfo.classList.add('hidden');
             }
-        } else {
-            channelRequirements.classList.add('hidden');
-        }
 
-        if (selectedChannels.length === 0) {
-            invitationChannelBadge.textContent = 'Select channels';
-            invitationChannelBadge.style.backgroundColor = 'rgba(var(--primary-rgb), 0.2)';
-            invitationChannelBadge.style.color = 'var(--primary)';
-        } else {
-            invitationChannelBadge.textContent = selectedChannels.map(c => c.toUpperCase()).join(' + ');
-            if (selectedChannels.length === 1 && selectedChannels[0] === 'whatsapp') {
-                invitationChannelBadge.style.backgroundColor = 'rgba(37, 211, 102, 0.2)';
-                invitationChannelBadge.style.color = '#25D366';
-            } else if (selectedChannels.length === 1 && selectedChannels[0] === 'email') {
-                invitationChannelBadge.style.backgroundColor = 'rgba(var(--info-rgb), 0.2)';
-                invitationChannelBadge.style.color = 'var(--info)';
+            if (hasExisting || hasNewAgent) el.invitationMethodSection.classList.remove('hidden');
+            else el.invitationMethodSection.classList.add('hidden');
+
+            if (selectedChannels.length > 0 && !hasExisting && hasNewAgent) {
+                const needsPhone = selectedChannels.some(c => ['sms', 'whatsapp'].includes(c));
+                const needsEmail = selectedChannels.includes('email');
+                if ((needsPhone && !agentPhone) || (needsEmail && !agentEmail)) {
+                    el.channelRequirements.classList.remove('hidden');
+                    const missing = [];
+                    if (needsPhone && !agentPhone) missing.push('phone number');
+                    if (needsEmail && !agentEmail) missing.push('email address');
+                    el.requirementsText.textContent = 'A valid ' + missing.join(' and ') + ' is required for the selected channels.';
+                } else {
+                    el.channelRequirements.classList.add('hidden');
+                }
             } else {
-                invitationChannelBadge.style.backgroundColor = 'rgba(var(--primary-rgb), 0.2)';
-                invitationChannelBadge.style.color = 'var(--primary)';
+                el.channelRequirements.classList.add('hidden');
             }
-        }
 
-        if (selectedChannels.includes('email')) {
-            emailRequirementNote.style.color = 'var(--warning)';
-            emailRequirementNote.innerHTML = '<i class="fas fa-exclamation-circle mr-1"></i>Required for email invitations';
-        } else {
-            emailRequirementNote.style.color = 'var(--text-secondary)';
-            emailRequirementNote.textContent = 'Required if selecting email channel';
-        }
-
-        updateInvitationPreview();
-    }
-
-    function updateInvitationPreview() {
-        const hasAgent = agentSelect.value || (agentPhoneInput.value.trim() && agentNameInput.value.trim());
-        if (!hasAgent) {
-            invitationPreviewContainer.classList.add('hidden');
-            return;
-        }
-
-        invitationPreviewContainer.classList.remove('hidden');
-
-        let agentName = 'Field Agent';
-        let agentPhone = '';
-        let agentEmail = '';
-
-        if (agentSelect.value) {
-            const selectedOption = agentSelect.options[agentSelect.selectedIndex];
-            agentName = selectedOption.text.split(' (')[0];
-            agentPhone = selectedOption.getAttribute('data-phone') || '';
-            agentEmail = selectedOption.getAttribute('data-email') || '';
-        } else if (agentPhoneInput.value.trim() && agentNameInput.value.trim()) {
-            agentName = agentNameInput.value.trim();
-            agentPhone = formatPhoneNumber(agentPhoneInput.value.trim());
-            agentEmail = agentEmailInput.value.trim();
-        }
-
-        const zone = document.getElementById('zone').value || 'Zone';
-        const section = document.getElementById('section').value;
-        const startDate = document.getElementById('registration_start_date')?.value || '';
-        const endDate = document.getElementById('registration_end_date')?.value || '';
-        const estimatedHouses = document.getElementById('estimated_houses').value || '10';
-        const instructions = document.getElementById('instructions')?.value || 'Follow the assigned route';
-
-        const selectedChannels = getSelectedChannels();
-
-        let invitationContent = `FIELD AGENT INVITATION\n\nHello ${agentName}!\n\nYou have been assigned as a Field Agent.\n\n📍 Zone: ${zone}${section ? ', ' + section : ''}\n📅 Period: ${startDate} to ${endDate}\n🏠 Properties: ${estimatedHouses}\n📨 Channels: ${selectedChannels.map(c => c.toUpperCase()).join(', ') || 'None selected'}\n\n🔐 Setup: You will receive a secure link to create your account.\n\n📋 Instructions:\n${instructions}\n\nThank you!`;
-
-        invitationPreviewContent.textContent = invitationContent;
-    }
-
-    // ============================================================
-    // PATTERN LOGIC
-    // ============================================================
-    function getCombinedStartingExample(pattern, sequenceType) {
-        const isNumberThenLetter = isNumberThenLetterPattern(pattern);
-        if (isNumberThenLetter) {
-            switch (sequenceType) {
-                case 'even_only': return '2A';
-                case 'odd_only': return '1A';
-                default: return '1A';
+            if (selectedChannels.length === 0) {
+                el.invitationChannelBadge.textContent = 'Select channels';
+                el.invitationChannelBadge.style.backgroundColor = 'rgba(var(--primary-rgb), 0.2)';
+                el.invitationChannelBadge.style.color = 'var(--primary)';
+            } else {
+                el.invitationChannelBadge.textContent = selectedChannels.map(c => c.toUpperCase()).join(' + ');
+                if (selectedChannels.length === 1 && selectedChannels[0] === 'whatsapp') {
+                    el.invitationChannelBadge.style.backgroundColor = 'rgba(37, 211, 102, 0.2)';
+                    el.invitationChannelBadge.style.color = '#25D366';
+                } else if (selectedChannels.length === 1 && selectedChannels[0] === 'email') {
+                    el.invitationChannelBadge.style.backgroundColor = 'rgba(var(--info-rgb), 0.2)';
+                    el.invitationChannelBadge.style.color = 'var(--info)';
+                } else {
+                    el.invitationChannelBadge.style.backgroundColor = 'rgba(var(--primary-rgb), 0.2)';
+                    el.invitationChannelBadge.style.color = 'var(--primary)';
+                }
             }
-        } else {
+
+            if (selectedChannels.includes('email')) {
+                el.emailRequirementNote.style.color = 'var(--warning)';
+                el.emailRequirementNote.innerHTML = '<i class="fas fa-exclamation-circle mr-1"></i>Required for email invitations';
+            } else {
+                el.emailRequirementNote.style.color = 'var(--text-secondary)';
+                el.emailRequirementNote.textContent = 'Required if selecting email channel';
+            }
+
+            updateInvitationPreview();
+        }
+
+        function updateInvitationPreview() {
+            if (!el.invitationPreviewContainer) return;
+            const hasAgent = (el.agentSelect && el.agentSelect.value)
+                || (el.agentPhoneInput && el.agentPhoneInput.value.trim() && el.agentNameInput && el.agentNameInput.value.trim());
+            if (!hasAgent) { el.invitationPreviewContainer.classList.add('hidden'); return; }
+
+            el.invitationPreviewContainer.classList.remove('hidden');
+
+            let agentName = 'Field Agent';
+            if (el.agentSelect && el.agentSelect.value) {
+                agentName = el.agentSelect.options[el.agentSelect.selectedIndex].text.split(' (')[0];
+            } else if (el.agentNameInput && el.agentNameInput.value.trim()) {
+                agentName = el.agentNameInput.value.trim();
+            }
+
+            const zone       = document.getElementById('zone').value || '—';
+            const section    = document.getElementById('section').value;
+            const startDate  = document.getElementById('registration_start_date')?.value || 'Not specified';
+            const endDate    = document.getElementById('registration_end_date')?.value || 'Not specified';
+            const estimated  = document.getElementById('estimated_houses').value || '10';
+            const instr      = document.getElementById('instructions')?.value || 'Follow the assigned route';
+
+            const channels = getSelectedChannels();
+
+            const lines = [
+                'FIELD AGENT INVITATION',
+                '',
+                'Hello ' + agentName + '!',
+                '',
+                'You have been assigned as a Field Agent.',
+                '',
+                '📍 Zone: ' + zone + (section ? ', ' + section : ''),
+                '📅 Period: ' + startDate + ' to ' + endDate,
+                '🏠 Properties: ' + estimated,
+                '📨 Channels: ' + (channels.length ? channels.map(c => c.toUpperCase()).join(', ') : 'None selected'),
+                '',
+                '🔐 Setup: You will receive a secure link to create your account.',
+                '',
+                '📋 Instructions:',
+                instr,
+                '',
+                'Thank you!',
+            ];
+            el.invitationPreviewContent.textContent = lines.join('\n');
+        }
+
+        function getCombinedStartingExample(pattern, sequenceType) {
+            if (isNumberThenLetterPattern(pattern)) {
+                switch (sequenceType) {
+                    case 'even_only': return '2A';
+                    case 'odd_only':  return '1A';
+                    default:          return '1A';
+                }
+            }
             switch (sequenceType) {
                 case 'even_only': return 'A2';
-                case 'odd_only': return 'A1';
-                default: return 'A1';
+                case 'odd_only':  return 'A1';
+                default:          return 'A1';
             }
         }
-    }
-
-    function getNumberStartingExample(sequenceType) {
-        switch (sequenceType) {
-            case 'even_only': return '2';
-            case 'odd_only': return '1';
-            default: return '1';
-        }
-    }
-
-    function updatePatternHelper(pattern) {
-        let helperText = '';
-        let placeholder = '';
-        let example = '';
-
-        if (pattern === 'custom') pattern = customPatternInput.value;
-
-        const sequenceType = sequenceTypeInput.value;
-        const isNumberThenLetter = isNumberThenLetterPattern(pattern);
-        const isLetterThenNumber = isLetterThenNumberPattern(pattern);
-
-        if (isNumberThenLetter) {
-            helperText = 'Enter starting point with number followed by letter';
-            placeholder = 'e.g., 1A, 2B, 5C';
-            example = getCombinedStartingExample(pattern, sequenceType);
-        } else if (isLetterThenNumber) {
-            helperText = 'Enter starting point with letter followed by number';
-            placeholder = 'e.g., A1, B2, C5';
-            example = getCombinedStartingExample(pattern, sequenceType);
-        } else if (pattern.includes('{letter}')) {
-            helperText = 'Enter starting letter';
-            placeholder = 'e.g., A, B, C';
-            example = 'A';
-        } else if (pattern.includes('{number}')) {
-            helperText = 'Enter starting number';
-            placeholder = 'e.g., 1, 2, 3';
-            example = getNumberStartingExample(sequenceType);
-        } else {
-            helperText = 'Enter a starting point for the sequence';
-            placeholder = 'e.g., A, 1, A1, 1A';
-            example = 'A1';
-        }
-
-        startingPointHelper.textContent = helperText;
-        startingPointInput.placeholder = placeholder;
-        updateSequenceTypeRequirements(pattern, sequenceType);
-        updateSequenceExamples(pattern, sequenceType);
-
-        if (!startingPointInput.value || !validateStartingPoint(pattern, startingPointInput.value)) {
-            startingPointInput.value = example;
-        }
-    }
-
-    function updateSequenceTypeRequirements(pattern, sequenceType) {
-        let requirementsText = '';
-        if (pattern.includes('{number}')) {
+        function getNumberStartingExample(sequenceType) {
             switch (sequenceType) {
-                case 'even_only': requirementsText = 'Numbers will follow even sequence (2, 4, 6, 8...)'; break;
-                case 'odd_only': requirementsText = 'Numbers will follow odd sequence (1, 3, 5, 7...)'; break;
-                default: requirementsText = 'Numbers will follow sequential order (1, 2, 3, 4...)';
-            }
-            sequenceRequirementsText.textContent = requirementsText;
-            sequenceTypeRequirements.classList.remove('hidden');
-        } else {
-            sequenceTypeRequirements.classList.add('hidden');
-        }
-    }
-
-    function updateSequenceExamples(pattern, sequenceType) {
-        if (!pattern.includes('{number}')) {
-            sequenceExamples.classList.add('hidden');
-            return;
-        }
-
-        sequenceExamples.classList.remove('hidden');
-        validExamples.innerHTML = '';
-        invalidExamples.innerHTML = '';
-
-        let validItems = [], invalidItems = [];
-        const isNumberThenLetter = isNumberThenLetterPattern(pattern);
-        const isLetterThenNumber = isLetterThenNumberPattern(pattern);
-
-        if (isNumberThenLetter) {
-            switch (sequenceType) {
-                case 'even_only': validItems = ['2A', '4B', '6C', '8D']; invalidItems = ['1A', '3B', '5C', '7D', 'A2', 'B4']; break;
-                case 'odd_only': validItems = ['1A', '3B', '5C', '7D']; invalidItems = ['2A', '4B', '6C', '8D', 'A1', 'B3']; break;
-                default: validItems = ['1A', '2A', '3B', '4B']; invalidItems = ['A', '1', 'A1', '1A1', 'A1A'];
-            }
-        } else if (isLetterThenNumber) {
-            switch (sequenceType) {
-                case 'even_only': validItems = ['A2', 'B4', 'C6', 'D8']; invalidItems = ['A1', 'B3', 'C5', 'D7', '2A', '4B']; break;
-                case 'odd_only': validItems = ['A1', 'B3', 'C5', 'D7']; invalidItems = ['A2', 'B4', 'C6', 'D8', '1A', '3B']; break;
-                default: validItems = ['A1', 'A2', 'B1', 'B2']; invalidItems = ['A', '1', 'AB', '12', '1A'];
-            }
-        } else if (pattern.includes('{number}')) {
-            switch (sequenceType) {
-                case 'even_only': validItems = ['2', '4', '6', '8']; invalidItems = ['1', '3', '5', '7']; break;
-                case 'odd_only': validItems = ['1', '3', '5', '7']; invalidItems = ['2', '4', '6', '8']; break;
-                default: validItems = ['1', '2', '3', '4']; invalidItems = ['A', 'B', '1A', 'A1'];
+                case 'even_only': return '2';
+                case 'odd_only':  return '1';
+                default:          return '1';
             }
         }
 
-        validItems.forEach(item => {
-            const div = document.createElement('div');
-            div.className = 'flex items-center';
-            div.innerHTML = `<i class="fas fa-check text-green-500 mr-1 text-xs"></i><span class="font-mono text-xs">${item}</span>`;
-            validExamples.appendChild(div);
-        });
+        function updatePatternHelper(pattern) {
+            if (!el.startingPointInput) return;
+            let helperText = '', placeholder = '', example = '';
+            if (pattern === 'custom') pattern = el.customPatternInput ? el.customPatternInput.value : '';
 
-        invalidItems.forEach(item => {
-            const div = document.createElement('div');
-            div.className = 'flex items-center';
-            div.innerHTML = `<i class="fas fa-times text-red-500 mr-1 text-xs"></i><span class="font-mono text-xs opacity-70">${item}</span>`;
-            invalidExamples.appendChild(div);
-        });
-    }
+            const sequenceType = el.sequenceTypeInput.value;
+            const isNTL = isNumberThenLetterPattern(pattern);
+            const isLTN = isLetterThenNumberPattern(pattern);
 
-    function validateStartingPoint(pattern, startingPoint) {
-        const isNumberThenLetter = isNumberThenLetterPattern(pattern);
-        const isLetterThenNumber = isLetterThenNumberPattern(pattern);
-        const sequenceType = sequenceTypeInput.value;
-
-        if (isNumberThenLetter) {
-            if (!/^\d+[A-Za-z]+$/.test(startingPoint)) return false;
-            const number = parseInt(startingPoint.match(/^\d+/)[0]);
-            if (sequenceType === 'even_only') return number % 2 === 0;
-            if (sequenceType === 'odd_only') return number % 2 === 1;
-            return true;
-        } else if (isLetterThenNumber) {
-            if (!/^[A-Za-z]+\d+$/.test(startingPoint)) return false;
-            const number = parseInt(startingPoint.replace(/[A-Za-z]/g, ''));
-            if (sequenceType === 'even_only') return number % 2 === 0;
-            if (sequenceType === 'odd_only') return number % 2 === 1;
-            return true;
-        } else if (pattern.includes('{letter}') && pattern.includes('{number}')) {
-            if (/^[A-Za-z]+\d+$/.test(startingPoint)) {
-                const number = parseInt(startingPoint.replace(/[A-Za-z]/g, ''));
-                if (sequenceType === 'even_only') return number % 2 === 0;
-                if (sequenceType === 'odd_only') return number % 2 === 1;
-                return true;
-            } else if (/^\d+[A-Za-z]+$/.test(startingPoint)) {
-                const number = parseInt(startingPoint.match(/^\d+/)[0]);
-                if (sequenceType === 'even_only') return number % 2 === 0;
-                if (sequenceType === 'odd_only') return number % 2 === 1;
-                return true;
-            }
-            return false;
-        } else if (pattern.includes('{letter}')) {
-            return /^[A-Za-z]+$/.test(startingPoint);
-        } else if (pattern.includes('{number}')) {
-            if (!/^\d+$/.test(startingPoint)) return false;
-            const number = parseInt(startingPoint);
-            if (sequenceType === 'even_only') return number % 2 === 0;
-            if (sequenceType === 'odd_only') return number % 2 === 1;
-            return true;
-        }
-        return true;
-    }
-
-    function generateNextName(currentName, pattern, sequenceType) {
-        if (!currentName) return getStartingName(pattern, sequenceType);
-        const isNumberThenLetter = isNumberThenLetterPattern(pattern);
-        const isLetterThenNumber = isLetterThenNumberPattern(pattern);
-        if (isNumberThenLetter || isLetterThenNumber) return generateCombinedNextName(currentName, pattern, sequenceType);
-        if (pattern.includes('{letter}')) return incrementLetters(currentName);
-        if (pattern.includes('{number}')) return generateNumberNextName(currentName, sequenceType);
-        return generateSimpleNextName(currentName);
-    }
-
-    function getStartingName(pattern, sequenceType) {
-        const isNumberThenLetter = isNumberThenLetterPattern(pattern);
-        const isLetterThenNumber = isLetterThenNumberPattern(pattern);
-        if (isNumberThenLetter || isLetterThenNumber) return getCombinedStartingExample(pattern, sequenceType);
-        if (pattern.includes('{letter}')) return 'A';
-        if (pattern.includes('{number}')) return getNumberStartingExample(sequenceType);
-        return '001';
-    }
-
-    function generateCombinedNextName(currentName, pattern, sequenceType) {
-        const isNumberThenLetter = isNumberThenLetterPattern(pattern);
-        if (isNumberThenLetter) {
-            const match = currentName.match(/^(\d+)([A-Za-z]+)$/);
-            if (match) {
-                let number = parseInt(match[1]), letter = match[2];
-                number += 1;
-                if (sequenceType === 'even_only' && number % 2 !== 0) number += 1;
-                if (sequenceType === 'odd_only' && number % 2 === 0) number += 1;
-                if (number > 99) {
-                    letter = incrementLetters(letter);
-                    number = sequenceType === 'even_only' ? 2 : (sequenceType === 'odd_only' ? 1 : 1);
-                }
-                return number + letter;
-            }
-        } else {
-            const match = currentName.match(/^([A-Za-z]+)(\d+)$/);
-            if (match) {
-                let letter = match[1], number = parseInt(match[2]);
-                number += 1;
-                if (sequenceType === 'even_only' && number % 2 !== 0) number += 1;
-                if (sequenceType === 'odd_only' && number % 2 === 0) number += 1;
-                if (number > 99) {
-                    letter = incrementLetters(letter);
-                    number = sequenceType === 'even_only' ? 2 : (sequenceType === 'odd_only' ? 1 : 1);
-                }
-                return letter + number;
-            }
-        }
-        return currentName + '-next';
-    }
-
-    function incrementLetters(letters) {
-        let length = letters.length;
-        for (let i = length - 1; i >= 0; i--) {
-            if (letters[i] !== 'Z') {
-                letters = letters.substring(0, i) + String.fromCharCode(letters.charCodeAt(i) + 1) + letters.substring(i + 1);
-                return letters;
-            }
-            letters = letters.substring(0, i) + 'A' + letters.substring(i + 1);
-        }
-        return 'A' + letters;
-    }
-
-    function generateNumberNextName(currentName, sequenceType) {
-        let number = parseInt(currentName);
-        if (sequenceType === 'even_only') return number % 2 === 0 ? number + 2 : number + 1;
-        if (sequenceType === 'odd_only') return number % 2 === 1 ? number + 2 : number + 1;
-        return number + 1;
-    }
-
-    function generateSimpleNextName(currentName) {
-        const match = currentName.match(/^(.*?)(\d+)$/);
-        if (match) return match[1] + (parseInt(match[2]) + 1);
-        return currentName + '-1';
-    }
-
-    function updatePatternPreview() {
-        let pattern = namingPatternSelect.value === 'custom' ? customPatternInput.value : namingPatternSelect.value;
-        const startPoint = startingPointInput.value;
-        const sequenceType = sequenceTypeInput.value;
-
-        if (!pattern) {
-            patternPreviewContainer.classList.add('hidden');
-            patternValidation.classList.add('hidden');
-            return;
-        }
-
-        const isValid = validateStartingPoint(pattern, startPoint);
-
-        if (!isValid) {
-            patternPreviewContainer.classList.add('hidden');
-            patternValidation.classList.remove('hidden');
-            const isNumberThenLetter = isNumberThenLetterPattern(pattern);
-            const isLetterThenNumber = isLetterThenNumberPattern(pattern);
-            if (isNumberThenLetter) {
-                validationMessage.textContent = 'Starting point must be in format like 1A, 2B for number+letter patterns.';
-                if (sequenceType === 'even_only') validationMessage.textContent += ' For even-only sequences, use even numbers (2A, 4B, etc.).';
-                else if (sequenceType === 'odd_only') validationMessage.textContent += ' For odd-only sequences, use odd numbers (1A, 3B, etc.).';
-            } else if (isLetterThenNumber) {
-                validationMessage.textContent = 'Starting point must be in format like A1, B2 for letter+number patterns.';
-                if (sequenceType === 'even_only') validationMessage.textContent += ' For even-only sequences, use even numbers (A2, B4, etc.).';
-                else if (sequenceType === 'odd_only') validationMessage.textContent += ' For odd-only sequences, use odd numbers (A1, B3, etc.).';
+            if (isNTL) {
+                helperText = 'Enter starting point with number followed by letter';
+                placeholder = 'e.g., 1A, 2B, 5C';
+                example = getCombinedStartingExample(pattern, sequenceType);
+            } else if (isLTN) {
+                helperText = 'Enter starting point with letter followed by number';
+                placeholder = 'e.g., A1, B2, C5';
+                example = getCombinedStartingExample(pattern, sequenceType);
             } else if (pattern.includes('{letter}')) {
-                validationMessage.textContent = 'Starting point must contain only letters for letter-only patterns.';
+                helperText = 'Enter starting letter';
+                placeholder = 'e.g., A, B, C';
+                example = 'A';
             } else if (pattern.includes('{number}')) {
-                validationMessage.textContent = 'Starting point must be a number for number-only patterns.';
-                if (sequenceType === 'even_only') validationMessage.textContent += ' For even-only sequences, use even numbers (2, 4, 6, etc.).';
-                else if (sequenceType === 'odd_only') validationMessage.textContent += ' For odd-only sequences, use odd numbers (1, 3, 5, etc.).';
+                helperText = 'Enter starting number';
+                placeholder = 'e.g., 1, 2, 3';
+                example = getNumberStartingExample(sequenceType);
             } else {
-                validationMessage.textContent = 'Invalid starting point for the selected pattern.';
+                helperText = 'Enter a starting point for the sequence';
+                placeholder = 'e.g., A, 1, A1, 1A';
+                example = 'A1';
             }
-            return;
+
+            el.startingPointHelper.textContent = helperText;
+            el.startingPointInput.placeholder = placeholder;
+            updateSequenceTypeRequirements(pattern, sequenceType);
+            updateSequenceExamples(pattern, sequenceType);
+
+            if (!el.startingPointInput.value || !validateStartingPoint(pattern, el.startingPointInput.value)) {
+                el.startingPointInput.value = example;
+            }
         }
 
-        patternValidation.classList.add('hidden');
-        patternPreviewContainer.classList.remove('hidden');
+        function updateSequenceTypeRequirements(pattern, sequenceType) {
+            if (!pattern.includes('{number}')) { el.sequenceTypeRequirements.classList.add('hidden'); return; }
+            let req = '';
+            switch (sequenceType) {
+                case 'even_only': req = 'Numbers will follow even sequence (2, 4, 6, 8...)'; break;
+                case 'odd_only':  req = 'Numbers will follow odd sequence (1, 3, 5, 7...)'; break;
+                default:          req = 'Numbers will follow sequential order (1, 2, 3, 4...)';
+            }
+            el.sequenceRequirementsText.textContent = req;
+            el.sequenceTypeRequirements.classList.remove('hidden');
+        }
 
-        selectedPatternDisplay.textContent = pattern;
-        startingPointDisplay.textContent = startPoint;
-        let seqDisplay = sequenceType === 'sequential' ? 'Sequential' : (sequenceType === 'even_only' ? 'Even Numbers Only' : 'Odd Numbers Only');
-        sequenceTypeDisplay.textContent = seqDisplay;
-        patternTypeBadge.textContent = seqDisplay;
+        function updateSequenceExamples(pattern, sequenceType) {
+            if (!pattern.includes('{number}')) { el.sequenceExamples.classList.add('hidden'); return; }
+            el.sequenceExamples.classList.remove('hidden');
+            el.validExamples.innerHTML = '';
+            el.invalidExamples.innerHTML = '';
 
-        sequencePreview.innerHTML = '';
-        let currentName = startPoint;
-        for (let i = 0; i < 5; i++) {
-            const badge = document.createElement('span');
-            badge.className = 'px-3 py-1 rounded-full text-xs font-medium';
-            if (i === 0) {
-                badge.style.backgroundColor = 'rgba(var(--primary-rgb), 0.2)';
-                badge.style.color = 'var(--primary)';
-                badge.innerHTML = `<i class="fas fa-play mr-1"></i> ${currentName}`;
+            let valid = [], invalid = [];
+            const isNTL = isNumberThenLetterPattern(pattern);
+            const isLTN = isLetterThenNumberPattern(pattern);
+
+            if (isNTL) {
+                switch (sequenceType) {
+                    case 'even_only': valid = ['2A','4B','6C','8D']; invalid = ['1A','3B','5C','7D','A2','B4']; break;
+                    case 'odd_only':  valid = ['1A','3B','5C','7D']; invalid = ['2A','4B','6C','8D','A1','B3']; break;
+                    default:          valid = ['1A','2A','3B','4B']; invalid = ['A','1','A1','1A1','A1A'];
+                }
+            } else if (isLTN) {
+                switch (sequenceType) {
+                    case 'even_only': valid = ['A2','B4','C6','D8']; invalid = ['A1','B3','C5','D7','2A','4B']; break;
+                    case 'odd_only':  valid = ['A1','B3','C5','D7']; invalid = ['A2','B4','C6','D8','1A','3B']; break;
+                    default:          valid = ['A1','A2','B1','B2']; invalid = ['A','1','AB','12','1A'];
+                }
             } else {
-                badge.style.backgroundColor = 'rgba(var(--secondary-rgb), 0.1)';
-                badge.style.color = 'var(--secondary)';
-                badge.textContent = currentName;
+                switch (sequenceType) {
+                    case 'even_only': valid = ['2','4','6','8']; invalid = ['1','3','5','7']; break;
+                    case 'odd_only':  valid = ['1','3','5','7']; invalid = ['2','4','6','8']; break;
+                    default:          valid = ['1','2','3','4']; invalid = ['A','B','1A','A1'];
+                }
             }
-            sequencePreview.appendChild(badge);
-            currentName = generateNextName(currentName, pattern, sequenceType);
+
+            valid.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center';
+                div.innerHTML = '<i class="fas fa-check text-green-500 mr-1 text-xs"></i><span class="font-mono text-xs">' + item + '</span>';
+                el.validExamples.appendChild(div);
+            });
+            invalid.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center';
+                div.innerHTML = '<i class="fas fa-times text-red-500 mr-1 text-xs"></i><span class="font-mono text-xs opacity-70">' + item + '</span>';
+                el.invalidExamples.appendChild(div);
+            });
         }
-    }
 
-    function toggleCustomPattern() {
-        if (namingPatternSelect.value === 'custom') {
-            customPatternContainer.classList.remove('hidden');
-            updatePatternHelper(customPatternInput.value);
-        } else {
-            customPatternContainer.classList.add('hidden');
-            updatePatternHelper(namingPatternSelect.value);
+        function validateStartingPoint(pattern, startingPoint) {
+            const sequenceType = el.sequenceTypeInput.value;
+            const isNTL = isNumberThenLetterPattern(pattern);
+            const isLTN = isLetterThenNumberPattern(pattern);
+
+            if (isNTL) {
+                if (!/^\d+[A-Za-z]+$/.test(startingPoint)) return false;
+                const n = parseInt(startingPoint.match(/^\d+/)[0], 10);
+                if (sequenceType === 'even_only') return n % 2 === 0;
+                if (sequenceType === 'odd_only')  return n % 2 === 1;
+                return true;
+            }
+            if (isLTN) {
+                if (!/^[A-Za-z]+\d+$/.test(startingPoint)) return false;
+                const n = parseInt(startingPoint.replace(/[A-Za-z]/g, ''), 10);
+                if (sequenceType === 'even_only') return n % 2 === 0;
+                if (sequenceType === 'odd_only')  return n % 2 === 1;
+                return true;
+            }
+            if (pattern.includes('{letter}')) return /^[A-Za-z]+$/.test(startingPoint);
+            if (pattern.includes('{number}')) {
+                if (!/^\d+$/.test(startingPoint)) return false;
+                const n = parseInt(startingPoint, 10);
+                if (sequenceType === 'even_only') return n % 2 === 0;
+                if (sequenceType === 'odd_only')  return n % 2 === 1;
+                return true;
+            }
+            return true;
         }
-        updatePatternPreview();
-    }
 
-    // Initialize
-    updateInvitationChannelsAvailability();
+        function incrementLetters(letters) {
+            for (let i = letters.length - 1; i >= 0; i--) {
+                if (letters[i] !== 'Z') {
+                    return letters.substring(0, i)
+                        + String.fromCharCode(letters.charCodeAt(i) + 1)
+                        + letters.substring(i + 1);
+                }
+                letters = letters.substring(0, i) + 'A' + letters.substring(i + 1);
+            }
+            return 'A' + letters;
+        }
+        function nextNumber(n, sequenceType) {
+            if (sequenceType === 'even_only') return n % 2 === 0 ? n + 2 : n + 1;
+            if (sequenceType === 'odd_only')  return n % 2 === 1 ? n + 2 : n + 1;
+            return n + 1;
+        }
+        function generateCombinedNextName(currentName, pattern, sequenceType) {
+            if (isNumberThenLetterPattern(pattern)) {
+                const m = currentName.match(/^(\d+)([A-Za-z]+)$/);
+                if (m) {
+                    let num = parseInt(m[1], 10);
+                    let letter = m[2];
+                    num = nextNumber(num, sequenceType);
+                    if (num > 99) { letter = incrementLetters(letter); num = sequenceType === 'even_only' ? 2 : 1; }
+                    return num + letter;
+                }
+            } else {
+                const m = currentName.match(/^([A-Za-z]+)(\d+)$/);
+                if (m) {
+                    let letter = m[1];
+                    let num = parseInt(m[2], 10);
+                    num = nextNumber(num, sequenceType);
+                    if (num > 99) { letter = incrementLetters(letter); num = sequenceType === 'even_only' ? 2 : 1; }
+                    return letter + num;
+                }
+            }
+            return generateSimpleNextName(currentName);
+        }
+        function generateSimpleNextName(currentName) {
+            const m = currentName.match(/^(.*?)(\d+)$/);
+            if (m) return m[1] + (parseInt(m[2], 10) + 1);
+            return currentName + '-1';
+        }
+        function generateNextName(currentName, pattern, sequenceType) {
+            if (!currentName) return getStartingName(pattern, sequenceType);
+            if (isNumberThenLetterPattern(pattern) || isLetterThenNumberPattern(pattern)) {
+                return generateCombinedNextName(currentName, pattern, sequenceType);
+            }
+            if (pattern.includes('{letter}')) return incrementLetters(currentName);
+            if (pattern.includes('{number}')) return String(nextNumber(parseInt(currentName, 10) || 0, sequenceType));
+            return generateSimpleNextName(currentName);
+        }
+        function getStartingName(pattern, sequenceType) {
+            if (isNumberThenLetterPattern(pattern) || isLetterThenNumberPattern(pattern)) {
+                return getCombinedStartingExample(pattern, sequenceType);
+            }
+            if (pattern.includes('{letter}')) return 'A';
+            if (pattern.includes('{number}')) return getNumberStartingExample(sequenceType);
+            return '001';
+        }
 
-    const isEditable = !namingPatternSelect.disabled;
+        function updatePatternPreview() {
+            let pattern = el.namingPatternSelect.value === 'custom'
+                ? (el.customPatternInput ? el.customPatternInput.value : '')
+                : el.namingPatternSelect.value;
+            const startPoint = el.startingPointInput.value;
+            const sequenceType = el.sequenceTypeInput.value;
 
-    if (isEditable) {
-        namingPatternSelect.addEventListener('change', toggleCustomPattern);
-        customPatternInput?.addEventListener('input', function() { updatePatternHelper('custom'); updatePatternPreview(); });
-        startingPointInput.addEventListener('input', updatePatternPreview);
-        sequenceTypeInput.addEventListener('change', function() {
-            updatePatternHelper(namingPatternSelect.value === 'custom' ? customPatternInput.value : namingPatternSelect.value);
+            if (!pattern) {
+                el.patternPreviewContainer.classList.add('hidden');
+                el.patternValidation.classList.add('hidden');
+                return;
+            }
+
+            if (!validateStartingPoint(pattern, startPoint)) {
+                el.patternPreviewContainer.classList.add('hidden');
+                el.patternValidation.classList.remove('hidden');
+                if (isNumberThenLetterPattern(pattern)) {
+                    el.validationMessage.textContent = 'Starting point must be in format like 1A, 2B for number+letter patterns.';
+                    if (sequenceType === 'even_only')     el.validationMessage.textContent += ' For even-only sequences, use even numbers (2A, 4B, etc.).';
+                    else if (sequenceType === 'odd_only') el.validationMessage.textContent += ' For odd-only sequences, use odd numbers (1A, 3B, etc.).';
+                } else if (isLetterThenNumberPattern(pattern)) {
+                    el.validationMessage.textContent = 'Starting point must be in format like A1, B2 for letter+number patterns.';
+                    if (sequenceType === 'even_only')     el.validationMessage.textContent += ' For even-only sequences, use even numbers (A2, B4, etc.).';
+                    else if (sequenceType === 'odd_only') el.validationMessage.textContent += ' For odd-only sequences, use odd numbers (A1, B3, etc.).';
+                } else if (pattern.includes('{letter}')) {
+                    el.validationMessage.textContent = 'Starting point must contain only letters for letter-only patterns.';
+                } else if (pattern.includes('{number}')) {
+                    el.validationMessage.textContent = 'Starting point must be a number for number-only patterns.';
+                    if (sequenceType === 'even_only')     el.validationMessage.textContent += ' For even-only sequences, use even numbers (2, 4, 6, etc.).';
+                    else if (sequenceType === 'odd_only') el.validationMessage.textContent += ' For odd-only sequences, use odd numbers (1, 3, 5, etc.).';
+                } else {
+                    el.validationMessage.textContent = 'Invalid starting point for the selected pattern.';
+                }
+                return;
+            }
+
+            el.patternValidation.classList.add('hidden');
+            el.patternPreviewContainer.classList.remove('hidden');
+
+            el.selectedPatternDisplay.textContent = pattern;
+            el.startingPointDisplay.textContent = startPoint;
+            const seqDisplay = sequenceType === 'sequential' ? 'Sequential'
+                : (sequenceType === 'even_only' ? 'Even Numbers Only' : 'Odd Numbers Only');
+            el.sequenceTypeDisplay.textContent = seqDisplay;
+            el.patternTypeBadge.textContent = seqDisplay;
+
+            el.sequencePreview.innerHTML = '';
+            let currentName = startPoint;
+            for (let i = 0; i < 5; i++) {
+                const badge = document.createElement('span');
+                badge.className = 'px-3 py-1 rounded-full text-xs font-medium';
+                if (i === 0) {
+                    badge.style.backgroundColor = 'rgba(var(--primary-rgb), 0.2)';
+                    badge.style.color = 'var(--primary)';
+                    badge.innerHTML = '<i class="fas fa-play mr-1"></i> ' + currentName;
+                } else {
+                    badge.style.backgroundColor = 'rgba(var(--secondary-rgb), 0.1)';
+                    badge.style.color = 'var(--secondary)';
+                    badge.textContent = currentName;
+                }
+                el.sequencePreview.appendChild(badge);
+                currentName = generateNextName(currentName, pattern, sequenceType);
+            }
+        }
+
+        function toggleCustomPattern() {
+            if (el.namingPatternSelect.value === 'custom') {
+                el.customPatternContainer.classList.remove('hidden');
+                updatePatternHelper(el.customPatternInput ? el.customPatternInput.value : '');
+            } else {
+                el.customPatternContainer.classList.add('hidden');
+                updatePatternHelper(el.namingPatternSelect.value);
+            }
             updatePatternPreview();
-        });
+        }
+
+        function setDisabled(el2, disabled) {
+            if (!el2) return;
+            if (disabled) el2.setAttribute('disabled', 'disabled');
+            else          el2.removeAttribute('disabled');
+        }
+
+        function refreshAssignmentMode() {
+            if (!el.assignmentType) return;
+            const mode = el.assignmentType.value;
+
+            if (mode === 'multiple') {
+                el.singleSection.classList.add('hidden');
+                el.multipleSection.classList.remove('hidden');
+                el.singleConditional.classList.add('hidden');
+                el.multipleConditional.classList.remove('hidden');
+
+                ['registration_start_date', 'registration_end_date', 'instructions'].forEach(id => {
+                    const inp = document.getElementById(id);
+                    if (inp) setDisabled(inp, true);
+                });
+                ['registration_start_date_multiple', 'registration_end_date_multiple', 'instructions_multiple'].forEach(id => {
+                    const inp = document.getElementById(id);
+                    if (inp) setDisabled(inp, false);
+                });
+
+                if (el.agentsContainer && el.agentsContainer.children.length === 0 && el.addAgentBtn && !el.addAgentBtn.disabled) {
+                    addAgentRow();
+                }
+            } else {
+                el.singleSection.classList.remove('hidden');
+                el.multipleSection.classList.add('hidden');
+                el.multipleConditional.classList.add('hidden');
+
+                ['registration_start_date_multiple', 'registration_end_date_multiple', 'instructions_multiple'].forEach(id => {
+                    const inp = document.getElementById(id);
+                    if (inp) setDisabled(inp, true);
+                });
+                ['registration_start_date', 'registration_end_date', 'instructions'].forEach(id => {
+                    const inp = document.getElementById(id);
+                    if (inp) setDisabled(inp, false);
+                });
+
+                updateInvitationChannelsUI();
+            }
+        }
+
+        let agentRowSeq = document.querySelectorAll('#agents-container .agent-row').length;
+
+        function addAgentRow() {
+            agentRowSeq += 1;
+            const idx = agentRowSeq;
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'agent-row border rounded p-4 mb-3';
+            wrapper.style.backgroundColor = 'var(--bg-secondary)';
+            wrapper.style.borderColor = 'var(--border-color)';
+            wrapper.dataset.rowIndex = String(idx);
+
+            const agentOptions = Array.from(
+                document.querySelectorAll('#assigned_agent_id option')
+            ).slice(1).map(opt =>
+                '<option value="' + opt.value + '" data-phone="' + (opt.dataset.phone || '') + '" data-email="' + (opt.dataset.email || '') + '">' + opt.text + '</option>'
+            ).join('');
+
+            wrapper.innerHTML =
+                '<div class="flex justify-between items-center mb-3">' +
+                    '<h5 class="font-medium" style="color: var(--text-primary);">Agent #<span class="agent-number">' + idx + '</span></h5>' +
+                    '<button type="button" class="remove-agent-btn text-red-500 hover:text-red-700"><i class="fas fa-times"></i></button>' +
+                '</div>' +
+                '<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">' +
+                    '<div>' +
+                        '<label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">Agent Type</label>' +
+                        '<select name="agent_types[' + idx + ']" class="w-full p-2 border rounded text-sm agent-type-select" ' +
+                            'style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">' +
+                            '<option value="existing" selected>Existing Agent</option>' +
+                            '<option value="new">New Agent</option>' +
+                        '</select>' +
+                    '</div>' +
+                    '<div>' +
+                        '<label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">Invitation Channels <span class="text-xs font-normal text-gray-500">(optional)</span></label>' +
+                        '<div class="flex space-x-3 text-xs">' +
+                            '<label class="flex items-center space-x-1">' +
+                                '<input type="checkbox" name="agent_invitation_channels[' + idx + '][]" value="sms" class="mr-1 multiple-agent-channel" data-row-index="' + idx + '" ' + (CHANNELS.sms ? '' : 'disabled') + '>' +
+                                '<span style="color: var(--text-primary);">SMS' + (CHANNELS.sms ? '' : ' (N/A)') + '</span>' +
+                            '</label>' +
+                            '<label class="flex items-center space-x-1">' +
+                                '<input type="checkbox" name="agent_invitation_channels[' + idx + '][]" value="whatsapp" class="mr-1 multiple-agent-channel" data-row-index="' + idx + '" ' + (CHANNELS.whatsapp ? '' : 'disabled') + '>' +
+                                '<span style="color: var(--text-primary);">WhatsApp' + (CHANNELS.whatsapp ? '' : ' (N/A)') + '</span>' +
+                            '</label>' +
+                            '<label class="flex items-center space-x-1">' +
+                                '<input type="checkbox" name="agent_invitation_channels[' + idx + '][]" value="email" class="mr-1 multiple-agent-channel" data-row-index="' + idx + '" ' + (CHANNELS.email ? '' : 'disabled') + '>' +
+                                '<span style="color: var(--text-primary);">Email' + (CHANNELS.email ? '' : ' (N/A)') + '</span>' +
+                            '</label>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="existing-agent-fields">' +
+                    '<div class="mb-3">' +
+                        '<label class="block mb-1 text-sm font-medium" style="color: var(--text-primary);">Select Existing Agent</label>' +
+                        '<select name="assigned_agent_ids[' + idx + ']" class="w-full p-2 border rounded text-sm existing-agent-select" ' +
+                            'style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">' +
+                            '<option value="">Select Agent</option>' + agentOptions +
+                        '</select>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="new-agent-fields hidden">' +
+                    '<div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">' +
+                        '<input type="text" name="agent_names[' + idx + ']" class="w-full p-2 border rounded text-sm" placeholder="Agent Name" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">' +
+                        '<input type="tel" name="agent_phones[' + idx + ']" class="w-full p-2 border rounded text-sm" placeholder="+233XXXXXXXXX" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">' +
+                        '<input type="email" name="agent_emails[' + idx + ']" class="w-full p-2 border rounded text-sm" placeholder="agent@example.com" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">' +
+                    '</div>' +
+                '</div>';
+
+            const typeSelect = wrapper.querySelector('.agent-type-select');
+            const existingFields = wrapper.querySelector('.existing-agent-fields');
+            const newFields = wrapper.querySelector('.new-agent-fields');
+            typeSelect.addEventListener('change', () => {
+                const isNew = typeSelect.value === 'new';
+                existingFields.classList.toggle('hidden', isNew);
+                newFields.classList.toggle('hidden', !isNew);
+            });
+
+            wrapper.querySelector('.remove-agent-btn').addEventListener('click', () => {
+                wrapper.remove();
+                renumberAgentRows();
+            });
+
+            el.agentsContainer.appendChild(wrapper);
+        }
+
+        function renumberAgentRows() {
+            document.querySelectorAll('#agents-container .agent-row').forEach((row, i) => {
+                const num = row.querySelector('.agent-number');
+                if (num) num.textContent = String(i + 1);
+            });
+        }
+
+        updateInvitationChannelsAvailability();
+
+        const isEditable = el.namingPatternSelect && !el.namingPatternSelect.disabled;
+
+        if (isEditable) {
+            el.namingPatternSelect.addEventListener('change', toggleCustomPattern);
+            el.customPatternInput?.addEventListener('input', function () {
+                updatePatternHelper('custom');
+                updatePatternPreview();
+            });
+            el.startingPointInput.addEventListener('input', updatePatternPreview);
+            el.sequenceTypeInput.addEventListener('change', function () {
+                updatePatternHelper(el.namingPatternSelect.value === 'custom'
+                    ? (el.customPatternInput ? el.customPatternInput.value : '')
+                    : el.namingPatternSelect.value);
+                updatePatternPreview();
+            });
+        }
 
         toggleCustomPattern();
         updatePatternPreview();
-    }
 
-    // Agent listeners
-    agentSelect?.addEventListener('change', function() {
-        updateExistingAgentInfo();
-        agentPhoneInput.value = '';
-        agentNameInput.value = '';
-        agentEmailInput.value = '';
-        updatePhoneValidation();
-    });
+        el.assignmentType?.addEventListener('change', refreshAssignmentMode);
 
-    agentPhoneInput?.addEventListener('input', function() {
-        updatePhoneValidation();
-        if (this.value.trim()) {
-            agentSelect.value = '';
+        el.agentSelect?.addEventListener('change', function () {
             updateExistingAgentInfo();
-        }
-    });
-
-    agentNameInput?.addEventListener('input', function() {
-        if (this.value.trim()) {
-            agentSelect.value = '';
-            updateExistingAgentInfo();
-        }
-    });
-
-    agentEmailInput?.addEventListener('input', updateInvitationChannelsUI);
-
-    document.querySelectorAll('input[name="invitation_channels[]"]').forEach(checkbox => {
-        checkbox.addEventListener('change', function() {
-            updateChannelVisualState(this);
-            updateInvitationChannelsUI();
+            if (el.agentPhoneInput) el.agentPhoneInput.value = '';
+            if (el.agentNameInput)  el.agentNameInput.value = '';
+            if (el.agentEmailInput) el.agentEmailInput.value = '';
+            updatePhoneValidation();
         });
+
+        el.agentPhoneInput?.addEventListener('input', function () {
+            updatePhoneValidation();
+            if (this.value.trim() && el.agentSelect) { el.agentSelect.value = ''; updateExistingAgentInfo(); }
+        });
+
+        el.agentNameInput?.addEventListener('input', function () {
+            if (this.value.trim() && el.agentSelect) { el.agentSelect.value = ''; updateExistingAgentInfo(); }
+        });
+
+        el.agentEmailInput?.addEventListener('input', updateInvitationChannelsUI);
+
+        document.querySelectorAll('input[name="invitation_channels[]"]').forEach(cb => {
+            cb.addEventListener('change', function () {
+                updateChannelVisualState(this);
+                updateInvitationChannelsUI();
+            });
+        });
+
+        ['zone', 'section', 'registration_start_date', 'registration_end_date', 'instructions'].forEach(id => {
+            const inp = document.getElementById(id);
+            if (inp) {
+                inp.addEventListener('input', updateInvitationPreview);
+                inp.addEventListener('change', updateInvitationPreview);
+            }
+        });
+
+        el.addAgentBtn?.addEventListener('click', addAgentRow);
+
+        document.querySelectorAll('#agents-container .agent-row').forEach(row => {
+            const typeSelect = row.querySelector('.agent-type-select');
+            const existingFields = row.querySelector('.existing-agent-fields');
+            const newFields = row.querySelector('.new-agent-fields');
+            const removeBtn = row.querySelector('.remove-agent-btn');
+            typeSelect?.addEventListener('change', () => {
+                const isNew = typeSelect.value === 'new';
+                existingFields?.classList.toggle('hidden', isNew);
+                newFields?.classList.toggle('hidden', !isNew);
+            });
+            removeBtn?.addEventListener('click', () => {
+                row.remove();
+                renumberAgentRows();
+            });
+        });
+
+        el.form?.addEventListener('submit', function () {
+            if (el.submitBtn && !el.submitBtn.disabled) {
+                el.submitBtn.disabled = true;
+                el.submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Updating…';
+            }
+        });
+
+        refreshAssignmentMode();
+        updateExistingAgentInfo();
+        updatePhoneValidation();
+        updateInvitationChannelsUI();
     });
-
-    document.getElementById('zone')?.addEventListener('input', updateInvitationPreview);
-    document.getElementById('section')?.addEventListener('input', updateInvitationPreview);
-    document.getElementById('registration_start_date')?.addEventListener('change', updateInvitationPreview);
-    document.getElementById('registration_end_date')?.addEventListener('change', updateInvitationPreview);
-    document.getElementById('instructions')?.addEventListener('input', updateInvitationPreview);
-
-    updateExistingAgentInfo();
-    updatePhoneValidation();
-    updateInvitationChannelsUI();
-});
+})();
 </script>
 @endsection
 
 {{-- ============================================================ --}}
-{{-- STYLES — moved into @push('styles') so they render in <head> --}}
-{{-- and don't leak into the header/sidebar. The global `.hidden`  --}}
-{{-- rule is scoped to only the elements this page controls.       --}}
+{{-- STYLES                                                       --}}
 {{-- ============================================================ --}}
 @push('styles')
 <style>
-/* Channel option styling */
-.invitation-channel-option {
-    transition: all 0.3s ease;
-    cursor: pointer;
-}
-
+.invitation-channel-option { transition: all 0.3s ease; cursor: pointer; }
 .invitation-channel-option:hover:not(.channel-disabled) {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
@@ -2042,7 +2149,6 @@ document.addEventListener('DOMContentLoaded', function() {
     background-color: rgba(var(--primary-rgb), 0.05) !important;
 }
 
-/* Disabled/unavailable channel */
 .invitation-channel-option.channel-disabled {
     cursor: not-allowed !important;
     opacity: 0.55;
@@ -2057,18 +2163,14 @@ document.addEventListener('DOMContentLoaded', function() {
     inset: 0;
     background-image: repeating-linear-gradient(
         45deg,
-        rgba(0, 0, 0, 0.03),
-        rgba(0, 0, 0, 0.03) 10px,
-        transparent 10px,
-        transparent 20px
+        rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.03) 10px,
+        transparent 10px, transparent 20px
     );
     pointer-events: none;
     border-radius: inherit;
 }
 
-.invitation-channel-option.channel-disabled input {
-    cursor: not-allowed;
-}
+.invitation-channel-option.channel-disabled input { cursor: not-allowed; }
 
 .fa-whatsapp { color: #25D366; }
 .text-green-600 { color: #16a34a; }
@@ -2076,21 +2178,10 @@ document.addEventListener('DOMContentLoaded', function() {
 .text-yellow-600 { color: #ca8a04; }
 .text-blue-600 { color: #2563eb; }
 
-/* Section styling */
-#email-service-details,
-#channel-requirements {
-    border-left: 4px solid var(--info);
-}
+#email-service-details, #channel-requirements { border-left: 4px solid var(--info); }
+#email-delivery-info { border-left: 4px solid var(--success); }
 
-#email-delivery-info {
-    border-left: 4px solid var(--success);
-}
-
-#sequence-preview {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}
+#sequence-preview { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
 code {
     font-family: 'Courier New', monospace;
@@ -2111,27 +2202,14 @@ code {
     color: var(--text-primary);
 }
 
-.agent-row {
-    transition: all 0.3s ease;
-    border-left: 4px solid var(--info);
-}
-
-.agent-row:hover {
-    transform: translateX(2px);
-}
+.agent-row { transition: all 0.3s ease; border-left: 4px solid var(--info); }
+.agent-row:hover { transform: translateX(2px); }
 
 .remove-agent-btn { transition: all 0.2s ease; }
 .remove-agent-btn:hover { transform: scale(1.1); }
 
 #phone-validation { pointer-events: none; }
 
-/* ============================================================ */
-/* SCOPED .hidden OVERRIDE                                      */
-/* Previously a global `.hidden { display: none; }` was here,   */
-/* which leaked out of this view and forcibly hid the header's  */
-/* search bar (and any other .hidden-using component).          */
-/* Now scoped to only the elements this page controls.          */
-/* ============================================================ */
 #custom_pattern_container.hidden,
 #pattern-preview-container.hidden,
 #pattern-validation.hidden,
@@ -2154,8 +2232,8 @@ code {
 #agent-status-info.hidden,
 #agent-verification-info.hidden,
 #sequence-type-note.hidden,
-.new-agent-fields.hidden,
-.existing-agent-fields.hidden {
+.agent-row .new-agent-fields.hidden,
+.agent-row .existing-agent-fields.hidden {
     display: none !important;
 }
 
@@ -2166,7 +2244,6 @@ code {
     .agent-row .grid { grid-template-columns: 1fr; }
 }
 
-/* Focus styles — scoped to this form so they don't affect the header */
 #registration-plan-form input:focus,
 #registration-plan-form select:focus,
 #registration-plan-form textarea:focus {
@@ -2177,27 +2254,16 @@ code {
 
 .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
 
-.card {
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-}
+.card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
 
 [data-theme="dark"] #invitation-preview-content {
     background-color: var(--bg-primary);
     border-color: var(--border-color);
 }
-
 [data-theme="dark"] .invitation-channel-option.channel-disabled {
     background-color: rgba(255, 255, 255, 0.03) !important;
     border-color: #374151 !important;
 }
-
-/* NOTE: the global `.hidden { display: none; }` rule that used to sit
- * here has been replaced with the scoped list above. That global rule
- * was leaking to the header and hiding the search bar. */
 </style>
 @endpush

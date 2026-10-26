@@ -7,8 +7,9 @@
     $pageTitle = 'Family Links';
 
     $successMessage = session('success');
-    $errorMessage = session('error');
+    $errorMessage   = session('error');
 
+    // ── Stats (two-stage aware) ──
     $totalCount          = $stats['total']             ?? 0;
     $awaitingLandlordCnt = $stats['awaiting_landlord'] ?? 0;
     $awaitingAdminCnt    = $stats['awaiting_admin']    ?? 0;
@@ -20,8 +21,13 @@
 
     $currentStatus = request('status');
 
-    // Permission labels for display
-    $permissionLabels = config('property_family_links.permissions', []);
+    // Permission labels + relationship options for the resubmit modal
+    $permissionLabels    = config('property_family_links.permissions', []);
+    $relationshipOptions = config('property_family_links.relationship_options', []);
+
+    // The "current property" context for the per-property page. On the
+    // index page this is null; on for-property it's the Property model.
+    $currentPropertyId = isset($property) ? (int) $property->id : null;
 @endphp
 
 @extends('layouts.landlord')
@@ -66,6 +72,11 @@
                         <span class="mx-1">•</span>
                         <i class="fas fa-chart-bar mr-1"></i>
                         <span>{{ number_format($totalCount) }} total</span>
+                        @if(!empty($properties) && $properties->count() > 0)
+                            <span class="mx-1">•</span>
+                            <i class="fas fa-building mr-1"></i>
+                            <span>{{ $properties->count() }} {{ Str::plural('property', $properties->count()) }}</span>
+                        @endif
                     </div>
                 </div>
             </div>
@@ -113,10 +124,9 @@
     @endif
 
     {{-- ============================================================
-         STAT CARDS — updated for two-stage flow
+         STAT CARDS
          ============================================================ --}}
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-        {{-- Total --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -132,7 +142,6 @@
             </div>
         </div>
 
-        {{-- Awaiting Landlord --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -148,7 +157,6 @@
             </div>
         </div>
 
-        {{-- Awaiting Admin --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -164,7 +172,6 @@
             </div>
         </div>
 
-        {{-- Approved --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -180,7 +187,6 @@
             </div>
         </div>
 
-        {{-- Rejected --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -196,7 +202,6 @@
             </div>
         </div>
 
-        {{-- Revoked --}}
         <div class="card">
             <div class="p-4">
                 <div class="flex items-center justify-between">
@@ -233,12 +238,12 @@
                             </label>
                             <select name="status" class="index-custom-dropdown w-full">
                                 <option value="">All Status</option>
-                                <option value="pending_landlord_confirmation" {{ request('status') == 'pending_landlord_confirmation' ? 'selected' : '' }}>Awaiting Your Confirmation</option>
-                                <option value="pending_admin_review"          {{ request('status') == 'pending_admin_review'          ? 'selected' : '' }}>Awaiting Admin Review</option>
-                                <option value="approved"                      {{ request('status') == 'approved'                      ? 'selected' : '' }}>Approved</option>
-                                <option value="rejected"                      {{ request('status') == 'rejected'                      ? 'selected' : '' }}>Rejected</option>
-                                <option value="revoked"                       {{ request('status') == 'revoked'                       ? 'selected' : '' }}>Revoked</option>
-                                <option value="cancelled"                     {{ request('status') == 'cancelled'                     ? 'selected' : '' }}>Cancelled</option>
+                                <option value="{{ PropertyFamilyLink::STATUS_PENDING_LANDLORD }}" {{ request('status') == PropertyFamilyLink::STATUS_PENDING_LANDLORD ? 'selected' : '' }}>Awaiting Your Confirmation</option>
+                                <option value="{{ PropertyFamilyLink::STATUS_PENDING_ADMIN }}"    {{ request('status') == PropertyFamilyLink::STATUS_PENDING_ADMIN    ? 'selected' : '' }}>Awaiting Admin Review</option>
+                                <option value="{{ PropertyFamilyLink::STATUS_APPROVED }}"         {{ request('status') == PropertyFamilyLink::STATUS_APPROVED         ? 'selected' : '' }}>Approved</option>
+                                <option value="{{ PropertyFamilyLink::STATUS_REJECTED }}"         {{ request('status') == PropertyFamilyLink::STATUS_REJECTED         ? 'selected' : '' }}>Rejected</option>
+                                <option value="{{ PropertyFamilyLink::STATUS_REVOKED }}"          {{ request('status') == PropertyFamilyLink::STATUS_REVOKED          ? 'selected' : '' }}>Revoked</option>
+                                <option value="{{ PropertyFamilyLink::STATUS_CANCELLED }}"        {{ request('status') == PropertyFamilyLink::STATUS_CANCELLED        ? 'selected' : '' }}>Cancelled</option>
                             </select>
                         </div>
 
@@ -281,7 +286,14 @@
                             Family Links
                             @if($currentStatus)
                                 <span class="text-sm font-normal ml-2 px-2 py-1 rounded-full badge-primary">
-                                    {{ ucfirst(str_replace('_', ' ', $currentStatus)) }}
+                                    {{ data_get([
+                                        PropertyFamilyLink::STATUS_PENDING_LANDLORD => 'Awaiting Your Confirmation',
+                                        PropertyFamilyLink::STATUS_PENDING_ADMIN    => 'Awaiting Admin Review',
+                                        PropertyFamilyLink::STATUS_APPROVED         => 'Approved',
+                                        PropertyFamilyLink::STATUS_REJECTED         => 'Rejected',
+                                        PropertyFamilyLink::STATUS_REVOKED          => 'Revoked',
+                                        PropertyFamilyLink::STATUS_CANCELLED        => 'Cancelled',
+                                    ], $currentStatus, ucfirst(str_replace('_', ' ', $currentStatus))) }}
                                 </span>
                             @endif
                         </h3>
@@ -314,7 +326,7 @@
                     </div>
                 @else
                     <div class="overflow-x-auto">
-                        <table class="w-full min-w-[900px]" id="linksTable">
+                        <table class="w-full min-w-[960px]" id="linksTable">
                             <thead>
                                 <tr>
                                     <th class="text-left p-3 font-medium text-xs uppercase tracking-wider"
@@ -330,7 +342,7 @@
                                         Relationship
                                     </th>
                                     <th class="text-left p-3 font-medium text-xs uppercase tracking-wider"
-                                        style="color: var(--text-secondary); background-color: var(--bg-secondary); min-width: 180px;">
+                                        style="color: var(--text-secondary); background-color: var(--bg-secondary); min-width: 200px;">
                                         Status
                                     </th>
                                     <th class="text-left p-3 font-medium text-xs uppercase tracking-wider"
@@ -338,7 +350,7 @@
                                         Submitted
                                     </th>
                                     <th class="text-left p-3 font-medium text-xs uppercase tracking-wider"
-                                        style="color: var(--text-secondary); background-color: var(--bg-secondary); min-width: 180px;">
+                                        style="color: var(--text-secondary); background-color: var(--bg-secondary); min-width: 200px;">
                                         Actions
                                     </th>
                                 </tr>
@@ -347,19 +359,34 @@
                                 @foreach($links as $link)
                                 @php
                                     $statusConfigs = [
-                                        'pending_landlord_confirmation' => ['class' => 'badge-primary',   'icon' => 'hand-pointer',    'text' => 'Awaiting You'],
-                                        'pending_admin_review'          => ['class' => 'badge-warning',   'icon' => 'hourglass-half',  'text' => 'Awaiting Admin'],
-                                        'pending'                       => ['class' => 'badge-warning',   'icon' => 'clock',           'text' => 'Pending'],
-                                        'approved'                      => ['class' => 'badge-success',   'icon' => 'check-circle',    'text' => 'Approved'],
-                                        'rejected'                      => ['class' => 'badge-danger',    'icon' => 'times-circle',    'text' => 'Rejected'],
-                                        'revoked'                       => ['class' => 'badge-secondary', 'icon' => 'ban',             'text' => 'Revoked'],
-                                        'cancelled'                     => ['class' => 'badge-secondary', 'icon' => 'times',           'text' => 'Cancelled'],
+                                        PropertyFamilyLink::STATUS_PENDING_LANDLORD => ['class' => 'badge-primary',   'icon' => 'hand-pointer',   'text' => 'Awaiting You'],
+                                        PropertyFamilyLink::STATUS_PENDING_ADMIN    => ['class' => 'badge-warning',   'icon' => 'hourglass-half', 'text' => 'Awaiting Admin'],
+                                        PropertyFamilyLink::STATUS_PENDING          => ['class' => 'badge-warning',   'icon' => 'clock',          'text' => 'Pending'],
+                                        PropertyFamilyLink::STATUS_APPROVED         => ['class' => 'badge-success',   'icon' => 'check-circle',   'text' => 'Approved'],
+                                        PropertyFamilyLink::STATUS_REJECTED         => ['class' => 'badge-danger',    'icon' => 'times-circle',   'text' => 'Rejected'],
+                                        PropertyFamilyLink::STATUS_REVOKED          => ['class' => 'badge-secondary', 'icon' => 'ban',            'text' => 'Revoked'],
+                                        PropertyFamilyLink::STATUS_CANCELLED        => ['class' => 'badge-secondary', 'icon' => 'times',          'text' => 'Cancelled'],
                                     ];
-                                    $sc = $statusConfigs[$link->status] ?? ['class' => 'badge-secondary', 'icon' => 'question-circle', 'text' => ucfirst($link->status)];
+                                    $sc = $statusConfigs[$link->status]
+                                        ?? ['class' => 'badge-secondary', 'icon' => 'question-circle', 'text' => ucfirst($link->status)];
+
+                                    $memberName  = $link->display_name ?? $link->proposed_name ?? 'this member';
+                                    $reasonId    = "reason-{$link->id}";
+                                    $isRejected  = $link->status === PropertyFamilyLink::STATUS_REJECTED;
+                                    $hasReason   = $isRejected && !empty($link->admin_notes);
+                                    $granted     = $link->permissions ?? [];
                                 @endphp
                                 <tr data-link-id="{{ $link->id }}"
                                     data-status="{{ $link->status }}"
-                                    data-member-name="{{ addslashes($link->proposed_name) }}">
+                                    data-member-name="{{ $memberName }}"
+                                    data-property-id="{{ $link->property_id }}"
+                                    data-property-name="{{ $link->property->property_name ?? '' }}"
+                                    data-relationship="{{ $link->relationship }}"
+                                    data-phone="{{ $link->proposed_phone }}"
+                                    data-email="{{ $link->proposed_email }}"
+                                    data-landlord-notes="{{ $link->landlord_notes }}"
+                                    data-permissions="{{ implode(',', $granted) }}"
+                                    data-rejection-reason="{{ $hasReason ? $link->admin_notes : '' }}">
 
                                     {{-- Member --}}
                                     <td class="p-3 align-top">
@@ -372,7 +399,7 @@
                                             </div>
                                             <div>
                                                 <div class="font-semibold text-sm" style="color: var(--text-primary);">
-                                                    {{ $link->display_name }}
+                                                    {{ $memberName }}
                                                 </div>
                                                 @if($link->proposed_phone)
                                                 <div class="text-xs mt-0.5" style="color: var(--text-secondary);">
@@ -423,15 +450,33 @@
                                             <div class="text-xs mt-1" style="color: var(--text-secondary);">
                                                 Waiting on administrator review
                                             </div>
-                                        @elseif($link->isPending())
-                                            <div class="text-xs mt-1" style="color: var(--text-secondary);">
-                                                Awaiting review
-                                            </div>
                                         @endif
 
-                                        @if($link->admin_notes && $link->status === 'rejected')
-                                            <div class="text-xs mt-1" style="color: var(--danger);">
-                                                <i class="fas fa-comment mr-0.5"></i> {{ Str::limit($link->admin_notes, 40) }}
+                                        {{-- Rejection reason disclosure --}}
+                                        @if($hasReason)
+                                            <div class="text-xs mt-1.5">
+                                                <button type="button"
+                                                        onclick="toggleReason('{{ $reasonId }}')"
+                                                        class="inline-flex items-center font-medium"
+                                                        style="color: var(--danger); background: none; border: none; cursor: pointer; padding: 0;">
+                                                    <i class="fas fa-comment mr-1"></i>
+                                                    <span id="{{ $reasonId }}-short">
+                                                        {{ Str::limit($link->admin_notes, 40) }}
+                                                    </span>
+                                                    <i class="fas fa-chevron-down ml-1" id="{{ $reasonId }}-icon" style="transition: transform .15s ease;"></i>
+                                                </button>
+                                                <div id="{{ $reasonId }}-full"
+                                                     class="hidden mt-1 p-2 rounded text-xs"
+                                                     style="background-color: rgba(var(--danger-rgb), 0.06); border: 1px solid rgba(var(--danger-rgb), 0.2); color: var(--text-primary); max-width: 320px;">
+                                                    <div class="font-medium mb-0.5" style="color: var(--danger);">
+                                                        <i class="fas fa-comment-dots mr-1"></i> Why this was rejected
+                                                    </div>
+                                                    <div style="white-space: pre-wrap;">{{ $link->admin_notes }}</div>
+                                                    <div class="mt-2 text-xs" style="color: var(--text-secondary);">
+                                                        <i class="fas fa-lightbulb mr-1"></i>
+                                                        Fix the issue and use <strong>Edit &amp; Resubmit</strong> below to update this proposal.
+                                                    </div>
+                                                </div>
                                             </div>
                                         @endif
                                     </td>
@@ -455,31 +500,37 @@
                                             </a>
 
                                             @if($link->isAwaitingLandlordConfirmation())
-                                                {{-- Gate 1: Landlord confirms --}}
                                                 <button type="button"
-                                                        onclick="showConfirmModal('{{ $link->id }}', '{{ addslashes($link->proposed_name) }}')"
-                                                        class="action-btn assign" data-tooltip="Confirm Proposal">
+                                                        onclick="showConfirmModal({{ $link->id }})"
+                                                        class="action-btn assign" data-tooltip="Confirm & Send to Admin">
                                                     <i class="fas fa-check"></i>
                                                 </button>
                                                 <button type="button"
-                                                        onclick="showCancelModal('{{ $link->id }}', '{{ addslashes($link->proposed_name) }}')"
+                                                        onclick="showCancelModal({{ $link->id }})"
                                                         class="action-btn delete" data-tooltip="Cancel Proposal">
                                                     <i class="fas fa-times"></i>
                                                 </button>
 
                                             @elseif($link->isAwaitingAdminReview())
-                                                {{-- Waiting on admin — landlord can only cancel --}}
                                                 <button type="button"
-                                                        onclick="showCancelModal('{{ $link->id }}', '{{ addslashes($link->proposed_name) }}')"
+                                                        onclick="showCancelModal({{ $link->id }})"
                                                         class="action-btn delete" data-tooltip="Cancel Proposal">
                                                     <i class="fas fa-times"></i>
                                                 </button>
 
                                             @elseif($link->isApproved())
                                                 <button type="button"
-                                                        onclick="showRevokeModal('{{ $link->id }}', '{{ addslashes($link->display_name) }}')"
+                                                        onclick="showRevokeModal({{ $link->id }})"
                                                         class="action-btn delete" data-tooltip="Revoke Access">
                                                     <i class="fas fa-ban"></i>
+                                                </button>
+
+                                            @elseif($link->status === PropertyFamilyLink::STATUS_REJECTED)
+                                                {{-- Edit & Resubmit — updates THIS row in place --}}
+                                                <button type="button"
+                                                        onclick="showResubmitModal({{ $link->id }})"
+                                                        class="action-btn assign" data-tooltip="Edit & Resubmit">
+                                                    <i class="fas fa-redo"></i>
                                                 </button>
                                             @endif
                                         </div>
@@ -506,7 +557,7 @@
 </div>
 
 {{-- ============================================================
-     CONFIRM MODAL — for pending_landlord_confirmation
+     CONFIRM MODAL
      ============================================================ --}}
 <div id="confirmModal" class="fixed inset-0 z-50 hidden">
     <div class="fixed inset-0 bg-black bg-opacity-50" onclick="hideConfirmModal()"></div>
@@ -550,7 +601,7 @@
 </div>
 
 {{-- ============================================================
-     CANCEL MODAL — for any pending stage
+     CANCEL MODAL
      ============================================================ --}}
 <div id="cancelModal" class="fixed inset-0 z-50 hidden">
     <div class="fixed inset-0 bg-black bg-opacity-50" onclick="hideCancelModal()"></div>
@@ -595,7 +646,7 @@
 </div>
 
 {{-- ============================================================
-     REVOKE MODAL — for approved links
+     REVOKE MODAL
      ============================================================ --}}
 <div id="revokeModal" class="fixed inset-0 z-50 hidden">
     <div class="fixed inset-0 bg-black bg-opacity-50" onclick="hideRevokeModal()"></div>
@@ -645,15 +696,159 @@
     </div>
 </div>
 
+{{-- ============================================================
+     RESUBMIT MODAL — updates the EXISTING proposal in place
+     ============================================================ --}}
+<div id="resubmitModal" class="fixed inset-0 z-50 hidden">
+    <div class="fixed inset-0 bg-black bg-opacity-50" onclick="hideResubmitModal()"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4">
+        <div class="modal-container rounded-lg shadow-xl w-full max-w-2xl">
+            <div class="modal-header">
+                <h3 class="flex items-center text-lg font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-redo mr-2" style="color: var(--primary);"></i>
+                    Edit &amp; Resubmit Proposal
+                </h3>
+                <button type="button" onclick="hideResubmitModal()" class="modal-close-btn">
+                    <i class="fas fa-times" style="color: var(--text-secondary);"></i>
+                </button>
+            </div>
+            <form id="resubmitForm" method="POST" action="">
+                @csrf
+                {{-- Edit in place: the same row id is submitted back --}}
+                <input type="hidden" name="resubmit_from" id="resubmitFromId" value="">
+                <input type="hidden" name="property_id"   id="resubmitPropertyId" value="">
+
+                <div class="modal-body">
+                    {{-- Show the original rejection reason so the landlord knows what to fix --}}
+                    <div id="resubmitReasonBanner"
+                         class="rounded-lg p-3 mb-4 hidden"
+                         style="background-color: rgba(var(--danger-rgb), 0.08); border: 1px solid rgba(var(--danger-rgb), 0.3);">
+                        <div class="flex items-start">
+                            <i class="fas fa-info-circle mr-2 mt-0.5" style="color: var(--danger);"></i>
+                            <div class="flex-1">
+                                <div class="text-xs font-semibold mb-0.5" style="color: var(--danger);">
+                                    Original rejection reason
+                                </div>
+                                <div class="text-xs" id="resubmitReasonText" style="color: var(--text-primary); white-space: pre-wrap;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="rounded-lg p-3 mb-4"
+                         style="background-color: rgba(var(--info-rgb), 0.1); border: 1px solid rgba(var(--info-rgb), 0.3);">
+                        <div class="flex items-start">
+                            <i class="fas fa-info-circle mr-2 mt-0.5" style="color: var(--info);"></i>
+                            <p class="text-xs" style="color: var(--text-secondary);">
+                                This will update your <strong>existing rejected proposal</strong> and reset it to
+                                <em>Awaiting Your Confirmation</em>. Once you confirm it, it goes to admins for a fresh review.
+                                The previous rejection reason is preserved in the audit log for reference.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium mb-1" style="color: var(--text-primary);">
+                                Full Name <span class="text-red-500">*</span>
+                            </label>
+                            <input type="text" name="proposed_name" id="resubmitName" required maxlength="255"
+                                   class="index-custom-input w-full"
+                                   placeholder="e.g., Jane Doe">
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--text-primary);">
+                                Relationship <span class="text-red-500">*</span>
+                            </label>
+                            <select name="relationship" id="resubmitRelationship" required
+                                    class="index-custom-dropdown w-full">
+                                <option value="">Select…</option>
+                                @foreach($relationshipOptions as $key => $label)
+                                    @php
+                                        $value = is_int($key) ? $label : $key;
+                                        $text  = is_int($key) ? ucfirst($label) : $label;
+                                    @endphp
+                                    <option value="{{ $value }}">{{ $text }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--text-primary);">
+                                Phone
+                            </label>
+                            <input type="text" name="proposed_phone" id="resubmitPhone" maxlength="20"
+                                   class="index-custom-input w-full"
+                                   placeholder="+233...">
+                            <p class="text-xs mt-1" style="color: var(--text-secondary);">Provide phone or email.</p>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium mb-1" style="color: var(--text-primary);">
+                                Email
+                            </label>
+                            <input type="email" name="proposed_email" id="resubmitEmail" maxlength="255"
+                                   class="index-custom-input w-full"
+                                   placeholder="name@example.com">
+                        </div>
+                    </div>
+
+                    <div class="mt-5">
+                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                            <i class="fas fa-key mr-1"></i> Permissions
+                        </label>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            @foreach($permissionLabels as $key => $label)
+                            <div class="flex items-center p-2 rounded"
+                                 style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                                <input type="checkbox" name="permissions[]" value="{{ $key }}"
+                                       id="resubmit-perm-{{ $key }}"
+                                       class="mr-2 w-4 h-4" style="accent-color: var(--primary);">
+                                <label for="resubmit-perm-{{ $key }}" class="text-sm cursor-pointer" style="color: var(--text-primary);">
+                                    {{ $label }}
+                                </label>
+                            </div>
+                            @endforeach
+                        </div>
+                    </div>
+
+                    <div class="mt-5">
+                        <label class="block text-sm font-medium mb-1" style="color: var(--text-primary);">
+                            Notes for Administrator (Optional)
+                        </label>
+                        <textarea name="landlord_notes" id="resubmitNotes" rows="3" maxlength="1000"
+                                  class="index-custom-textarea w-full"
+                                  placeholder="Add any context — e.g. what changed since the original rejection..."></textarea>
+                        <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                            <i class="fas fa-lightbulb mr-1"></i>
+                            Explaining what you fixed makes review faster.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" onclick="hideResubmitModal()"
+                            class="btn-secondary px-4 py-2 rounded-lg font-medium">Cancel</button>
+                    <button type="submit"
+                            class="btn-primary px-4 py-2 rounded-lg font-medium text-white">
+                        <i class="fas fa-redo mr-2"></i> Resubmit Proposal
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 @push('scripts')
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     autoHideMessages();
     initTooltips();
 
-    bindForm('confirmForm', () => submitForm('confirmForm', 'confirm'));
-    bindForm('cancelForm',  () => submitForm('cancelForm',  'cancel'));
-    bindForm('revokeForm',  () => submitForm('revokeForm',  'revoke'));
+    bindForm('confirmForm',  () => submitForm('confirmForm',  'confirm'));
+    bindForm('cancelForm',   () => submitForm('cancelForm',   'cancel'));
+    bindForm('revokeForm',   () => submitForm('revokeForm',   'revoke'));
+    bindForm('resubmitForm', () => submitForm('resubmitForm', 'resubmit'));
 });
 
 function bindForm(id, handler) {
@@ -664,10 +859,31 @@ function bindForm(id, handler) {
     });
 }
 
+/* ---------- Row helpers ---------- */
+function rowFor(id) {
+    return document.querySelector(`tr[data-link-id="${id}"]`);
+}
+function rowName(id) {
+    return rowFor(id)?.getAttribute('data-member-name') || 'this member';
+}
+
+/* ---------- Reason disclosure toggle ---------- */
+function toggleReason(id) {
+    const full  = document.getElementById(`${id}-full`);
+    const icon  = document.getElementById(`${id}-icon`);
+    const short = document.getElementById(`${id}-short`);
+    if (!full) return;
+
+    const isHidden = full.classList.contains('hidden');
+    full.classList.toggle('hidden', !isHidden);
+    if (short) short.classList.toggle('hidden', isHidden);
+    if (icon)  icon.style.transform = isHidden ? 'rotate(180deg)' : '';
+}
+
 /* ---------- CONFIRM ---------- */
-function showConfirmModal(id, name) {
+function showConfirmModal(id) {
     document.getElementById('confirmForm').action = `/landlord/family-links/${id}/confirm`;
-    document.getElementById('confirmMemberName').textContent = name;
+    document.getElementById('confirmMemberName').textContent = rowName(id);
     document.getElementById('confirmModal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
 }
@@ -677,9 +893,9 @@ function hideConfirmModal() {
 }
 
 /* ---------- CANCEL ---------- */
-function showCancelModal(id, name) {
+function showCancelModal(id) {
     document.getElementById('cancelForm').action = `/landlord/family-links/${id}`;
-    document.getElementById('cancelMemberName').textContent = name;
+    document.getElementById('cancelMemberName').textContent = rowName(id);
     document.getElementById('cancelModal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
 }
@@ -689,14 +905,72 @@ function hideCancelModal() {
 }
 
 /* ---------- REVOKE ---------- */
-function showRevokeModal(id, name) {
+function showRevokeModal(id) {
     document.getElementById('revokeForm').action = `/landlord/family-links/${id}/revoke`;
-    document.getElementById('revokeMemberName').textContent = name;
+    document.getElementById('revokeMemberName').textContent = rowName(id);
     document.getElementById('revokeModal').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
 }
 function hideRevokeModal() {
     document.getElementById('revokeModal').classList.add('hidden');
+    document.body.style.overflow = 'auto';
+}
+
+/* ---------- RESUBMIT (edit in place) ---------- */
+function showResubmitModal(id) {
+    const row = rowFor(id);
+    if (!row) return;
+
+    // IMPORTANT: the form posts to the same store endpoint, but the
+    // `resubmit_from` hidden field tells the backend to UPDATE this
+    // row in place rather than create a new one.
+    document.getElementById('resubmitForm').action = "{{ route('landlord.family-links.store') }}";
+    document.getElementById('resubmitFromId').value     = id;
+    document.getElementById('resubmitPropertyId').value = row.getAttribute('data-property-id') || '';
+    document.getElementById('resubmitName').value       = row.getAttribute('data-member-name') || '';
+    document.getElementById('resubmitPhone').value      = row.getAttribute('data-phone')        || '';
+    document.getElementById('resubmitEmail').value      = row.getAttribute('data-email')        || '';
+    document.getElementById('resubmitNotes').value      = row.getAttribute('data-landlord-notes') || '';
+
+    // Relationship select — match value first, then fall back to label
+    const rel = row.getAttribute('data-relationship') || '';
+    const relSelect = document.getElementById('resubmitRelationship');
+    let matched = false;
+    for (const opt of relSelect.options) {
+        if (opt.value === rel) { opt.selected = true; matched = true; break; }
+    }
+    if (!matched) {
+        for (const opt of relSelect.options) {
+            if (opt.text.trim().toLowerCase() === rel.toLowerCase()) { opt.selected = true; break; }
+        }
+    }
+
+    // Permissions checkboxes — reset only the ones in the resubmit modal
+    const perms = (row.getAttribute('data-permissions') || '').split(',').filter(Boolean);
+    document.querySelectorAll('input[name="permissions[]"]').forEach(cb => {
+        if (cb.id.startsWith('resubmit-perm-')) {
+            cb.checked = perms.includes(cb.value);
+        }
+    });
+
+    // Rejection reason banner — read straight from the row's data attribute
+    const reasonText = (row.getAttribute('data-rejection-reason') || '').trim();
+    const banner     = document.getElementById('resubmitReasonBanner');
+    const reasonBox  = document.getElementById('resubmitReasonText');
+    if (reasonText) {
+        reasonBox.textContent = reasonText;
+        banner.classList.remove('hidden');
+    } else {
+        reasonBox.textContent = '';
+        banner.classList.add('hidden');
+    }
+
+    document.getElementById('resubmitModal').classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    setTimeout(() => document.getElementById('resubmitName').focus(), 100);
+}
+function hideResubmitModal() {
+    document.getElementById('resubmitModal').classList.add('hidden');
     document.body.style.overflow = 'auto';
 }
 
@@ -717,16 +991,22 @@ function submitForm(formId, action) {
         },
         body: new FormData(form)
     })
-    .then(r => r.json())
-    .then(data => {
+    .then(r => r.json().then(data => ({ status: r.status, data })))
+    .then(({ status, data }) => {
         if (data.success) {
             showNotification('success', data.message || 'Action completed.');
-            if (action === 'confirm') hideConfirmModal();
-            if (action === 'cancel')  hideCancelModal();
-            if (action === 'revoke')  hideRevokeModal();
+            if (action === 'confirm')  hideConfirmModal();
+            if (action === 'cancel')   hideCancelModal();
+            if (action === 'revoke')   hideRevokeModal();
+            if (action === 'resubmit') hideResubmitModal();
             setTimeout(() => window.location.reload(), 1200);
         } else {
-            showNotification('error', data.message || 'Error.');
+            let msg = data.message || 'Error.';
+            if (data.errors) {
+                const first = Object.values(data.errors)[0];
+                if (Array.isArray(first)) msg = first[0];
+            }
+            showNotification('error', msg);
             btn.innerHTML = original;
             btn.disabled = false;
         }
@@ -738,6 +1018,7 @@ function submitForm(formId, action) {
     });
 }
 
+/* ---------- Misc ---------- */
 function escapeHtml(t) {
     const d = document.createElement('div');
     d.textContent = t;
@@ -796,6 +1077,7 @@ function initTooltips() {
 </script>
 
 <style>
+.index-custom-input,
 .index-custom-dropdown,
 .index-custom-textarea {
     background-color: var(--card-bg);
@@ -805,6 +1087,7 @@ function initTooltips() {
     padding: 0.5rem 0.75rem;
     width: 100%;
 }
+.index-custom-input:focus,
 .index-custom-dropdown:focus,
 .index-custom-textarea:focus {
     outline: none;

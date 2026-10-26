@@ -394,7 +394,7 @@
     </a>
     
     <!-- Rotation Groups - FIXED -->
-    <a href="{{ route('security.schedules.rotation-groups') }}" 
+    <a href="{{ route('security.rotation-groups.index') }}" 
        class="quick-nav-card rounded-xl p-4 text-center transition-all hover:shadow-lg hover:translate-y-1"
        style="background: linear-gradient(135deg, var(--card-bg) 0%, var(--bg-secondary) 100%); border: 1px solid var(--border-color);">
         <div class="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-2" 

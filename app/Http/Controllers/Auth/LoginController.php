@@ -13,6 +13,7 @@ use App\Services\Authentication\TwoFactorAuthService;
 use App\Services\Authentication\LoginActivityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
@@ -58,6 +59,12 @@ class LoginController extends Controller
     protected string $redirectTo = '/dashboard';
 
     /**
+     * ✅ NEW: session key for the mandatory 2FA setup interstitial.
+     */
+    protected const SESSION_2FA_SETUP_USER_ID    = '2fa_setup_required:user_id';
+    protected const SESSION_2FA_SETUP_EXPIRES_AT = '2fa_setup_required:expires_at';
+
+    /**
      * Constructor
      */
     public function __construct(
@@ -96,13 +103,6 @@ class LoginController extends Controller
      |    fund the resolution of the debt.
      * ============================================================ */
 
-    /**
-     * Build the post-login redirect response for a web login.
-     *
-     * @param  User    $user
-     * @param  Request $request
-     * @return \Illuminate\Http\RedirectResponse
-     */
     protected function postLoginRedirect(User $user, Request $request)
     {
         try {
@@ -180,15 +180,9 @@ class LoginController extends Controller
             ]);
         }
 
-        // Default: role-based redirect
         return $this->redirectionService->redirect($user);
     }
 
-    /**
-     * Billing state for the login page (used by showLoginForm view).
-     *
-     * @return array{state: ?string, overdue: bool, pending: bool}
-     */
     protected function loginPageBillingState(): array
     {
         try {
@@ -217,40 +211,45 @@ class LoginController extends Controller
         $this->debugSessionInfo($request, 'showLoginForm');
 
         if (Auth::check()) {
-            // If a super admin is already logged in with billing restricted,
-            // send them to the billing dashboard. Otherwise normal redirect.
             return $this->postLoginRedirect(Auth::user(), $request);
         }
 
-        $socialError = session('social_error');
-        if ($socialError) {
-            return view('auth.login', [
-                'social_error'          => $socialError,
-                'loginBillingState'     => $this->loginPageBillingState(),
-            ]);
+        $systemSettings = null;
+        try {
+            $systemSettings = Cache::remember(
+                'system_settings_login_blade',
+                now()->addMinutes(30),
+                fn () => \App\Models\SystemSetting::getSettings()
+            );
+        } catch (\Throwable $e) {
+            \Log::debug('Login blade settings resolution failed: ' . $e->getMessage());
+        }
+
+        $base = [
+            'systemSettings'    => $systemSettings,
+            'loginBillingState' => $this->loginPageBillingState(),
+        ];
+
+        if ($socialError = session('social_error')) {
+            return view('auth.login', array_merge($base, [
+                'social_error' => $socialError,
+            ]));
         }
 
         if ($request->session()->has('session_expired')) {
             $request->session()->forget('session_expired');
-            return view('auth.login', [
-                'loginBillingState' => $this->loginPageBillingState(),
-            ])->with('warning', 'Your session expired. Please login again.');
+            return view('auth.login', $base)
+                ->with('warning', 'Your session expired. Please login again.');
         }
 
         if ($request->query('expired') == '1') {
-            return view('auth.login', [
-                'loginBillingState' => $this->loginPageBillingState(),
-            ])->with('error', 'Page expired due to session timeout. Please try again.');
+            return view('auth.login', $base)
+                ->with('error', 'Page expired due to session timeout. Please try again.');
         }
 
-        return view('auth.login', [
-            'loginBillingState' => $this->loginPageBillingState(),
-        ]);
+        return view('auth.login', $base);
     }
 
-    /**
-     * Debug session information
-     */
     protected function debugSessionInfo(Request $request, string $location): void
     {
         if (app()->environment('local') || config('app.debug')) {
@@ -282,7 +281,23 @@ class LoginController extends Controller
 
     /* ============================================================
      | WEB LOGIN
-     | ============================================================ */
+     | ------------------------------------------------------------
+     | ✅ FIXED (2026-10-13):
+     |  - Regenerate the session ID + CSRF token AFTER
+     |    `Auth::logout()` in the 2FA handoff path.
+     |
+     | ✅ NEW (2026-10-13):
+     |  - Policy-driven mandatory 2FA setup. When the developer
+     |    setting says a role MUST use 2FA and the user hasn't set
+     |    it up, we place them in a setup-only session instead of
+     |    letting them into the app.
+     |
+     |    This runs AFTER the existing 2FA-enabled handoff, so a
+     |    user who already has 2FA goes through the normal flow.
+     |
+     |    Enforcement is delegated to DeveloperSetting so the login
+     |    controller never has to know which roles are in scope.
+     * ============================================================ */
 
     public function login(Request $request)
     {
@@ -295,9 +310,8 @@ class LoginController extends Controller
         }
 
         $request->validate([
-            'login' => 'required|string',
+            'login'    => 'required|string',
             'password' => 'required|string',
-            'two_factor_code' => 'nullable|string|size:6',
         ]);
 
         if ($this->hasTooManyLoginAttempts($request)) {
@@ -309,14 +323,16 @@ class LoginController extends Controller
 
         $this->loginAttemptService->logAttempt($request, $user);
 
-        if ($user && $user->isArchived()) {
-            return $this->archivedAccountService->handleArchivedLogin($user, $request);
-        }
+        // ─────────────────────────────────────────────────────────────
+        // ARCHIVAL: FIRST check after user lookup.
+        // ─────────────────────────────────────────────────────────────
+        if ($user) {
+            $isTrashed  = method_exists($user, 'trashed') && $user->trashed();
+            $isArchived = method_exists($user, 'isArchived') && $user->isArchived();
 
-        if ($user && $user->trashed()) {
-            throw ValidationException::withMessages([
-                'login' => 'This account has been deactivated. Please contact administrator.',
-            ]);
+            if ($isTrashed || $isArchived) {
+                return $this->redirectWithArchivalNotice($user);
+            }
         }
 
         if ($user && !$this->hasPermissionToLogin($user)) {
@@ -328,34 +344,36 @@ class LoginController extends Controller
         $authenticated = false;
         $remember = $request->boolean('remember');
 
-        if ($user && !$user->isArchived()) {
-            if (Hash::check($credentials['password'], $user->password)) {
-                $authenticated = $this->performLogin($user, $remember);
+        if ($user && Hash::check($credentials['password'], $user->password)) {
+            $authenticated = $this->performLogin($user, $remember);
+            if ($authenticated) {
                 \Log::info('Authentication successful for user', [
-                    'user_id' => $user->id,
-                    'email' => $user->email,
+                    'user_id'       => $user->id,
+                    'email'         => $user->email,
                     'authenticated' => $authenticated,
-                    'session_id' => session()->getId()
+                    'session_id'    => session()->getId(),
                 ]);
             }
         }
 
-        if (!$authenticated && $this->attemptLoginWithPhoneVariations($credentials, $remember)) {
+        if (!$authenticated
+            && isset($credentials['phone'])
+            && $this->attemptLoginWithPhoneVariations($credentials, $remember)) {
             $authenticated = true;
             $user = Auth::user();
             \Log::info('Authentication successful via phone variation', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-                'session_id' => session()->getId()
+                'user_id'    => $user->id,
+                'email'      => $user->email,
+                'session_id' => session()->getId(),
             ]);
         }
 
         if (!$authenticated) {
             $this->incrementLoginAttempts($request);
             \Log::warning('Authentication failed', [
-                'login' => $request->input('login'),
-                'ip' => $request->ip(),
-                'session_id' => session()->getId()
+                'login'      => $request->input('login'),
+                'ip'         => $request->ip(),
+                'session_id' => session()->getId(),
             ]);
             throw ValidationException::withMessages([
                 'login' => [trans('auth.failed')],
@@ -364,41 +382,183 @@ class LoginController extends Controller
 
         $user = Auth::user();
 
-        $this->regenerateSession($request);
         $this->trackDevice($request, $user);
 
+        // ─────────────────────────────────────────────────────────────
+        // 2FA ENABLED — existing handoff (trusted-device aware)
+        // ─────────────────────────────────────────────────────────────
         if ($this->twoFactorAuthService->isEnabled($user)) {
-            session(['2fa:user_id' => $user->id]);
-            session(['2fa:remember' => $remember]);
+            // ✅ Skip the 2FA redirect if this browser is a trusted device.
+            if (\App\Http\Controllers\Auth\TwoFactorController::deviceIsTrustedFor($request, $user)) {
+                \Log::info('[Login] 2FA skipped — trusted device', [
+                    'user_id' => $user->id,
+                    'ip'      => $request->ip(),
+                ]);
+                // Fall through to successful login below.
+            } else {
+                Auth::logout();
+
+                $request->session()->regenerate();
+                $request->session()->regenerateToken();
+
+                $request->session()->put('2fa:user_id', $user->id);
+                $request->session()->put('2fa:remember', $remember);
+
+                \Log::info('[Login] 2FA required — redirecting to verify', [
+                    'user_id'        => $user->id,
+                    'new_session_id' => session()->getId(),
+                    'has_2fa_key'    => session()->has('2fa:user_id'),
+                ]);
+
+                return redirect()->route('2fa.verify');
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────
+        // ✅ NEW: 2FA REQUIRED BY POLICY — mandatory setup interstitial
+        // ─────────────────────────────────────────────────────────────
+        //
+        // Runs only when:
+        //   - 2FA is not already enabled for this user (the branch above
+        //     already handled that case), AND
+        //   - the developer policy says this user's role MUST use 2FA.
+        //
+        // We intentionally do NOT block login. Instead we authenticate,
+        // then immediately demote the session to a "setup only" state
+        // via a dedicated session key. The `EnsureTwoFactorSetupCompleted`
+        // middleware then confines the user to the setup routes until
+        // they finish.
+        //
+        // Deliberately NOT gated by ChecksBillingAccess: a user in an
+        // overdue-billing state must still be able to secure their own
+        // account. Billing restricts *administrative writes*, not
+        // *self-protection*.
+        // ─────────────────────────────────────────────────────────────
+        if ($this->isTwoFactorRequiredByPolicy($user)) {
+            // Remember-me preference survives the setup interstitial.
+            $wasRemembered = $remember;
+
             Auth::logout();
-            return redirect()->route('2fa.verify');
+
+            $request->session()->regenerate();
+            $request->session()->regenerateToken();
+
+            $request->session()->put(self::SESSION_2FA_SETUP_USER_ID, $user->id);
+            $request->session()->put(
+                self::SESSION_2FA_SETUP_EXPIRES_AT,
+                now()->addMinutes((int) config('auth.two_factor.setup_window_minutes', 15))->timestamp
+            );
+            $request->session()->put('2fa_setup_required:remember', $wasRemembered);
+
+            \Log::info('[Login] 2FA required by policy — redirecting to mandatory setup', [
+                'user_id'        => $user->id,
+                'user_type'      => $user->type,
+                'new_session_id' => session()->getId(),
+                'policy'         => DeveloperSetting::current()?->twoFactorPolicy(),
+            ]);
+
+            return redirect()->route('2fa.setup.required')
+                ->with('warning', 'Your role requires two-factor authentication. Please set it up now to continue.');
         }
 
         $this->clearLoginAttempts($request);
         $this->finalizeLogin($request, $user);
 
-        // ✅ BILLING: route super admins to the billing dashboard when needed
         return $this->postLoginRedirect($user, $request)
             ->with('success', __('auth.welcome_back', ['name' => $user->name]));
     }
 
     /**
-     * Debug login request
+     * ✅ NEW: is 2FA required by developer policy for this user?
+     *
+     * Wrapped in try/catch so a missing DeveloperSetting row (fresh
+     * install, unrun migration) never blocks login. Default is permissive.
      */
+    protected function isTwoFactorRequiredByPolicy(User $user): bool
+    {
+        try {
+            $developer = DeveloperSetting::current();
+
+            if (!$developer) {
+                return false;
+            }
+
+            // The model decides: policy must be 'required' AND the user's
+            // type must be in the required-roles list. Delegating here
+            // keeps this controller free of role-set logic.
+            return $developer->isTwoFactorRequiredFor($user);
+        } catch (\Throwable $e) {
+            \Log::warning('[Login] 2FA policy check failed — defaulting to optional', [
+                'user_id' => $user->id,
+                'error'   => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    protected function redirectWithArchivalNotice(User $user)
+    {
+        $metadata = $user->metadata ?? [];
+        if (is_string($metadata)) {
+            $metadata = json_decode($metadata, true) ?? [];
+        }
+        if (!is_array($metadata)) {
+            $metadata = [];
+        }
+
+        $archivalInfo = $metadata['archival_info']
+            ?? $metadata['archived']
+            ?? [];
+
+        $archivalType = $archivalInfo['user_type_at_archival']
+            ?? $archivalInfo['user_type']
+            ?? $user->type;
+
+        $reason = $archivalInfo['archived_reason']
+            ?? $archivalInfo['reason']
+            ?? 'This account has been archived and cannot be signed in to.';
+
+        $contactEmail = config('mail.from.address', 'support@hilltop.com');
+        $contactPhone = config('app.support_phone', '+233 123 456 789');
+        $systemName   = config('app.name', 'Hilltop Estate Management');
+
+        \Log::info('[Login] Archived account attempted login', [
+            'user_id'       => $user->id,
+            'user_type'     => $archivalType,
+            'archival_type' => $archivalInfo['archival_type'] ?? 'manual_admin',
+            'trashed'       => $user->trashed(),
+        ]);
+
+        $redirect = redirect()->route('login')
+            ->with('contact_email', $contactEmail)
+            ->with('contact_phone', $contactPhone)
+            ->with('system_name', $systemName);
+
+        if ((int) $archivalType === User::TYPE_TENANT) {
+            return $redirect->with('archived_tenant_account', $reason);
+        }
+
+        if ((int) $archivalType === User::TYPE_LANDLORD) {
+            return $redirect->with('archived_landlord_account', $reason);
+        }
+
+        return $redirect->with('archived_account', $reason);
+    }
+
     protected function debugLoginRequest(Request $request): void
     {
         if (app()->environment('local') || config('app.debug')) {
             \Log::info('Login Request Debug', [
-                'session_id' => session()->getId(),
-                'token' => $request->session()->token(),
+                'session_id'      => session()->getId(),
+                'token'           => $request->session()->token(),
                 'submitted_token' => $request->input('_token'),
-                'has_csrf' => $request->has('_token'),
-                'csrf_match' => $request->session()->token() === $request->input('_token'),
-                'ip' => $request->ip(),
-                'user_agent' => $request->userAgent(),
-                'login_type' => filter_var($request->input('login'), FILTER_VALIDATE_EMAIL) ? 'email' : 'phone',
-                'is_secure' => $request->isSecure(),
-                'headers' => [
+                'has_csrf'        => $request->has('_token'),
+                'csrf_match'      => $request->session()->token() === $request->input('_token'),
+                'ip'              => $request->ip(),
+                'user_agent'      => $request->userAgent(),
+                'login_type'      => filter_var($request->input('login'), FILTER_VALIDATE_EMAIL) ? 'email' : 'phone',
+                'is_secure'       => $request->isSecure(),
+                'headers'         => [
                     'x-csrf-token' => $request->header('X-CSRF-TOKEN'),
                     'x-xsrf-token' => $request->header('X-XSRF-TOKEN'),
                 ],
@@ -407,25 +567,22 @@ class LoginController extends Controller
         }
     }
 
-    /**
-     * Validate session before login
-     */
     protected function validateSessionBeforeLogin(Request $request): bool
     {
         try {
             if (!$request->session()->token()) {
                 \Log::warning('Session token missing', [
                     'session_id' => session()->getId(),
-                    'ip' => $request->ip()
+                    'ip'         => $request->ip(),
                 ]);
                 return false;
             }
 
             if ($request->has('_token') && $request->session()->token() !== $request->input('_token')) {
                 \Log::warning('CSRF token mismatch', [
-                    'session_token' => $request->session()->token(),
+                    'session_token'   => $request->session()->token(),
                     'submitted_token' => $request->input('_token'),
-                    'session_id' => session()->getId()
+                    'session_id'      => session()->getId(),
                 ]);
                 return false;
             }
@@ -434,55 +591,14 @@ class LoginController extends Controller
         } catch (\Exception $e) {
             \Log::error('Session validation error: ' . $e->getMessage(), [
                 'session_id' => session()->getId(),
-                'trace' => $e->getTraceAsString()
+                'trace'      => $e->getTraceAsString(),
             ]);
             return false;
         }
     }
 
-    /**
-     * Regenerate session safely
-     */
-    protected function regenerateSession(Request $request): void
-    {
-        try {
-            $oldSessionId = session()->getId();
-            $request->session()->regenerate();
-            $request->session()->regenerateToken();
-            \Log::info('Session regenerated after login', [
-                'old_session_id' => $oldSessionId,
-                'new_session_id' => session()->getId(),
-                'user_id' => Auth::id()
-            ]);
-        } catch (\Exception $e) {
-            \Log::error('Session regeneration error: ' . $e->getMessage());
-        }
-    }
-
     /* ============================================================
      | DEVICE TRACKING
-     | ------------------------------------------------------------
-     | ✅ FIXED (2026-10-01): the previous implementation of this
-     | method performed a raw updateOrInsert() into device_tokens
-     | but never supplied a value for the `token` column, which is
-     | NOT NULL with no default. Under MySQL strict mode this
-     | produced:
-     |
-     |   SQLSTATE[HY000]: General error: 1364
-     |   Field 'token' doesn't have a default value
-     |
-     | The fix:
-     |  1. Generate a deterministic SHA-256 `token` derived from
-     |     (user_id, user_agent, ip, accept-language) — so the same
-     |     browser always maps to the same row, and upserts are
-     |     idempotent.
-     |  2. Use (user_id, token) as the natural key for
-     |     updateOrInsert().
-     |  3. Store a human-readable `device_name` like
-     |     "Microsoft Edge on Windows" instead of the raw UA string.
-     |  4. Populate every device_* column the table actually has
-     |     (checked via Schema::hasColumn), so schema drift is
-     |     tolerated across environments.
      * ============================================================ */
 
     protected function trackDevice(Request $request, User $user): void
@@ -490,7 +606,6 @@ class LoginController extends Controller
         try {
             $userAgent = (string) $request->userAgent();
 
-            // ---- Derive all device facts once ----
             $platform    = $this->getDevicePlatform($userAgent);
             $browser     = $this->getDeviceBrowser($userAgent);
             $type        = $this->getDeviceType($userAgent);
@@ -498,7 +613,6 @@ class LoginController extends Controller
             $osVersion   = $this->getOsVersion($userAgent);
             $deviceName  = $this->getDeviceName($userAgent, $browser, $platform);
 
-            // Deterministic token — same browser + IP + UA → same token.
             $token = hash('sha256', implode('|', [
                 'user:' . $user->id,
                 'ua:'   . $userAgent,
@@ -509,7 +623,6 @@ class LoginController extends Controller
             $sessionId = session()->getId();
             $now       = now();
 
-            // ---- device_tokens: upsert on (user_id, token) ----
             if (Schema::hasTable('device_tokens')) {
                 try {
                     $data = [
@@ -522,7 +635,6 @@ class LoginController extends Controller
                         'updated_at'   => $now,
                     ];
 
-                    // Only set columns that actually exist on the table.
                     $optional = [
                         'session_id'      => $sessionId,
                         'device_type'     => $type,
@@ -541,8 +653,6 @@ class LoginController extends Controller
                         }
                     }
 
-                    // updateOrInsert only applies the update array on existing
-                    // rows, so we need to guard created_at on first insert.
                     if (Schema::hasColumn('device_tokens', 'created_at')) {
                         $exists = DB::table('device_tokens')
                             ->where('user_id', $user->id)
@@ -571,7 +681,6 @@ class LoginController extends Controller
                 }
             }
 
-            // ---- user_activities: log the tracking event ----
             if (Schema::hasTable('user_activities')) {
                 try {
                     $activityData = [
@@ -608,8 +717,6 @@ class LoginController extends Controller
                         }
                     }
 
-                    // Route through the model so the creating hook can
-                    // backstop any NOT NULL column the caller forgot.
                     UserActivity::create($activityData);
                 } catch (\Throwable $e) {
                     \Log::warning('Failed to log device activity: ' . $e->getMessage(), [
@@ -618,7 +725,6 @@ class LoginController extends Controller
                 }
             }
 
-            // ---- Mirror in user->devices JSON (legacy fallback) ----
             try {
                 $devices = json_decode($user->devices ?? '[]', true);
                 if (!is_array($devices)) {
@@ -678,9 +784,10 @@ class LoginController extends Controller
         }
     }
 
-    /**
-     * Classify a device as Desktop / Mobile / Tablet.
-     */
+    /* ============================================================
+     | UA PARSERS (unchanged)
+     * ============================================================ */
+
     protected function getDeviceType(?string $userAgent): string
     {
         if (!$userAgent) return 'Unknown';
@@ -690,9 +797,6 @@ class LoginController extends Controller
         return 'Desktop';
     }
 
-    /**
-     * Extract the operating system family from a UA string.
-     */
     protected function getDevicePlatform(?string $userAgent): string
     {
         if (!$userAgent) return 'Unknown';
@@ -705,9 +809,6 @@ class LoginController extends Controller
         return 'Unknown';
     }
 
-    /**
-     * Extract the browser family from a UA string.
-     */
     protected function getDeviceBrowser(?string $userAgent): string
     {
         if (!$userAgent) return 'Unknown';
@@ -721,9 +822,6 @@ class LoginController extends Controller
         return 'Unknown';
     }
 
-    /**
-     * Human-readable device label, e.g. "Microsoft Edge on Windows".
-     */
     protected function getDeviceName(?string $userAgent, ?string $browser = null, ?string $platform = null): string
     {
         $browser  = $browser  ?? $this->getDeviceBrowser($userAgent);
@@ -742,9 +840,6 @@ class LoginController extends Controller
         return $browser . ' on ' . $platform;
     }
 
-    /**
-     * Best-effort device model extraction (only meaningful on mobile).
-     */
     protected function getDeviceModel(?string $userAgent): ?string
     {
         if (!$userAgent) return null;
@@ -753,7 +848,6 @@ class LoginController extends Controller
         if (preg_match('/iPhone/', $ua)) return 'iPhone';
         if (preg_match('/iPad/', $ua)) return 'iPad';
 
-        // Android model — "Android X; <model>" or "Android X; <locale>; <model>"
         if (preg_match('/Android[^;]*;\s*([^;)]+?)(?:\s+Build|\))/i', $ua, $m)) {
             $model = trim($m[1]);
             if (!preg_match('/^[a-z]{2}[-_][a-z]{2}$/i', $model)) {
@@ -763,9 +857,6 @@ class LoginController extends Controller
         return null;
     }
 
-    /**
-     * Best-effort OS version extraction.
-     */
     protected function getOsVersion(?string $userAgent): ?string
     {
         if (!$userAgent) return null;
@@ -800,7 +891,7 @@ class LoginController extends Controller
 
     /* ============================================================
      | LOGIN FINALIZATION
-     | ============================================================ */
+     * ============================================================ */
 
     protected function performLogin(User $user, bool $remember): bool
     {
@@ -809,22 +900,22 @@ class LoginController extends Controller
 
             if (Auth::check()) {
                 \Log::info('User logged in successfully', [
-                    'user_id' => $user->id,
+                    'user_id'    => $user->id,
                     'session_id' => session()->getId(),
-                    'remember' => $remember
+                    'remember'   => $remember,
                 ]);
                 return true;
             }
 
             \Log::warning('Login attempt failed after Auth::login', [
-                'user_id' => $user->id,
-                'session_id' => session()->getId()
+                'user_id'    => $user->id,
+                'session_id' => session()->getId(),
             ]);
             return false;
         } catch (\Exception $e) {
             \Log::error('Login error: ' . $e->getMessage(), [
                 'user_id' => $user->id,
-                'trace' => $e->getTraceAsString()
+                'trace'   => $e->getTraceAsString(),
             ]);
             return false;
         }
@@ -833,8 +924,15 @@ class LoginController extends Controller
     protected function finalizeLogin(Request $request, User $user): void
     {
         try {
+            $oldSessionId = session()->getId();
             $request->session()->regenerate();
             $request->session()->regenerateToken();
+
+            \Log::info('Session regenerated after login', [
+                'old_session_id' => $oldSessionId,
+                'new_session_id' => session()->getId(),
+                'user_id'        => $user->id,
+            ]);
 
             $user->updateLastActivity();
 
@@ -846,51 +944,55 @@ class LoginController extends Controller
             $user->save();
 
             \Log::info('Login finalized', [
-                'user_id' => $user->id,
+                'user_id'    => $user->id,
                 'session_id' => session()->getId(),
-                'ip' => $request->ip()
+                'ip'         => $request->ip(),
             ]);
         } catch (\Exception $e) {
             \Log::error('Error finalizing login: ' . $e->getMessage(), [
-                'user_id' => $user->id
+                'user_id' => $user->id,
             ]);
         }
     }
 
     /* ============================================================
-     | MOBILE LOGIN — API, always returns JSON
+     | MOBILE LOGIN
      | ------------------------------------------------------------
-     | Mobile clients get an explicit `billing` block in the response
-     | so the app can route to a billing screen itself.
+     | ✅ NEW (2026-10-13):
+     |  - Policy-driven mandatory 2FA setup is surfaced to mobile
+     |    clients via a `two_factor_setup_required` flag in the
+     |    response payload. Mobile clients redirect the user to
+     |    the setup wizard in the app (which calls the same
+     |    TwoFactorController endpoints).
      * ============================================================ */
 
     public function mobileLogin(Request $request)
     {
         if (app()->environment('local') || config('app.debug')) {
             \Log::info('Mobile Login Request', [
-                'login' => $request->input('login'),
+                'login'       => $request->input('login'),
                 'device_name' => $request->input('device_name'),
-                'ip' => $request->ip(),
-                'session_id' => session()->getId()
+                'ip'          => $request->ip(),
+                'session_id'  => session()->getId(),
             ]);
         }
 
         $request->validate([
-            'login' => 'required|string',
-            'password' => 'required|string',
-            'device_name' => 'required|string|max:255',
-            'device_token' => 'nullable|string',
+            'login'           => 'required|string',
+            'password'        => 'required|string',
+            'device_name'     => 'required|string|max:255',
+            'device_token'    => 'nullable|string',
             'two_factor_code' => 'nullable|string|size:6',
         ]);
 
         if ($this->hasTooManyLoginAttempts($request)) {
             return response()->json([
-                'error' => 'too_many_attempts',
-                'message' => trans('auth.throttle', [
+                'error'       => 'too_many_attempts',
+                'message'     => trans('auth.throttle', [
                     'seconds' => RateLimiter::availableIn($this->throttleKey($request)),
                     'minutes' => ceil(RateLimiter::availableIn($this->throttleKey($request)) / 60),
                 ]),
-                'retry_after' => RateLimiter::availableIn($this->throttleKey($request))
+                'retry_after' => RateLimiter::availableIn($this->throttleKey($request)),
             ], 429);
         }
 
@@ -900,45 +1002,74 @@ class LoginController extends Controller
         if (!$user) {
             $this->incrementLoginAttempts($request);
             return response()->json([
-                'error' => 'invalid_credentials',
-                'message' => 'The provided credentials are incorrect.'
+                'error'   => 'invalid_credentials',
+                'message' => 'The provided credentials are incorrect.',
             ], 401);
         }
 
-        if ($user->isArchived()) {
-            return $this->archivedAccountService->handleMobileArchivedLogin($user);
-        }
+        $isTrashed  = method_exists($user, 'trashed') && $user->trashed();
+        $isArchived = method_exists($user, 'isArchived') && $user->isArchived();
 
-        if ($user->trashed()) {
-            return response()->json([
-                'error' => 'account_deactivated',
-                'message' => 'This account has been deactivated. Please contact administrator.'
-            ], 403);
+        if ($isTrashed || $isArchived) {
+            return $this->archivedAccountService->handleMobileArchivedLogin($user);
         }
 
         if (!Hash::check($credentials['password'], $user->password)) {
             $this->incrementLoginAttempts($request);
             return response()->json([
-                'error' => 'invalid_credentials',
-                'message' => 'The provided credentials are incorrect.'
+                'error'   => 'invalid_credentials',
+                'message' => 'The provided credentials are incorrect.',
             ], 401);
         }
 
+        // ─────────────────────────────────────────────────────────────
+        // 2FA ENABLED — verify or request code
+        // ─────────────────────────────────────────────────────────────
         if ($this->twoFactorAuthService->isEnabled($user)) {
-            if (!$request->has('two_factor_code')) {
-                return response()->json([
-                    'error' => 'two_factor_required',
-                    'message' => 'Two-factor authentication code is required.',
-                    'requires_2fa' => true
-                ], 401);
-            }
+            if ($request->filled('two_factor_code')) {
+                if (!$this->twoFactorAuthService->verify($user, $request->two_factor_code)) {
+                    $this->incrementLoginAttempts($request);
+                    return response()->json([
+                        'error'   => 'invalid_2fa_code',
+                        'message' => 'Invalid two-factor authentication code.',
+                    ], 401);
+                }
+            } else {
+                $twoFactorToken = $this->issueTwoFactorToken($user);
 
-            if (!$this->twoFactorAuthService->verify($user, $request->two_factor_code)) {
                 return response()->json([
-                    'error' => 'invalid_2fa_code',
-                    'message' => 'Invalid two-factor authentication code.'
+                    'error'             => 'two_factor_required',
+                    'message'           => 'Two-factor authentication code is required.',
+                    'requires_2fa'      => true,
+                    'two_factor_token'  => $twoFactorToken,
+                    'expires_in'        => 300,
                 ], 401);
             }
+        }
+
+        // ─────────────────────────────────────────────────────────────
+        // ✅ NEW: 2FA REQUIRED BY POLICY — surface setup-required flag
+        // ─────────────────────────────────────────────────────────────
+        //
+        // Unlike web login, we do NOT create a token yet. Mobile clients
+        // receive `two_factor_setup_required: true` and should route to
+        // the in-app 2FA setup wizard. Once setup is complete the client
+        // calls /mobile/login again (or /mobile/2fa/complete) to obtain
+        // a real token.
+        if ($this->isTwoFactorRequiredByPolicy($user)) {
+            \Log::info('[MobileLogin] 2FA required by policy', [
+                'user_id'   => $user->id,
+                'user_type' => $user->type,
+            ]);
+
+            return response()->json([
+                'success'                     => false,
+                'error'                       => 'two_factor_setup_required',
+                'message'                     => 'Your role requires two-factor authentication. Please set it up in the app to continue.',
+                'two_factor_setup_required'   => true,
+                'setup_url'                   => route('2fa.setup'),
+                'policy'                      => DeveloperSetting::current()?->twoFactorPolicy(),
+            ], 428); // 428 Precondition Required
         }
 
         $this->clearLoginAttempts($request);
@@ -971,48 +1102,44 @@ class LoginController extends Controller
             }
 
             \Log::info('Mobile login successful', [
-                'user_id' => $user->id,
+                'user_id'     => $user->id,
                 'device_name' => $request->device_name,
-                'ip' => $request->ip()
+                'ip'          => $request->ip(),
             ]);
 
-            // ✅ BILLING: expose state so the mobile app can route itself
             $billingPayload = $this->mobileBillingPayload($user);
 
             return response()->json([
-                'success' => true,
-                'token' => $token,
-                'token_type' => 'Bearer',
-                'expires_in' => now()->addMonths(6)->timestamp,
-                'user' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'phone' => $user->phone,
-                    'type' => $user->type,
-                    'role_name' => $user->getRoleName(),
-                    'avatar' => $user->avatar_url ?? null,
-                    'email_verified_at' => $user->email_verified_at,
+                'success'      => true,
+                'token'        => $token,
+                'token_type'   => 'Bearer',
+                'expires_in'   => now()->addMonths(6)->timestamp,
+                'user'         => [
+                    'id'                 => $user->id,
+                    'name'               => $user->name,
+                    'email'              => $user->email,
+                    'phone'              => $user->phone,
+                    'type'               => $user->type,
+                    'role_name'          => $user->getRoleName(),
+                    'avatar'             => $user->avatar_url ?? null,
+                    'email_verified_at'  => $user->email_verified_at,
                     'two_factor_enabled' => $user->two_factor_enabled ?? false,
                 ],
                 'requires_verification' => method_exists($user, 'hasVerifiedEmail') && !$user->hasVerifiedEmail(),
-                'billing' => $billingPayload,
+                'billing'      => $billingPayload,
             ]);
         } catch (\Exception $e) {
             \Log::error('Mobile login token generation error: ' . $e->getMessage(), [
                 'user_id' => $user->id,
-                'trace' => $e->getTraceAsString()
+                'trace'   => $e->getTraceAsString(),
             ]);
             return response()->json([
-                'error' => 'token_generation_failed',
-                'message' => 'Failed to generate access token. Please try again.'
+                'error'   => 'token_generation_failed',
+                'message' => 'Failed to generate access token. Please try again.',
             ], 500);
         }
     }
 
-    /**
-     * ✅ BILLING: mobile payload for the login response.
-     */
     protected function mobileBillingPayload(User $user): array
     {
         try {
@@ -1032,7 +1159,6 @@ class LoginController extends Controller
             } elseif ($user->type === User::TYPE_ADMIN) {
                 $restricted = $developer->isBillingRestrictingAdmins();
             }
-            // Landlord/tenant: never restricted
 
             return [
                 'state'          => $developer->billing_state,
@@ -1047,19 +1173,11 @@ class LoginController extends Controller
 
     /* ============================================================
      | DEVICE TOKEN HELPERS
-     | ============================================================ */
+     * ============================================================ */
 
-    /**
-     * Store (or refresh) a device's push/API token.
-     *
-     * ✅ FIXED (2026-10-01): if no token is supplied by the caller, we
-     * generate a deterministic fallback so the NOT NULL `token` column
-     * never causes a strict-mode insert failure.
-     */
     protected function storeDeviceToken(User $user, string $deviceName, string $token): void
     {
         if (!Schema::hasTable('device_tokens')) {
-            // Legacy JSON fallback
             $devices = json_decode($user->devices ?? '[]', true);
             if (!is_array($devices)) {
                 $devices = [];
@@ -1079,7 +1197,7 @@ class LoginController extends Controller
             if (!$found) {
                 $devices[] = [
                     'device_name'  => $deviceName,
-                    'name'         => $deviceName, // legacy alias
+                    'name'         => $deviceName,
                     'token'        => $token,
                     'last_used_at' => now()->toDateTimeString(),
                     'created_at'   => now()->toDateTimeString(),
@@ -1091,7 +1209,6 @@ class LoginController extends Controller
             return;
         }
 
-        // Normalize the push token so it's always non-empty.
         $token = trim($token);
         if ($token === '') {
             $token = hash('sha256', implode('|', [
@@ -1169,7 +1286,7 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Successfully logged out'
+            'message' => 'Successfully logged out',
         ]);
     }
 
@@ -1185,16 +1302,16 @@ class LoginController extends Controller
         $token = $user->createToken($request->device_name, ['*'], now()->addMonths(6))->plainTextToken;
 
         return response()->json([
-            'success' => true,
-            'token' => $token,
+            'success'    => true,
+            'token'      => $token,
             'token_type' => 'Bearer',
             'expires_in' => now()->addMonths(6)->timestamp,
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'phone' => $user->phone,
-                'type' => $user->type,
+            'user'       => [
+                'id'        => $user->id,
+                'name'      => $user->name,
+                'email'     => $user->email,
+                'phone'     => $user->phone,
+                'type'      => $user->type,
                 'role_name' => $user->getRoleName(),
             ],
             'billing' => $this->mobileBillingPayload($user),
@@ -1203,7 +1320,13 @@ class LoginController extends Controller
 
     /* ============================================================
      | SOCIAL LOGIN
-     | ============================================================ */
+     | ------------------------------------------------------------
+     | ✅ NEW (2026-10-13):
+     |  - After a successful social login, run the same policy
+     |    check. Social-login users cannot use the password-based
+     |    "session handoff" pattern, so we log them out and route
+     |    them into the mandatory 2FA setup interstitial.
+     * ============================================================ */
 
     public function redirectToProvider(string $provider)
     {
@@ -1217,8 +1340,8 @@ class LoginController extends Controller
         $this->socialLoginService->validateProviderConfig($provider);
 
         \Log::info("Initiating {$provider} login", [
-            'ip' => request()->ip(),
-            'user_agent' => request()->userAgent()
+            'ip'         => request()->ip(),
+            'user_agent' => request()->userAgent(),
         ]);
 
         $scopes = config("services.{$provider}.scopes", []);
@@ -1239,7 +1362,7 @@ class LoginController extends Controller
 
             \Log::info("{$provider} callback received", [
                 'email' => $socialUser->getEmail(),
-                'id' => $socialUser->getId()
+                'id'    => $socialUser->getId(),
             ]);
 
             $result = $this->socialLoginService->handleLogin($provider, $socialUser);
@@ -1252,8 +1375,8 @@ class LoginController extends Controller
                     ->with('social_provider', $provider);
             }
 
-            if ($result['user']->isArchived()) {
-                return $this->archivedAccountService->handleArchivedLogin($result['user'], request());
+            if ($result['user']->isArchived() || $result['user']->trashed()) {
+                return $this->redirectWithArchivalNotice($result['user']);
             }
 
             Auth::login($result['user'], true);
@@ -1262,7 +1385,31 @@ class LoginController extends Controller
             $this->activityService->recordLogin($result['user'], request(), "social_{$provider}");
             $result['user']->updateLastActivity();
 
-            // ✅ BILLING: route super admins through the billing check too
+            // ✅ NEW: policy check — social login users who lack 2FA
+            //         get pushed into the mandatory setup interstitial.
+            if ($this->isTwoFactorRequiredByPolicy($result['user'])
+                && !$this->twoFactorAuthService->isEnabled($result['user'])) {
+
+                $userId = $result['user']->id;
+
+                Auth::logout();
+                request()->session()->regenerate();
+                request()->session()->regenerateToken();
+                request()->session()->put(self::SESSION_2FA_SETUP_USER_ID, $userId);
+                request()->session()->put(
+                    self::SESSION_2FA_SETUP_EXPIRES_AT,
+                    now()->addMinutes((int) config('auth.two_factor.setup_window_minutes', 15))->timestamp
+                );
+
+                \Log::info('[SocialLogin] 2FA required by policy — mandatory setup', [
+                    'user_id'  => $userId,
+                    'provider' => $provider,
+                ]);
+
+                return redirect()->route('2fa.setup.required')
+                    ->with('warning', 'Your role requires two-factor authentication. Please set it up now to continue.');
+            }
+
             return $this->postLoginRedirect($result['user'], request())
                 ->with('success', "Welcome back! You have successfully logged in with {$provider}.");
 
@@ -1277,14 +1424,14 @@ class LoginController extends Controller
     public function linkSocialAccount(Request $request, string $provider)
     {
         $request->validate([
-            'email' => 'required|email',
+            'email'    => 'required|email',
             'password' => 'required|string',
         ]);
 
         if (!Auth::attempt($request->only('email', 'password'))) {
             return response()->json([
-                'error' => 'invalid_credentials',
-                'message' => 'Invalid credentials. Please try again.'
+                'error'   => 'invalid_credentials',
+                'message' => 'Invalid credentials. Please try again.',
             ], 401);
         }
 
@@ -1294,12 +1441,12 @@ class LoginController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => "{$provider} account linked successfully."
+                'message' => "{$provider} account linked successfully.",
             ]);
         } catch (\Exception $e) {
             return response()->json([
-                'error' => 'link_failed',
-                'message' => 'Failed to link social account. Please try again.'
+                'error'   => 'link_failed',
+                'message' => 'Failed to link social account. Please try again.',
             ], 500);
         }
     }
@@ -1316,123 +1463,15 @@ class LoginController extends Controller
     }
 
     /* ============================================================
-     | TWO FACTOR AUTH
-     | ============================================================ */
-
-    public function showTwoFactorForm()
-    {
-        if (!session('2fa:user_id')) {
-            return redirect()->route('login');
-        }
-
-        return view('auth.two-factor-verify');
-    }
-
-    public function verifyTwoFactor(Request $request)
-    {
-        $request->validate([
-            'code' => 'required|string|size:6',
-        ]);
-
-        $userId = session('2fa:user_id');
-        if (!$userId) {
-            return redirect()->route('login');
-        }
-
-        $user = User::find($userId);
-        if (!$user) {
-            return redirect()->route('login');
-        }
-
-        if ($this->twoFactorAuthService->verify($user, $request->code)) {
-            session()->forget('2fa:user_id');
-
-            Auth::login($user, session('2fa:remember', false));
-
-            $this->trackDevice($request, $user);
-
-            session()->forget('2fa:remember');
-
-            $this->activityService->recordTwoFactorSuccess($user, $request);
-
-            // ✅ BILLING: 2FA-verified super admins still get routed correctly
-            return $this->postLoginRedirect($user, $request)
-                ->with('success', 'Two-factor authentication verified successfully.');
-        }
-
-        $this->activityService->recordTwoFactorFailure($user, $request);
-
-        return back()->withErrors(['code' => 'Invalid verification code. Please try again.']);
-    }
-
-    public function resendTwoFactorCode(Request $request)
-    {
-        $userId = session('2fa:user_id');
-        if (!$userId) {
-            return response()->json(['error' => 'Session expired'], 400);
-        }
-
-        $user = User::find($userId);
-        if (!$user) {
-            return response()->json(['error' => 'User not found'], 404);
-        }
-
-        $sent = $this->twoFactorAuthService->sendCode($user);
-
-        if ($sent) {
-            return response()->json(['message' => 'Verification code resent successfully.']);
-        }
-
-        return response()->json(['error' => 'Failed to resend code. Please try again.'], 500);
-    }
-
-    public function enableTwoFactor(Request $request)
-    {
-        $user = Auth::user();
-
-        $request->validate([
-            'verification_code' => 'required|string|size:6',
-        ]);
-
-        if ($this->twoFactorAuthService->verify($user, $request->verification_code)) {
-            $this->twoFactorAuthService->enable($user);
-            $backupCodes = $this->twoFactorAuthService->generateBackupCodes($user);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Two-factor authentication enabled.',
-                'backup_codes' => $backupCodes
-            ]);
-        }
-
-        return response()->json([
-            'error' => 'Invalid verification code.'
-        ], 400);
-    }
-
-    public function disableTwoFactor(Request $request)
-    {
-        $user = Auth::user();
-
-        $request->validate([
-            'password' => 'required|string',
-        ]);
-
-        if (!Hash::check($request->password, $user->password)) {
-            return response()->json(['error' => 'Invalid password.'], 400);
-        }
-
-        $this->twoFactorAuthService->disable($user);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Two-factor authentication disabled.'
-        ]);
-    }
+     | TWO FACTOR AUTH — WEB
+     | ------------------------------------------------------------
+     | ✅ FIXED (2026-10-12): all web 2FA methods have been moved to
+     | a dedicated TwoFactorController.
+     * ============================================================ */
 
     /* ============================================================
      | PASSWORD RESET
-     | ============================================================ */
+     * ============================================================ */
 
     public function showForgotPasswordForm()
     {
@@ -1485,15 +1524,15 @@ class LoginController extends Controller
 
         return view('auth.reset-password', [
             'token' => $token,
-            'email' => $email
+            'email' => $email,
         ]);
     }
 
     public function resetPassword(Request $request)
     {
         $request->validate([
-            'token' => 'required',
-            'email' => 'required|email',
+            'token'    => 'required',
+            'email'    => 'required|email',
             'password' => 'required|min:8|confirmed',
         ]);
 
@@ -1514,7 +1553,7 @@ class LoginController extends Controller
     public function resendResetLink(Request $request)
     {
         $request->validate([
-            'email' => 'required|email'
+            'email' => 'required|email',
         ]);
 
         $result = $this->passwordResetService->sendResetLink($request->email);
@@ -1530,21 +1569,32 @@ class LoginController extends Controller
     {
         $request->validate([
             'current_password' => 'required|string',
-            'new_password' => 'required|min:8|confirmed',
+            'new_password'     => 'required|min:8|confirmed',
         ]);
 
         $user = Auth::user();
 
+        $throttleKey = 'change-password:' . $user->id;
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            return response()->json([
+                'error' => "Too many attempts. Please try again in {$seconds} seconds.",
+            ], 429);
+        }
+        RateLimiter::hit($throttleKey, 300);
+
         if (!Hash::check($request->current_password, $user->password)) {
             return response()->json([
-                'error' => 'current_password_incorrect',
-                'message' => 'Current password is incorrect.'
+                'error'   => 'current_password_incorrect',
+                'message' => 'Current password is incorrect.',
             ], 400);
         }
 
+        RateLimiter::clear($throttleKey);
+
         $user->update([
-            'password' => Hash::make($request->new_password),
-            'temp_password' => false,
+            'password'            => Hash::make($request->new_password),
+            'temp_password'       => false,
             'password_changed_at' => now(),
         ]);
 
@@ -1556,120 +1606,26 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Password changed successfully.'
-        ]);
-    }
-
-    /* ============================================================
-     | TWO FACTOR SETUP
-     | ============================================================ */
-
-    public function showTwoFactorSetup()
-    {
-        $user = Auth::user();
-
-        if (!$user->two_factor_secret) {
-            $secret = $this->twoFactorAuthService->generateSecret();
-            session(['2fa:setup_secret' => $secret]);
-        } else {
-            $secret = $user->two_factor_secret;
-        }
-
-        $qrCode = $this->twoFactorAuthService->getQRCode($user, $secret);
-
-        return view('auth.2fa-setup', [
-            'secret' => $secret,
-            'qr_code' => $qrCode,
-            'recovery_codes' => session('2fa:recovery_codes')
-        ]);
-    }
-
-    public function verifyTwoFactorSetup(Request $request)
-    {
-        $request->validate([
-            'verification_code' => 'required|string|size:6',
-        ]);
-
-        $user = Auth::user();
-        $secret = session('2fa:setup_secret');
-
-        if (!$secret) {
-            return redirect()->route('2fa.setup')
-                ->withErrors(['error' => 'Setup session expired. Please try again.']);
-        }
-
-        if ($this->twoFactorAuthService->verifyCode($secret, $request->verification_code)) {
-            $this->twoFactorAuthService->enableWithSecret($user, $secret);
-
-            $backupCodes = $this->twoFactorAuthService->generateBackupCodes($user);
-
-            session(['2fa:recovery_codes' => $backupCodes]);
-            session()->forget('2fa:setup_secret');
-
-            return redirect()->route('2fa.recovery-codes')
-                ->with('success', 'Two-factor authentication has been enabled. Save your recovery codes.');
-        }
-
-        return redirect()->route('2fa.setup')
-            ->withErrors(['verification_code' => 'Invalid verification code. Please try again.']);
-    }
-
-    public function showRecoveryCodes()
-    {
-        $user = Auth::user();
-
-        $recoveryCodes = session('2fa:recovery_codes');
-
-        if (!$recoveryCodes && $user->two_factor_backup_codes) {
-            $recoveryCodes = json_decode($user->two_factor_backup_codes, true);
-        }
-
-        if (!$recoveryCodes) {
-            return redirect()->route('2fa.setup')
-                ->withErrors(['error' => 'No recovery codes found. Please set up 2FA first.']);
-        }
-
-        return view('auth.2fa-recovery-codes', [
-            'recovery_codes' => $recoveryCodes
-        ]);
-    }
-
-    public function regenerateRecoveryCodes(Request $request)
-    {
-        $user = Auth::user();
-
-        $request->validate([
-            'password' => 'required|string',
-        ]);
-
-        if (!Hash::check($request->password, $user->password)) {
-            return response()->json(['error' => 'Invalid password.'], 400);
-        }
-
-        $backupCodes = $this->twoFactorAuthService->regenerateBackupCodes($user);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Recovery codes regenerated successfully.',
-            'backup_codes' => $backupCodes
+            'message' => 'Password changed successfully.',
         ]);
     }
 
     /* ============================================================
      | SESSION MANAGEMENT
-     | ============================================================ */
+     * ============================================================ */
 
     public function checkSession(Request $request)
     {
         return response()->json([
             'authenticated' => Auth::check(),
-            'user' => Auth::check() ? [
-                'id' => Auth::id(),
-                'name' => Auth::user()->name,
-                'email' => Auth::user()->email
+            'user'          => Auth::check() ? [
+                'id'    => Auth::id(),
+                'name'  => Auth::user()->name,
+                'email' => Auth::user()->email,
             ] : null,
             'session_id' => session()->getId(),
-            'expires_in' => config('session.lifetime') * 60
+            'csrf_token' => $request->session()->token(),
+            'expires_in' => config('session.lifetime') * 60,
         ]);
     }
 
@@ -1680,7 +1636,7 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Session invalidated successfully.'
+            'message' => 'Session invalidated successfully.',
         ]);
     }
 
@@ -1707,18 +1663,18 @@ class LoginController extends Controller
                 ->get()
                 ->map(function ($session) {
                     return [
-                        'id' => $session->id,
-                        'ip_address' => $session->ip_address,
-                        'user_agent' => $session->user_agent,
+                        'id'            => $session->id,
+                        'ip_address'    => $session->ip_address,
+                        'user_agent'    => $session->user_agent,
                         'last_activity' => Carbon::createFromTimestamp($session->last_activity),
-                        'is_current' => $session->id === session()->getId()
+                        'is_current'    => $session->id === session()->getId(),
                     ];
                 });
         }
 
         return response()->json([
             'sessions' => $sessions,
-            'total' => count($sessions)
+            'total'    => count($sessions),
         ]);
     }
 
@@ -1729,7 +1685,7 @@ class LoginController extends Controller
         if (config('session.driver') === 'database') {
             if ($sessionId === session()->getId()) {
                 return response()->json([
-                    'error' => 'Cannot revoke current session. Use logout instead.'
+                    'error' => 'Cannot revoke current session. Use logout instead.',
                 ], 400);
             }
 
@@ -1741,7 +1697,7 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Session revoked successfully.'
+            'message' => 'Session revoked successfully.',
         ]);
     }
 
@@ -1752,7 +1708,14 @@ class LoginController extends Controller
         Auth::logoutOtherDevices($request->input('password', ''));
 
         if (method_exists($user, 'tokens')) {
-            $user->tokens()->where('id', '!=', $user->currentAccessToken()->id ?? 0)->delete();
+            $currentToken = $request->user()?->currentAccessToken();
+            $currentId    = $currentToken?->id;
+
+            $query = $user->tokens();
+            if ($currentId) {
+                $query->where('id', '!=', $currentId);
+            }
+            $query->delete();
         }
 
         if (config('session.driver') === 'database') {
@@ -1764,13 +1727,13 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Logged out from all other devices.'
+            'message' => 'Logged out from all other devices.',
         ]);
     }
 
     /* ============================================================
-     | DEVICE MANAGEMENT
-     | ============================================================ */
+     | DEVICE MANAGEMENT (web sessions vs API tokens)
+     * ============================================================ */
 
     public function getUserDevices(Request $request)
     {
@@ -1795,7 +1758,7 @@ class LoginController extends Controller
 
         return response()->json([
             'devices' => $devices,
-            'total' => count($devices)
+            'total'   => count($devices),
         ]);
     }
 
@@ -1827,40 +1790,19 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Device removed successfully.'
+            'message' => 'Device removed successfully.',
         ]);
     }
 
+    /**
+     * @deprecated Use TwoFactorController's trusted-device scheme.
+     */
     public function trustDevice(Request $request)
     {
         $user = $request->user();
-        $deviceFingerprint = $this->generateDeviceFingerprint($request);
 
-        if (Schema::hasTable('trusted_devices')) {
-            DB::table('trusted_devices')->updateOrInsert(
-                [
-                    'user_id' => $user->id,
-                    'device_fingerprint' => $deviceFingerprint
-                ],
-                [
-                    'expires_at' => now()->addDays(30),
-                    'updated_at' => now()
-                ]
-            );
-        } else {
-            $trustedDevices = json_decode($user->trusted_devices ?? '[]', true);
-            if (!is_array($trustedDevices)) {
-                $trustedDevices = [];
-            }
-            $trustedDevices[$deviceFingerprint] = now()->addDays(30)->toDateTimeString();
-            $user->trusted_devices = json_encode($trustedDevices);
-            $user->save();
-        }
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Device trusted for 30 days.'
-        ]);
+        return app(\App\Http\Controllers\Auth\TwoFactorController::class)
+            ->trustDevicePublic($request);
     }
 
     public function getCurrentDeviceInfo(Request $request)
@@ -1868,15 +1810,15 @@ class LoginController extends Controller
         $ua = $request->userAgent();
 
         return response()->json([
-            'device_name' => $this->getDeviceName($ua),
-            'device_type' => $this->getDeviceType($ua),
-            'device_platform' => $this->getDevicePlatform($ua),
-            'device_browser' => $this->getDeviceBrowser($ua),
-            'device_model' => $this->getDeviceModel($ua),
-            'os_version' => $this->getOsVersion($ua),
-            'ip_address' => $request->ip(),
-            'user_agent' => $ua,
-            'device_fingerprint' => $this->generateDeviceFingerprint($request)
+            'device_name'        => $this->getDeviceName($ua),
+            'device_type'        => $this->getDeviceType($ua),
+            'device_platform'    => $this->getDevicePlatform($ua),
+            'device_browser'     => $this->getDeviceBrowser($ua),
+            'device_model'       => $this->getDeviceModel($ua),
+            'os_version'         => $this->getOsVersion($ua),
+            'ip_address'         => $request->ip(),
+            'user_agent'         => $ua,
+            'device_fingerprint' => $this->generateDeviceFingerprint($request),
         ]);
     }
 
@@ -1886,7 +1828,7 @@ class LoginController extends Controller
             $request->userAgent(),
             $request->ip(),
             $request->header('accept-language', ''),
-            $request->header('accept-encoding', '')
+            $request->header('accept-encoding', ''),
         ]);
 
         return hash('sha256', $data);
@@ -1894,7 +1836,7 @@ class LoginController extends Controller
 
     /* ============================================================
      | PASSWORD EXPIRY
-     | ============================================================ */
+     * ============================================================ */
 
     public function checkPasswordExpiry(Request $request)
     {
@@ -1903,78 +1845,155 @@ class LoginController extends Controller
         if (!$user->password_changed_at) {
             return response()->json([
                 'expiring' => false,
-                'message' => 'No password expiry information available.'
+                'message'  => 'No password expiry information available.',
             ]);
         }
 
-        $expiryDays = config('auth.password_expiry_days', 90);
-        $passwordAge = now()->diffInDays($user->password_changed_at);
+        $expiryDays    = config('auth.password_expiry_days', 90);
+        $passwordAge   = now()->diffInDays($user->password_changed_at);
         $daysRemaining = $expiryDays - $passwordAge;
 
         return response()->json([
-            'expiring' => $daysRemaining <= 7,
-            'days_remaining' => $daysRemaining,
+            'expiring'          => $daysRemaining <= 7,
+            'days_remaining'    => $daysRemaining,
             'password_age_days' => $passwordAge,
-            'expiry_days' => $expiryDays,
-            'should_change' => $daysRemaining <= 0
+            'expiry_days'       => $expiryDays,
+            'should_change'     => $daysRemaining <= 0,
         ]);
     }
 
     /* ============================================================
      | MOBILE 2FA
-     | ============================================================ */
+     * ============================================================ */
+
+    protected function issueTwoFactorToken(User $user): string
+    {
+        $plain = Str::random(64);
+
+        Cache::put(
+            'mobile_2fa_token:' . hash('sha256', $plain),
+            [
+                'user_id'   => $user->id,
+                'issued_at' => now()->timestamp,
+            ],
+            now()->addMinutes(5)
+        );
+
+        return $plain;
+    }
+
+    protected function resolveTwoFactorToken(?string $token): ?User
+    {
+        if (!$token) {
+            return null;
+        }
+
+        $cacheKey = 'mobile_2fa_token:' . hash('sha256', $token);
+        $payload  = Cache::get($cacheKey);
+
+        if (!$payload || empty($payload['user_id'])) {
+            return null;
+        }
+
+        Cache::forget($cacheKey);
+
+        return User::find($payload['user_id']);
+    }
 
     public function mobileVerifyTwoFactor(Request $request)
     {
         $request->validate([
-            'user_id' => 'required|exists:users,id',
-            'code' => 'required|string|size:6',
+            'two_factor_token' => 'required|string',
+            'code'             => 'required|string|size:6',
         ]);
 
-        $user = User::find($request->user_id);
+        $user = $this->resolveTwoFactorToken($request->two_factor_token);
+
+        if (!$user) {
+            return response()->json([
+                'error'   => 'invalid_token',
+                'message' => 'Verification session has expired. Please login again.',
+            ], 401);
+        }
+
+        $throttleKey = 'mobile-2fa-verify:' . $user->id;
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            return response()->json([
+                'error' => "Too many attempts. Try again in {$seconds} seconds.",
+            ], 429);
+        }
+        RateLimiter::hit($throttleKey, 300);
 
         if ($this->twoFactorAuthService->verify($user, $request->code)) {
+            RateLimiter::clear($throttleKey);
+
             $token = $user->createToken('2fa_verified', ['*'], now()->addMinutes(5))->plainTextToken;
 
             return response()->json([
-                'success' => true,
-                'message' => '2FA verified successfully.',
-                'temporary_token' => $token
+                'success'         => true,
+                'message'         => '2FA verified successfully.',
+                'temporary_token' => $token,
             ]);
         }
 
         return response()->json([
-            'error' => 'invalid_code',
-            'message' => 'Invalid verification code.'
+            'error'   => 'invalid_code',
+            'message' => 'Invalid verification code.',
         ], 401);
     }
 
     public function mobileResendTwoFactor(Request $request)
     {
         $request->validate([
-            'user_id' => 'required|exists:users,id',
+            'two_factor_token' => 'required|string',
         ]);
 
-        $user = User::find($request->user_id);
+        $cacheKey = 'mobile_2fa_token:' . hash('sha256', $request->two_factor_token);
+        $payload  = Cache::get($cacheKey);
+
+        if (!$payload || empty($payload['user_id'])) {
+            return response()->json([
+                'error'   => 'invalid_token',
+                'message' => 'Verification session has expired. Please login again.',
+            ], 401);
+        }
+
+        $user = User::find($payload['user_id']);
+        if (!$user) {
+            return response()->json([
+                'error'   => 'user_not_found',
+                'message' => 'User no longer exists.',
+            ], 404);
+        }
+
+        $throttleKey = 'mobile-2fa-resend:' . $user->id;
+        if (RateLimiter::tooManyAttempts($throttleKey, 3)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            return response()->json([
+                'error' => "Too many resend attempts. Try again in {$seconds} seconds.",
+            ], 429);
+        }
+        RateLimiter::hit($throttleKey, 300);
 
         $sent = $this->twoFactorAuthService->sendCode($user);
 
         if ($sent) {
             return response()->json([
                 'success' => true,
-                'message' => 'Verification code sent.'
+                'message' => 'Verification code sent.',
             ]);
         }
 
         return response()->json([
-            'error' => 'send_failed',
-            'message' => 'Failed to send verification code.'
+            'error'   => 'send_failed',
+            'message' => 'Failed to send verification code.',
         ], 500);
     }
 
     /* ============================================================
      | MOBILE DEVICE MANAGEMENT
-     | ============================================================ */
+     * ============================================================ */
 
     public function getMobileDevices(Request $request)
     {
@@ -1985,17 +2004,17 @@ class LoginController extends Controller
             ->get()
             ->map(function ($token) {
                 return [
-                    'id' => $token->id,
-                    'name' => $token->name,
+                    'id'           => $token->id,
+                    'name'         => $token->name,
                     'last_used_at' => $token->last_used_at,
-                    'created_at' => $token->created_at,
-                    'is_current' => $token->id === $token->currentAccessToken()?->id
+                    'created_at'   => $token->created_at,
+                    'is_current'   => $token->id === $token->currentAccessToken()?->id,
                 ];
             });
 
         return response()->json([
             'devices' => $devices,
-            'total' => $devices->count()
+            'total'   => $devices->count(),
         ]);
     }
 
@@ -2013,7 +2032,7 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Device revoked successfully.'
+            'message' => 'Device revoked successfully.',
         ]);
     }
 
@@ -2021,8 +2040,8 @@ class LoginController extends Controller
     {
         $request->validate([
             'device_name' => 'required|string',
-            'push_token' => 'required|string',
-            'platform' => 'required|in:ios,android'
+            'push_token'  => 'required|string',
+            'platform'    => 'required|in:ios,android',
         ]);
 
         $user = $request->user();
@@ -2048,20 +2067,52 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Push token registered successfully.'
+            'message' => 'Push token registered successfully.',
         ]);
     }
 
     /* ============================================================
      | IMPERSONATION
-     | ============================================================ */
+     * ------------------------------------------------------------
+     | ✅ NEW (2026-10-13):
+     |  - Impersonation bypasses the 2FA policy check intentionally.
+     |    A developer or super admin impersonating a target user
+     |    is doing so on behalf of that user; requiring the target
+     |    to re-enroll in 2FA would be a workflow blocker. The
+     |    impersonation event itself is recorded in the activity
+     |    log so the audit trail is preserved.
+     * ============================================================ */
 
     public function startImpersonation(Request $request, $userId)
     {
         $originalUser = Auth::user();
-        $targetUser = User::findOrFail($userId);
+        $targetUser   = User::findOrFail($userId);
 
-        session(['impersonate.original_id' => $originalUser->id]);
+        $allowed = false;
+        if ($originalUser->type === User::TYPE_DEVELOPER) {
+            $allowed = true;
+        } elseif ($originalUser->type === User::TYPE_SUPER_ADMIN) {
+            $allowed = $targetUser->type !== User::TYPE_DEVELOPER;
+        }
+
+        if (!$allowed) {
+            \Log::warning('[Login] Unauthorized impersonation attempt', [
+                'actor_id'    => $originalUser->id,
+                'actor_type'  => $originalUser->type,
+                'target_id'   => $targetUser->id,
+                'target_type' => $targetUser->type,
+                'ip'          => $request->ip(),
+            ]);
+
+            abort(403, 'You are not allowed to impersonate this user.');
+        }
+
+        if ((int) $originalUser->id === (int) $targetUser->id) {
+            return redirect()->route('dashboard')
+                ->with('info', 'You are already logged in as yourself.');
+        }
+
+        session(['impersonate.original_id'   => $originalUser->id]);
         session(['impersonate.original_type' => $originalUser->type]);
 
         Auth::login($targetUser);
@@ -2103,15 +2154,15 @@ class LoginController extends Controller
     public function getImpersonationStatus(Request $request)
     {
         return response()->json([
-            'is_impersonating' => session()->has('impersonate.original_id'),
-            'original_user_id' => session('impersonate.original_id'),
-            'original_user_type' => session('impersonate.original_type')
+            'is_impersonating'   => session()->has('impersonate.original_id'),
+            'original_user_id'   => session('impersonate.original_id'),
+            'original_user_type' => session('impersonate.original_type'),
         ]);
     }
 
     /* ============================================================
      | ACTIVITY LOGGING
-     | ============================================================ */
+     * ============================================================ */
 
     public function getLoginHistory(Request $request)
     {
@@ -2130,7 +2181,7 @@ class LoginController extends Controller
 
         return response()->json([
             'activities' => $activities,
-            'total' => count($activities)
+            'total'      => count($activities),
         ]);
     }
 
@@ -2171,7 +2222,7 @@ class LoginController extends Controller
 
         return response()->json([
             'suspicious_activities' => $suspicious,
-            'total' => count($suspicious)
+            'total'                 => count($suspicious),
         ]);
     }
 
@@ -2180,7 +2231,7 @@ class LoginController extends Controller
         $user = $request->user();
 
         $request->validate([
-            'password' => 'required|string'
+            'password' => 'required|string',
         ]);
 
         if (!Hash::check($request->password, $user->password)) {
@@ -2195,13 +2246,13 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Activity history cleared successfully.'
+            'message' => 'Activity history cleared successfully.',
         ]);
     }
 
     /* ============================================================
      | ACCOUNT RECOVERY
-     | ============================================================ */
+     * ============================================================ */
 
     public function showRecoveryRequestForm()
     {
@@ -2212,7 +2263,7 @@ class LoginController extends Controller
     {
         $request->validate([
             'email' => 'required_without:phone|email',
-            'phone' => 'required_without:email|string'
+            'phone' => 'required_without:email|string',
         ]);
 
         $user = null;
@@ -2231,10 +2282,10 @@ class LoginController extends Controller
         $token = Str::random(64);
 
         DB::table('account_recovery_requests')->insert([
-            'user_id' => $user->id,
-            'token' => $token,
+            'user_id'    => $user->id,
+            'token'      => $token,
             'expires_at' => now()->addHours(24),
-            'created_at' => now()
+            'created_at' => now(),
         ]);
 
         if ($user->email) {
@@ -2260,15 +2311,15 @@ class LoginController extends Controller
         }
 
         return view('auth.account-recovery-verify', [
-            'token' => $token,
-            'user_id' => $recoveryRequest->user_id
+            'token'   => $token,
+            'user_id' => $recoveryRequest->user_id,
         ]);
     }
 
     public function verifyRecoveryIdentity(Request $request, $token)
     {
         $request->validate([
-            'identity_answer' => 'required|string'
+            'identity_answer' => 'required|string',
         ]);
 
         $recoveryRequest = DB::table('account_recovery_requests')
@@ -2286,15 +2337,15 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Identity verified. You can now reset your password.'
+            'message' => 'Identity verified. You can now reset your password.',
         ]);
     }
 
     public function completeRecovery(Request $request)
     {
         $request->validate([
-            'token' => 'required',
-            'password' => 'required|min:8|confirmed'
+            'token'    => 'required',
+            'password' => 'required|min:8|confirmed',
         ]);
 
         $recoveryRequest = DB::table('account_recovery_requests')
@@ -2310,21 +2361,21 @@ class LoginController extends Controller
         $user = User::find($recoveryRequest->user_id);
 
         $user->update([
-            'password' => Hash::make($request->password),
-            'recovery_completed_at' => now()
+            'password'              => Hash::make($request->password),
+            'recovery_completed_at' => now(),
         ]);
 
         DB::table('account_recovery_requests')->where('token', $request->token)->delete();
 
         return response()->json([
             'success' => true,
-            'message' => 'Password recovered successfully. You can now login.'
+            'message' => 'Password recovered successfully. You can now login.',
         ]);
     }
 
     /* ============================================================
      | WEBHOOKS
-     | ============================================================ */
+     * ============================================================ */
 
     public function handleGoogleWebhook(Request $request)
     {
@@ -2351,62 +2402,67 @@ class LoginController extends Controller
     }
 
     /* ============================================================
-     | EMAIL CHECK
-     | ============================================================ */
+     | EMAIL / PHONE EXISTENCE CHECK
+     * ============================================================ */
 
     public function checkEmailExists(Request $request)
     {
         $request->validate([
-            'email' => 'required|email'
+            'email' => 'required|email',
         ]);
 
-        $exists = User::where('email', $request->email)->exists();
+        $throttleKey = 'check-email:' . $request->ip();
+        if (RateLimiter::tooManyAttempts($throttleKey, 10)) {
+            return response()->json(['message' => 'Too many requests.'], 429);
+        }
+        RateLimiter::hit($throttleKey, 60);
 
         return response()->json([
-            'exists' => $exists,
-            'message' => $exists ? 'Email found' : 'Email not found'
+            'message' => 'If an account exists with that email, you will receive a recovery email.',
         ]);
     }
 
     public function checkPhoneExists(Request $request)
     {
         $request->validate([
-            'phone' => 'required|string'
+            'phone' => 'required|string',
         ]);
 
-        $phone = $this->phoneService->normalize($request->phone);
-        $exists = User::where('phone', $phone)->exists();
+        $throttleKey = 'check-phone:' . $request->ip();
+        if (RateLimiter::tooManyAttempts($throttleKey, 10)) {
+            return response()->json(['message' => 'Too many requests.'], 429);
+        }
+        RateLimiter::hit($throttleKey, 60);
 
         return response()->json([
-            'exists' => $exists,
-            'message' => $exists ? 'Phone number found' : 'Phone number not found'
+            'message' => 'If an account exists with that phone number, you will receive a recovery SMS.',
         ]);
     }
 
     public function resendVerificationEmail(Request $request)
     {
         $request->validate([
-            'email' => 'required|email|exists:users,email'
+            'email' => 'required|email|exists:users,email',
         ]);
 
         $user = User::where('email', $request->email)->first();
 
         if ($user->hasVerifiedEmail()) {
             return response()->json([
-                'message' => 'Email already verified.'
+                'message' => 'Email already verified.',
             ], 400);
         }
 
         $user->sendEmailVerificationNotification();
 
         return response()->json([
-            'message' => 'Verification email sent.'
+            'message' => 'Verification email sent.',
         ]);
     }
 
     /* ============================================================
      | API TOKEN MANAGEMENT
-     | ============================================================ */
+     * ============================================================ */
 
     public function listApiTokens(Request $request)
     {
@@ -2417,12 +2473,12 @@ class LoginController extends Controller
             ->get()
             ->map(function ($token) {
                 return [
-                    'id' => $token->id,
-                    'name' => $token->name,
-                    'abilities' => $token->abilities,
+                    'id'           => $token->id,
+                    'name'         => $token->name,
+                    'abilities'    => $token->abilities,
                     'last_used_at' => $token->last_used_at,
-                    'created_at' => $token->created_at,
-                    'expires_at' => $token->expires_at
+                    'created_at'   => $token->created_at,
+                    'expires_at'   => $token->expires_at,
                 ];
             });
 
@@ -2432,9 +2488,9 @@ class LoginController extends Controller
     public function createApiToken(Request $request)
     {
         $request->validate([
-            'name' => 'required|string|max:255',
-            'abilities' => 'nullable|array',
-            'expires_in_days' => 'nullable|integer|min:1|max:365'
+            'name'            => 'required|string|max:255',
+            'abilities'       => 'nullable|array',
+            'expires_in_days' => 'nullable|integer|min:1|max:365',
         ]);
 
         $user = $request->user();
@@ -2448,10 +2504,10 @@ class LoginController extends Controller
         $token = $user->createToken($request->name, $abilities, $expiresAt);
 
         return response()->json([
-            'success' => true,
-            'token' => $token->plainTextToken,
-            'token_id' => $token->accessToken->id,
-            'expires_at' => $expiresAt
+            'success'    => true,
+            'token'      => $token->plainTextToken,
+            'token_id'   => $token->accessToken->id,
+            'expires_at' => $expiresAt,
         ]);
     }
 
@@ -2469,14 +2525,14 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Token revoked successfully.'
+            'message' => 'Token revoked successfully.',
         ]);
     }
 
     public function updateTokenPermissions(Request $request, $tokenId)
     {
         $request->validate([
-            'abilities' => 'required|array'
+            'abilities' => 'required|array',
         ]);
 
         $user = $request->user();
@@ -2492,13 +2548,13 @@ class LoginController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Token permissions updated successfully.'
+            'message' => 'Token permissions updated successfully.',
         ]);
     }
 
     /* ============================================================
      | EMAIL VERIFICATION
-     | ============================================================ */
+     * ============================================================ */
 
     public function verifyEmail($id, $hash)
     {
@@ -2523,27 +2579,27 @@ class LoginController extends Controller
     public function sendVerificationEmail(Request $request)
     {
         $request->validate([
-            'email' => 'required|email|exists:users,email'
+            'email' => 'required|email|exists:users,email',
         ]);
 
         $user = User::where('email', $request->email)->first();
 
         if ($user->hasVerifiedEmail()) {
             return response()->json([
-                'message' => 'Email already verified.'
+                'message' => 'Email already verified.',
             ], 400);
         }
 
         $user->sendEmailVerificationNotification();
 
         return response()->json([
-            'message' => 'Verification email sent.'
+            'message' => 'Verification email sent.',
         ]);
     }
 
     /* ============================================================
      | LEGACY SOCIAL LOGIN
-     | ============================================================ */
+     * ============================================================ */
 
     public function redirectToGoogle()
     {
@@ -2567,7 +2623,7 @@ class LoginController extends Controller
 
     /* ============================================================
      | HELPER METHODS
-     | ============================================================ */
+     * ============================================================ */
 
     protected function getCredentials(Request $request): array
     {
@@ -2575,28 +2631,88 @@ class LoginController extends Controller
 
         if (filter_var($login, FILTER_VALIDATE_EMAIL)) {
             return [
-                'email' => $login,
-                'password' => $request->input('password')
+                'email'    => $login,
+                'password' => $request->input('password'),
             ];
         }
 
         $phone = $this->phoneService->normalize($login);
 
         return [
-            'phone' => $phone,
-            'password' => $request->input('password')
+            'phone'    => $phone,
+            'password' => $request->input('password'),
         ];
     }
 
     protected function findUserByCredentials(array $credentials): ?User
     {
         if (isset($credentials['email'])) {
-            return User::where('email', $credentials['email'])->first();
+            $email = $credentials['email'];
+
+            $user = User::withTrashed()->where('email', $email)->first();
+            if ($user) {
+                return $user;
+            }
+
+            if (preg_match('/^(.+)\.archived\.\d+@(.+)$/', $email, $m)) {
+                $originalEmail = $m[1] . '@' . $m[2];
+                $user = User::withTrashed()->where('email', $originalEmail)->first();
+                if ($user) {
+                    return $user;
+                }
+            }
+
+            if (str_contains($email, '@')) {
+                [$local, $domain] = explode('@', $email, 2);
+                $tombstonePattern = $local . '.archived.%@' . $domain;
+
+                $user = User::withTrashed()
+                    ->where('email', 'like', $tombstonePattern)
+                    ->first();
+                if ($user) {
+                    return $user;
+                }
+            }
+
+            return null;
         }
 
-        $phoneFormats = $this->phoneService->getAllFormats($credentials['phone']);
+        $phone = $credentials['phone'] ?? null;
 
-        return User::whereIn('phone', $phoneFormats)->first();
+        if (!$phone) {
+            return null;
+        }
+
+        $phoneFormats = $this->phoneService->getAllFormats($phone);
+
+        if (!empty($phoneFormats)) {
+            $user = User::withTrashed()->whereIn('phone', $phoneFormats)->first();
+            if ($user) {
+                return $user;
+            }
+        }
+
+        $user = User::withTrashed()->where('phone', $phone)->first();
+        if ($user) {
+            return $user;
+        }
+
+        if (is_string($phone) && strlen($phone) >= 6) {
+            $needle = ltrim($phone, '+');
+
+            $user = User::withTrashed()
+                ->where(function ($q) use ($needle, $phone) {
+                    $q->where('phone', 'like', '%' . $needle . '%')
+                      ->orWhere('phone', 'like', '%' . $phone . '%');
+                })
+                ->first();
+
+            if ($user) {
+                return $user;
+            }
+        }
+
+        return null;
     }
 
     protected function attemptLoginWithPhoneVariations(array $credentials, bool $remember = false): bool
@@ -2684,8 +2800,8 @@ class LoginController extends Controller
             if ($user) {
                 $this->activityService->recordLogout($user, $request, 'web');
                 \Log::info('User logged out', [
-                    'user_id' => $user->id,
-                    'session_id' => session()->getId()
+                    'user_id'    => $user->id,
+                    'session_id' => session()->getId(),
                 ]);
             }
 
@@ -2710,10 +2826,10 @@ class LoginController extends Controller
     {
         \Log::warning('Page expired (419) error', [
             'session_id' => session()->getId(),
-            'ip' => $request->ip(),
-            'url' => $request->fullUrl(),
-            'referer' => $request->header('referer'),
-            'user_agent' => $request->userAgent()
+            'ip'         => $request->ip(),
+            'url'        => $request->fullUrl(),
+            'referer'    => $request->header('referer'),
+            'user_agent' => $request->userAgent(),
         ]);
 
         if (!Auth::check()) {
@@ -2723,9 +2839,9 @@ class LoginController extends Controller
 
         if ($request->wantsJson()) {
             return response()->json([
-                'error' => 'session_expired',
-                'message' => 'Your session has expired. Please refresh the page and try again.',
-                'requires_login' => true
+                'error'          => 'session_expired',
+                'message'        => 'Your session has expired. Please refresh the page and try again.',
+                'requires_login' => true,
             ], 419);
         }
 
@@ -2736,21 +2852,23 @@ class LoginController extends Controller
     public function sessionStatus(Request $request)
     {
         $isAuthenticated = Auth::check();
+        $token = $request->session()->token();
 
         return response()->json([
             'authenticated' => $isAuthenticated,
-            'session_id' => session()->getId(),
-            'token' => $request->session()->token(),
-            'has_csrf' => $request->has('_token'),
-            'csrf_match' => $request->session()->token() === $request->input('_token'),
-            'lifetime' => config('session.lifetime'),
-            'cookie_name' => config('session.cookie'),
-            'is_secure' => $request->isSecure(),
-            'user' => $isAuthenticated ? [
-                'id' => Auth::id(),
-                'name' => Auth::user()->name,
+            'session_id'    => session()->getId(),
+            'csrf_token'    => $token,
+            'token'         => $token,
+            'has_csrf'      => $request->has('_token'),
+            'csrf_match'    => $token === $request->input('_token'),
+            'lifetime'      => config('session.lifetime'),
+            'cookie_name'   => config('session.cookie'),
+            'is_secure'     => $request->isSecure(),
+            'user'          => $isAuthenticated ? [
+                'id'    => Auth::id(),
+                'name'  => Auth::user()->name,
                 'email' => Auth::user()->email,
-                'type' => Auth::user()->type,
+                'type'  => Auth::user()->type,
             ] : null,
         ]);
     }
@@ -2758,11 +2876,13 @@ class LoginController extends Controller
     public function refreshCsrfToken(Request $request)
     {
         $request->session()->regenerateToken();
+        $token = $request->session()->token();
 
         return response()->json([
-            'success' => true,
-            'token' => $request->session()->token(),
-            'message' => 'CSRF token refreshed'
+            'success'    => true,
+            'csrf_token' => $token,
+            'token'      => $token,
+            'message'    => 'CSRF token refreshed',
         ]);
     }
 
@@ -2774,14 +2894,14 @@ class LoginController extends Controller
     public static function getAvailableUserTypes(): array
     {
         return [
-            User::TYPE_SUPER_ADMIN => 'Super Administrator',
-            User::TYPE_ADMIN => 'Administrator',
-            User::TYPE_LANDLORD => 'Landlord',
-            User::TYPE_TENANT => 'Tenant',
-            User::TYPE_FIELD_AGENT => 'Field Agent',
-            User::TYPE_DEVELOPER => 'Developer',
-            User::TYPE_SECURITY_PERSONNEL => 'Security Personnel',
-            User::TYPE_CONTRACTOR => 'Contractor',
+            User::TYPE_SUPER_ADMIN          => 'Super Administrator',
+            User::TYPE_ADMIN                => 'Administrator',
+            User::TYPE_LANDLORD             => 'Landlord',
+            User::TYPE_TENANT               => 'Tenant',
+            User::TYPE_FIELD_AGENT          => 'Field Agent',
+            User::TYPE_DEVELOPER            => 'Developer',
+            User::TYPE_SECURITY_PERSONNEL   => 'Security Personnel',
+            User::TYPE_CONTRACTOR           => 'Contractor',
             User::TYPE_SANITATION_PERSONNEL => 'Sanitation Personnel',
         ];
     }
@@ -2804,11 +2924,27 @@ class LoginController extends Controller
         $matchingUsers = User::whereIn('phone', $formats)->get(['id', 'name', 'phone', 'type']);
 
         return response()->json([
-            'input' => $phone,
-            'normalized' => $normalized,
-            'all_formats' => $formats,
+            'input'          => $phone,
+            'normalized'     => $normalized,
+            'all_formats'    => $formats,
             'matching_users' => $matchingUsers,
-            'total_matches' => $matchingUsers->count()
+            'total_matches'  => $matchingUsers->count(),
         ]);
+    }
+
+    /**
+     * ✅ NEW (2026-10-13): public wrapper around postLoginRedirect().
+     *
+     * TwoFactorController@verify needs to route a freshly-2FA-verified
+     * user to the correct dashboard (role + billing aware). Rather
+     * than duplicate that logic, it delegates here.
+     *
+     * @param  User    $user
+     * @param  Request $request
+     * @return \Illuminate\Http\RedirectResponse
+     */
+    public function publicPostLoginRedirect(User $user, Request $request)
+    {
+        return $this->postLoginRedirect($user, $request);
     }
 }

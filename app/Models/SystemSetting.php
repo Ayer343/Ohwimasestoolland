@@ -33,12 +33,12 @@ class SystemSetting extends Model
         'currency_symbol',
         'currency_position',
         'decimal_places',
-        
+
         // Dues Configuration
         'monthly_dues_amount',
         'calculation_method',
         'per_property_amount',
-        
+
         // Tenant Dues Configuration
         'enable_tenant_invoicing',
         'tenant_monthly_dues_amount',
@@ -48,17 +48,17 @@ class SystemSetting extends Model
         'tenant_grace_period_days',
         'tenant_late_payment_percentage',
         'tenant_fixed_penalty_amount',
-        
+
         // Payment Terms
         'grace_period_days',
         'late_payment_percentage',
         'fixed_penalty_amount',
-        
+
         // System Operations
         'auto_generate_invoices',
         'send_payment_reminders',
         'reminder_days_before',
-        
+
         // Payment Gateways
         'enable_expresspay',
         'enable_hubtel',
@@ -69,7 +69,7 @@ class SystemSetting extends Model
         'enable_bulk_payments',
         'max_bulk_months',
         'bulk_payment_discount',
-        
+
         // WhatsApp Configuration
         'whatsapp_provider',
         'twilio_sid',
@@ -80,35 +80,35 @@ class SystemSetting extends Model
         'vonage_whatsapp_from',
         'whatsapp_api_url',
         'whatsapp_api_key',
-        
+
         // Registration Control
         'allow_registration',
         'registration_disabled_message',
-        
+
         // Notification Channel Settings
         'invoice_notification_channels',
         'payment_reminder_channels',
         'overdue_notification_channels',
         'payment_confirmation_channels',
-        
+
         // SMS Settings
         'sms_notifications_enabled',
         'sms_reminder_enabled',
         'sms_payment_confirmation_enabled',
         'sms_daily_limit_per_user',
         'sms_hourly_limit_per_user',
-        
+
         // WhatsApp Notification Settings
         'enable_whatsapp_notifications',
         'whatsapp_reminder_enabled',
         'whatsapp_payment_confirmation_enabled',
-        
+
         // Additional Notification Settings
         'enable_notification_preferences',
         'force_email_fallback',
         'notification_retry_attempts',
         'notification_retry_delay_minutes',
-        
+
         // Message Templates
         'sms_invoice_generated_template',
         'sms_payment_reminder_template',
@@ -118,17 +118,17 @@ class SystemSetting extends Model
         'whatsapp_payment_reminder_template',
         'whatsapp_overdue_template',
         'whatsapp_payment_confirmation_template',
-        
+
         // Bulk Notification Settings
         'enable_bulk_notifications',
         'bulk_notification_batch_size',
         'bulk_notification_delay_seconds',
-        
+
         // Notification Logging
         'log_all_notifications',
         'log_notification_content',
         'notification_log_retention_days',
-        
+
         // Year-End Archive Settings
         'enable_year_end_archive',
         'year_end_archive_month',
@@ -140,7 +140,7 @@ class SystemSetting extends Model
         'notify_landlords_before_archive',
         'archive_notification_days_landlord',
         'send_yearly_archive_report_landlord',
-        
+
         // Tenant Year-End Archive Settings
         'enable_year_end_archive_tenant',
         'year_end_archive_month_tenant',
@@ -150,7 +150,13 @@ class SystemSetting extends Model
         'notify_tenants_before_archive',
         'archive_notification_days_tenant',
         'send_yearly_archive_report_tenant',
-        
+
+        // 🆕 Homepage Content Configuration (JSON)
+        'homepage_config',
+
+        // 🆕 📢 AD Space Configuration (JSON)
+        'ad_config',
+
         // Audit
         'created_by',
         'updated_by'
@@ -162,7 +168,7 @@ class SystemSetting extends Model
         'late_payment_percentage' => 'decimal:2',
         'fixed_penalty_amount' => 'decimal:2',
         'bulk_payment_discount' => 'decimal:2',
-        
+
         // Tenant Dues Casts
         'enable_tenant_invoicing' => 'boolean',
         'tenant_monthly_dues_amount' => 'decimal:2',
@@ -171,66 +177,66 @@ class SystemSetting extends Model
         'tenant_grace_period_days' => 'integer',
         'tenant_late_payment_percentage' => 'decimal:2',
         'tenant_fixed_penalty_amount' => 'decimal:2',
-        
+
         'auto_generate_invoices' => 'boolean',
         'send_payment_reminders' => 'boolean',
         'allow_offline_payment' => 'boolean',
-        
+
         // Payment Gateway Casts
         'enable_expresspay' => 'boolean',
         'enable_hubtel' => 'boolean',
         'enable_paystack' => 'boolean',
         'enable_flutterwave' => 'boolean',
-        
+
         'enable_bulk_payments' => 'boolean',
         'max_bulk_months' => 'integer',
         'decimal_places' => 'integer',
         'grace_period_days' => 'integer',
         'reminder_days_before' => 'integer',
-        
+
         // WhatsApp Configuration Casts
         'whatsapp_provider' => 'string',
-        
+
         // SMS Sender ID — plain string, nullable
         'sms_sender_id' => 'string',
-        
+
         // Registration Control Casts
         'allow_registration' => 'boolean',
-        
+
         // Notification Channel Casts
         'invoice_notification_channels' => 'array',
         'payment_reminder_channels' => 'array',
         'overdue_notification_channels' => 'array',
         'payment_confirmation_channels' => 'array',
-        
+
         // SMS Settings Casts
         'sms_notifications_enabled' => 'boolean',
         'sms_reminder_enabled' => 'boolean',
         'sms_payment_confirmation_enabled' => 'boolean',
         'sms_daily_limit_per_user' => 'integer',
         'sms_hourly_limit_per_user' => 'integer',
-        
+
         // WhatsApp Notification Casts
         'enable_whatsapp_notifications' => 'boolean',
         'whatsapp_reminder_enabled' => 'boolean',
         'whatsapp_payment_confirmation_enabled' => 'boolean',
-        
+
         // Additional Notification Casts
         'enable_notification_preferences' => 'boolean',
         'force_email_fallback' => 'boolean',
         'notification_retry_attempts' => 'integer',
         'notification_retry_delay_minutes' => 'integer',
-        
+
         // Bulk Notification Casts
         'enable_bulk_notifications' => 'boolean',
         'bulk_notification_batch_size' => 'integer',
         'bulk_notification_delay_seconds' => 'integer',
-        
+
         // Notification Logging Casts
         'log_all_notifications' => 'boolean',
         'log_notification_content' => 'boolean',
         'notification_log_retention_days' => 'integer',
-        
+
         // Year-End Archive Casts
         'enable_year_end_archive' => 'boolean',
         'year_end_archive_month' => 'integer',
@@ -242,7 +248,7 @@ class SystemSetting extends Model
         'notify_landlords_before_archive' => 'boolean',
         'archive_notification_days_landlord' => 'integer',
         'send_yearly_archive_report_landlord' => 'boolean',
-        
+
         // Tenant Year-End Archive Casts
         'enable_year_end_archive_tenant' => 'boolean',
         'year_end_archive_month_tenant' => 'integer',
@@ -252,7 +258,13 @@ class SystemSetting extends Model
         'notify_tenants_before_archive' => 'boolean',
         'archive_notification_days_tenant' => 'integer',
         'send_yearly_archive_report_tenant' => 'boolean',
-        
+
+        // 🆕 Homepage Config (JSON)
+        'homepage_config' => 'array',
+
+        // 🆕 📢 AD Space Config (JSON)
+        'ad_config' => 'array',
+
         'created_at' => 'datetime',
         'updated_at' => 'datetime'
     ];
@@ -263,38 +275,351 @@ class SystemSetting extends Model
         'payment_reminder_channels' => '["email"]',
         'overdue_notification_channels' => '["email","sms"]',
         'payment_confirmation_channels' => '["email"]',
-        
+
         // SMS Defaults
         'sms_notifications_enabled' => false,
         'sms_reminder_enabled' => false,
         'sms_payment_confirmation_enabled' => false,
         'sms_daily_limit_per_user' => 10,
         'sms_hourly_limit_per_user' => 3,
-        
+
         // WhatsApp Defaults
         'enable_whatsapp_notifications' => false,
         'whatsapp_reminder_enabled' => false,
         'whatsapp_payment_confirmation_enabled' => false,
-        
+
         // Additional Notification Defaults
         'enable_notification_preferences' => true,
         'force_email_fallback' => true,
         'notification_retry_attempts' => 3,
         'notification_retry_delay_minutes' => 5,
-        
+
         // Bulk Notification Defaults
         'enable_bulk_notifications' => true,
         'bulk_notification_batch_size' => 50,
         'bulk_notification_delay_seconds' => 2,
-        
+
         // Notification Logging Defaults
         'log_all_notifications' => true,
         'log_notification_content' => false,
         'notification_log_retention_days' => 90,
     ];
 
+    // ========== 🆕 HOMEPAGE CONFIG DEFAULTS ==========
+
+    /**
+     * Sensible defaults so the welcome page never breaks.
+     * These are merged with whatever the admin has saved.
+     *
+     * ⚠️ Now includes a `login` block so the controller's
+     *     updateLoginPage() / resetLoginPageConfig() have something
+     *     to merge against and the blade can read HOMEPAGE_DEFAULTS['login'].
+     */
+    public const HOMEPAGE_DEFAULTS = [
+        'hero' => [
+            'title'         => null,
+            'subtitle'      => 'Your trusted platform for property registration and estate management. Register your land or property today and join our growing community.',
+            'background'    => null,
+            'cta_primary'   => 'Register Your Land/Property',
+            'cta_secondary' => 'Share Your Experience',
+        ],
+        'sections' => [
+            'how_it_works'    => true,
+            'services'        => true,
+            'benefits'        => true,
+            'stats'           => true,
+            'testimonials'    => true,
+            'payment_methods' => true,
+            'faq'             => true,
+            'cta'             => true,
+            'contact'         => true,
+        ],
+        'social' => [
+            'facebook'  => '',
+            'twitter'   => '',
+            'instagram' => '',
+            'whatsapp'  => '',
+            'linkedin'  => '',
+            'youtube'   => '',
+            'tiktok'    => '',
+        ],
+        'contact' => [
+            'email'   => null,
+            'phone'   => null,
+            'address' => null,
+            'hours'   => "Mon-Fri: 8:00 AM - 5:00 PM\nSat: 9:00 AM - 1:00 PM",
+        ],
+        'footer' => [
+            'copyright' => null,
+        ],
+
+        // 🎨 Theme customization
+        'theme' => [
+            'preset' => 'default',
+
+            'colors' => [
+                'primary'   => null,
+                'secondary' => null,
+                'accent'    => null,
+                'hero_bg'   => null,
+                'hero_text' => '#ffffff',
+            ],
+
+            'fonts' => [
+                'family'         => 'system',
+                'base_size'      => 16,
+                'heading_weight' => '700',
+            ],
+
+            'hero' => [
+                'overlay_opacity' => 0.35,
+                'text_align'      => 'center',
+                'height'          => 'standard',
+            ],
+
+            'layout' => [
+                'container_width' => 1200,
+                'section_padding' => 'normal',
+                'radius_style'    => 'rounded',
+            ],
+
+            'buttons' => [
+                'shape'  => 'rounded',
+                'shadow' => true,
+            ],
+        ],
+
+        // 🆕 🔐 LOGIN PAGE DEFAULTS
+        // Must exist because:
+        //   - HomepageContentController::updateLoginPage() references it
+        //   - HomepageContentController::resetLoginPageConfig() resets to it
+        //   - index.blade.php reads HOMEPAGE_DEFAULTS['login']
+        'login' => [
+            'background'               => null,       // uploaded file path (storage/public/login-page/...)
+            'background_url'           => null,       // external fallback URL
+            'overlay_opacity'          => 0.85,
+            'default_theme'            => 'dark',     // dark | light | system
+            'system_name_override'     => null,
+            'welcome_title'            => 'Welcome Back',
+            'welcome_subtitle'         => 'Sign in to manage your properties, invoices and dues — all in one place.',
+            'show_welcome_panel'       => true,
+            'show_social_icons'        => true,
+            'show_cookie_banner'       => true,
+            'welcome_features'         => [
+                ['icon' => 'fas fa-home',        'text' => 'Manage your properties'],
+                ['icon' => 'fas fa-file-invoice', 'text' => 'Track invoices & dues'],
+                ['icon' => 'fas fa-shield-alt',  'text' => 'Secure & reliable'],
+            ],
+            'footer_socials' => [
+                ['platform' => '', 'url' => ''],
+                ['platform' => '', 'url' => ''],
+                ['platform' => '', 'url' => ''],
+                ['platform' => '', 'url' => ''],
+            ],
+
+            // 🆕 🔐 LOGIN THEME — mirrors the homepage theme block so
+            //     HomepageContentController::applyLoginThemePreset()
+            //     and resetLoginTheme() have a full shape to merge into,
+            //     and auth.login can render CSS variables directly.
+            'theme' => [
+                'preset' => 'default',
+
+                'colors' => [
+                    'primary'    => '#2563eb',
+                    'secondary'  => '#1e40af',
+                    'accent'     => '#f59e0b',
+                    'panel_bg'   => '#0f172a',
+                    'panel_text' => '#f8fafc',
+                    'form_bg'    => '#ffffff',
+                    'form_text'  => '#0f172a',
+                ],
+
+                'fonts' => [
+                    'family'         => 'system',
+                    'base_size'      => 16,
+                    'heading_weight' => '700',
+                ],
+
+                'layout' => [
+                    'split'        => 'panel-left',   // panel-left | panel-right | single-column
+                    'panel_width'  => 50,             // percent, 30–70
+                    'radius_style' => 'rounded',      // sharp | rounded | pill
+                    'card_shadow'  => true,
+                ],
+
+                'buttons' => [
+                    'shape'  => 'rounded',            // rounded | pill | square
+                    'shadow' => true,
+                ],
+            ],
+        ],
+    ];
+
+    /**
+     * Built-in theme presets admins can apply with one click.
+     */
+    public const THEME_PRESETS = [
+        'default' => [
+            'name' => 'Default',
+            'desc' => 'Blue/purple gradient — the current palette',
+            'values' => [
+                'colors' => [
+                    'primary'   => '#3b82f6',
+                    'secondary' => '#8b5cf6',
+                    'accent'    => '#06b6d4',
+                ],
+                'fonts'   => ['family' => 'system', 'base_size' => 16, 'heading_weight' => '700'],
+                'hero'    => ['overlay_opacity' => 0.35, 'text_align' => 'center', 'height' => 'standard'],
+                'layout'  => ['container_width' => 1200, 'section_padding' => 'normal', 'radius_style' => 'rounded'],
+                'buttons' => ['shape' => 'rounded', 'shadow' => true],
+            ],
+        ],
+
+        'modern' => [
+            'name' => 'Modern',
+            'desc' => 'Teal-to-indigo, rounded, glassy',
+            'values' => [
+                'colors' => [
+                    'primary'   => '#14b8a6',
+                    'secondary' => '#6366f1',
+                    'accent'    => '#f43f5e',
+                ],
+                'fonts'   => ['family' => 'inter', 'base_size' => 16, 'heading_weight' => '800'],
+                'hero'    => ['overlay_opacity' => 0.45, 'text_align' => 'center', 'height' => 'tall'],
+                'layout'  => ['container_width' => 1280, 'section_padding' => 'spacious', 'radius_style' => 'rounded'],
+                'buttons' => ['shape' => 'pill', 'shadow' => true],
+            ],
+        ],
+
+        'classic' => [
+            'name' => 'Classic',
+            'desc' => 'Navy & gold, sharp corners, serif',
+            'values' => [
+                'colors' => [
+                    'primary'   => '#1e3a8a',
+                    'secondary' => '#b45309',
+                    'accent'    => '#0369a1',
+                ],
+                'fonts'   => ['family' => 'playfair', 'base_size' => 17, 'heading_weight' => '700'],
+                'hero'    => ['overlay_opacity' => 0.55, 'text_align' => 'center', 'height' => 'standard'],
+                'layout'  => ['container_width' => 1140, 'section_padding' => 'normal', 'radius_style' => 'sharp'],
+                'buttons' => ['shape' => 'rounded', 'shadow' => false],
+            ],
+        ],
+
+        'elegant' => [
+            'name' => 'Elegant',
+            'desc' => 'Deep plum & rose, pill shapes',
+            'values' => [
+                'colors' => [
+                    'primary'   => '#7c3aed',
+                    'secondary' => '#ec4899',
+                    'accent'    => '#f59e0b',
+                ],
+                'fonts'   => ['family' => 'poppins', 'base_size' => 16, 'heading_weight' => '600'],
+                'hero'    => ['overlay_opacity' => 0.50, 'text_align' => 'center', 'height' => 'tall'],
+                'layout'  => ['container_width' => 1240, 'section_padding' => 'spacious', 'radius_style' => 'pill'],
+                'buttons' => ['shape' => 'pill', 'shadow' => true],
+            ],
+        ],
+
+        'bold' => [
+            'name' => 'Bold',
+            'desc' => 'High-contrast orange & black',
+            'values' => [
+                'colors' => [
+                    'primary'   => '#ea580c',
+                    'secondary' => '#0f172a',
+                    'accent'    => '#22c55e',
+                ],
+                'fonts'   => ['family' => 'roboto', 'base_size' => 16, 'heading_weight' => '800'],
+                'hero'    => ['overlay_opacity' => 0.60, 'text_align' => 'left', 'height' => 'full'],
+                'layout'  => ['container_width' => 1320, 'section_padding' => 'normal', 'radius_style' => 'sharp'],
+                'buttons' => ['shape' => 'square', 'shadow' => false],
+            ],
+        ],
+    ];
+
+    // ========== 🆕 📢 AD SPACE DEFAULTS ==========
+
+    /**
+     * Sensible defaults for the AD space subsystem.
+     *
+     * Stored under `ad_config` (JSON column). Every read goes through
+     * getAdConfig() which merges these defaults in, so the app never
+     * encounters a missing key.
+     *
+     * ⚠️ If you add a new ad setting, add its default HERE — the
+     *     admin form, service layer, and Blade all read through
+     *     getAdConfig() and will pick it up automatically.
+     */
+    public const AD_DEFAULTS = [
+        // Master switch — off hides ads + blocks new campaign creation
+        'enabled' => true,
+
+        // Caps
+        'max_active_per_landlord' => 3,   // includes pending_payment
+        'max_on_homepage'         => 6,
+
+        // Approval workflow
+        'require_admin_approval'   => true,   // review campaigns before going live
+        'auto_approve_mark_rented' => false,  // auto-approve "mark as rented" (use with caution)
+
+        // Channel availability — each maps to AdCampaign.channels[]
+        'channels' => [
+            'homepage'  => true,
+            'facebook'  => true,
+            'whatsapp'  => true,
+            'twitter'   => false,
+            'linkedin'  => false,
+            'instagram' => false,
+        ],
+
+        // Display options
+        'show_sponsored_badge'  => true,
+        'show_view_count'       => true,
+        'allow_landlord_proof_upload' => true,
+    ];
+
+    /**
+     * Seed pricing plans the admin can one-click create.
+     * These are NOT auto-created — they're templates only.
+     */
+    public const AD_PLAN_PRESETS = [
+        'monthly' => [
+            'name'             => 'Standard Monthly',
+            'billing_period'   => 'monthly',
+            'duration_months'  => 1,
+            'price'            => 50.00,
+            'currency'         => 'GHS',
+            'description'      => 'One month of homepage + social exposure.',
+            'sort_order'       => 1,
+            'is_active'        => true,
+        ],
+        'quarterly' => [
+            'name'             => 'Quarterly Boost',
+            'billing_period'   => 'monthly',
+            'duration_months'  => 3,
+            'price'            => 135.00,   // 10% off 3×50
+            'currency'         => 'GHS',
+            'description'      => 'Three months of exposure at a 10% discount.',
+            'sort_order'       => 2,
+            'is_active'        => true,
+        ],
+        'yearly' => [
+            'name'             => 'Annual Premium',
+            'billing_period'   => 'yearly',
+            'duration_months'  => 12,
+            'price'            => 480.00,   // 20% off 12×50
+            'currency'         => 'GHS',
+            'description'      => 'Full year of exposure at a 20% discount.',
+            'sort_order'       => 3,
+            'is_active'        => true,
+        ],
+    ];
+
     // ========== RELATIONSHIPS ==========
-    
+
     public function creator()
     {
         return $this->belongsTo(User::class, 'created_by');
@@ -307,60 +632,45 @@ class SystemSetting extends Model
 
     // ========== STATIC METHODS WITH TABLE EXISTENCE CHECK ==========
 
-    /**
-     * Get system settings with graceful handling when table doesn't exist
-     */
     public static function getSettings()
     {
         try {
             if (!Schema::hasTable('system_settings')) {
                 return self::getDefaultSettingsObject();
             }
-            
+
             return Cache::remember('system_settings', 3600, function () {
                 $settings = self::first();
-                
+
                 if (!$settings) {
                     return self::getDefaultSettingsObject();
                 }
-                
+
                 return $settings;
             });
         } catch (\Exception $e) {
             return self::getDefaultSettingsObject();
         }
     }
-    
-    /**
-     * Get default settings as a SystemSetting object
-     */
+
     private static function getDefaultSettingsObject()
     {
         $settings = new self();
         $defaults = self::getDefaultSettings();
-        
+
         foreach ($defaults as $key => $value) {
             $settings->$key = $value;
         }
-        
+
         return $settings;
     }
 
-    /**
-     * Clear settings cache when updated
-     */
     public static function clearCache()
     {
         Cache::forget('system_settings');
-
-        // Also clear the global SMS sender ID cache so the next SMS
-        // dispatch picks up a freshly-saved value.
         Cache::forget('sms_default_sender_id');
     }
 
-    /**
-     * Check if system settings exist
-     */
     public static function exists(): bool
     {
         try {
@@ -373,9 +683,6 @@ class SystemSetting extends Model
         }
     }
 
-    /**
-     * Get settings or fail if not found
-     */
     public static function getSettingsOrFail(): self
     {
         try {
@@ -388,9 +695,6 @@ class SystemSetting extends Model
         }
     }
 
-    /**
-     * Check if system settings are configured
-     */
     public static function isConfigured(): bool
     {
         try {
@@ -403,28 +707,18 @@ class SystemSetting extends Model
         }
     }
 
-    /**
- * Whether admins can mark invoices as paid from the office
- * (cash, cheque, bank transfer recorded manually).
- */
-public function isOfflinePaymentAllowed(): bool
-{
-    return (bool) ($this->allow_offline_payment ?? true);
-}
+    public function isOfflinePaymentAllowed(): bool
+    {
+        return (bool) ($this->allow_offline_payment ?? true);
+    }
 
-    // ========== SMS SENDER ID METHODS (NEW) ==========
+    // ========== SMS SENDER ID METHODS ==========
 
-    /**
-     * Check if a global default SMS sender ID is set.
-     */
     public function hasSmsSenderId(): bool
     {
         return !empty($this->sms_sender_id) && trim((string) $this->sms_sender_id) !== '';
     }
 
-    /**
-     * Get the global default SMS sender ID, or null when unset.
-     */
     public function getSmsSenderId(): ?string
     {
         return $this->hasSmsSenderId()
@@ -432,15 +726,6 @@ public function isOfflinePaymentAllowed(): bool
             : null;
     }
 
-    /**
-     * Get the effective SMS sender ID for a given provider, taking the
-     * per-provider value into account first.
-     *
-     * Priority:
-     *   1. Provider-specific sender_id (config/sms.php)
-     *   2. Global default (this model's sms_sender_id)
-     *   3. Final fallback
-     */
     public function getEffectiveSmsSenderId(string $provider): string
     {
         $providerSenderId = config("sms.providers.{$provider}.sender_id");
@@ -462,9 +747,6 @@ public function isOfflinePaymentAllowed(): bool
         return 'SYSTEM';
     }
 
-    /**
-     * Diagnostic — where did the sender ID come from for this provider?
-     */
     public function explainSmsSenderIdSource(string $provider): string
     {
         $providerSenderId = config("sms.providers.{$provider}.sender_id");
@@ -480,9 +762,6 @@ public function isOfflinePaymentAllowed(): bool
         return 'fallback';
     }
 
-    /**
-     * Status for the index/admin card.
-     */
     public function getSmsSenderIdStatus(): array
     {
         $hasSenderId = $this->hasSmsSenderId();
@@ -499,65 +778,42 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== NOTIFICATION CHANNEL METHODS ==========
 
-    /**
-     * Get channels for invoice generation notifications
-     */
     public function getInvoiceNotificationChannels(): array
     {
         $channels = $this->invoice_notification_channels ?? ['email'];
-        
         if (!in_array('email', $channels)) {
             $channels[] = 'email';
         }
-        
         return $channels;
     }
 
-    /**
-     * Get channels for payment reminder notifications
-     */
     public function getPaymentReminderChannels(): array
     {
         $channels = $this->payment_reminder_channels ?? ['email'];
-        
         if (!in_array('email', $channels)) {
             $channels[] = 'email';
         }
-        
         return $channels;
     }
 
-    /**
-     * Get channels for overdue notifications
-     */
     public function getOverdueNotificationChannels(): array
     {
         $channels = $this->overdue_notification_channels ?? ['email', 'sms'];
-        
         if (!in_array('email', $channels)) {
             $channels[] = 'email';
         }
-        
         return $channels;
     }
 
-    /**
-     * Get channels for payment confirmation notifications
-     */
     public function getPaymentConfirmationChannels(): array
     {
         $channels = $this->payment_confirmation_channels ?? ['email'];
-        
         if (!in_array('email', $channels)) {
             $channels[] = 'email';
         }
-        
         return $channels;
     }
 
-    /**
-     * Check if a specific channel should be used for a notification type
-     */
     public function shouldUseChannel(string $notificationType, string $channel): bool
     {
         $channels = match($notificationType) {
@@ -567,37 +823,25 @@ public function isOfflinePaymentAllowed(): bool
             'payment_confirmation' => $this->getPaymentConfirmationChannels(),
             default => ['email']
         };
-        
+
         return in_array($channel, $channels);
     }
 
-    /**
-     * Check if SMS is enabled for any notification type
-     */
     public function isSmsEnabled(): bool
     {
         return $this->sms_notifications_enabled === true;
     }
 
-    /**
-     * Check if SMS reminders are enabled
-     */
     public function isSmsReminderEnabled(): bool
     {
         return $this->isSmsEnabled() && $this->sms_reminder_enabled === true;
     }
 
-    /**
-     * Check if SMS payment confirmation is enabled
-     */
     public function isSmsPaymentConfirmationEnabled(): bool
     {
         return $this->isSmsEnabled() && $this->sms_payment_confirmation_enabled === true;
     }
 
-    /**
-     * Get SMS rate limits
-     */
     public function getSmsRateLimits(): array
     {
         return [
@@ -606,41 +850,26 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Check if WhatsApp is enabled for any notification type
-     */
     public function isWhatsAppEnabled(): bool
     {
         return $this->enable_whatsapp_notifications === true && $this->isWhatsAppConfigured();
     }
 
-    /**
-     * Check if WhatsApp reminders are enabled
-     */
     public function isWhatsAppReminderEnabled(): bool
     {
         return $this->isWhatsAppEnabled() && $this->whatsapp_reminder_enabled === true;
     }
 
-    /**
-     * Check if WhatsApp payment confirmation is enabled
-     */
     public function isWhatsAppPaymentConfirmationEnabled(): bool
     {
         return $this->isWhatsAppEnabled() && $this->whatsapp_payment_confirmation_enabled === true;
     }
 
-    /**
-     * Should force email fallback for failed notifications
-     */
     public function shouldForceEmailFallback(): bool
     {
         return $this->force_email_fallback === true;
     }
 
-    /**
-     * Get notification retry configuration
-     */
     public function getNotificationRetryConfig(): array
     {
         return [
@@ -649,57 +878,36 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Should enable bulk notifications
-     */
     public function shouldEnableBulkNotifications(): bool
     {
         return $this->enable_bulk_notifications === true;
     }
 
-    /**
-     * Get bulk notification batch size
-     */
     public function getBulkNotificationBatchSize(): int
     {
         return $this->bulk_notification_batch_size ?? 50;
     }
 
-    /**
-     * Get bulk notification delay between batches (seconds)
-     */
     public function getBulkNotificationDelaySeconds(): int
     {
         return $this->bulk_notification_delay_seconds ?? 2;
     }
 
-    /**
-     * Should log all notifications
-     */
     public function shouldLogAllNotifications(): bool
     {
         return $this->log_all_notifications === true;
     }
 
-    /**
-     * Should log notification content (privacy concern)
-     */
     public function shouldLogNotificationContent(): bool
     {
         return $this->log_notification_content === true;
     }
 
-    /**
-     * Get notification log retention days
-     */
     public function getNotificationLogRetentionDays(): int
     {
         return $this->notification_log_retention_days ?? 90;
     }
 
-    /**
-     * Get SMS template for a specific type
-     */
     public function getSmsTemplate(string $type): ?string
     {
         $templates = [
@@ -708,13 +916,10 @@ public function isOfflinePaymentAllowed(): bool
             'overdue' => $this->sms_overdue_template,
             'payment_confirmation' => $this->sms_payment_confirmation_template,
         ];
-        
+
         return $templates[$type] ?? null;
     }
 
-    /**
-     * Get WhatsApp template for a specific type
-     */
     public function getWhatsAppTemplate(string $type): ?string
     {
         $templates = [
@@ -723,13 +928,10 @@ public function isOfflinePaymentAllowed(): bool
             'overdue' => $this->whatsapp_overdue_template,
             'payment_confirmation' => $this->whatsapp_payment_confirmation_template,
         ];
-        
+
         return $templates[$type] ?? null;
     }
-    
-    /**
-     * Get notification configuration summary
-     */
+
     public function getNotificationConfigSummary(): array
     {
         return [
@@ -746,7 +948,7 @@ public function isOfflinePaymentAllowed(): bool
                 'rate_limits' => $this->getSmsRateLimits(),
                 'sender_id' => $this->getSmsSenderId(),
                 'sender_id_status' => $this->getSmsSenderIdStatus(),
-                'has_templates' => !empty($this->sms_invoice_generated_template) || 
+                'has_templates' => !empty($this->sms_invoice_generated_template) ||
                                    !empty($this->sms_payment_reminder_template) ||
                                    !empty($this->sms_overdue_template) ||
                                    !empty($this->sms_payment_confirmation_template),
@@ -757,7 +959,7 @@ public function isOfflinePaymentAllowed(): bool
                 'provider' => $this->getWhatsAppProviderDisplayName(),
                 'reminders' => $this->isWhatsAppReminderEnabled(),
                 'payment_confirmation' => $this->isWhatsAppPaymentConfirmationEnabled(),
-                'has_templates' => !empty($this->whatsapp_invoice_generated_template) || 
+                'has_templates' => !empty($this->whatsapp_invoice_generated_template) ||
                                    !empty($this->whatsapp_payment_reminder_template) ||
                                    !empty($this->whatsapp_overdue_template) ||
                                    !empty($this->whatsapp_payment_confirmation_template),
@@ -775,13 +977,10 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get default SMS message for a notification type
-     */
     public function getDefaultSmsMessage(string $type, array $data = []): string
     {
         $systemShortName = $this->getSystemShortName();
-        
+
         return match($type) {
             'invoice_generated' => "{$systemShortName}: New invoice #{$data['invoice_number']} for {$data['period']} of {$data['amount']} is due on {$data['due_date']}. Pay via: {$data['payment_link']}",
             'payment_reminder' => "{$systemShortName}: Reminder: Invoice #{$data['invoice_number']} of {$data['amount']} is due on {$data['due_date']}. Pay now: {$data['payment_link']}",
@@ -791,13 +990,10 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Get default WhatsApp message for a notification type
-     */
     public function getDefaultWhatsAppMessage(string $type, array $data = []): string
     {
         $systemName = $this->system_name;
-        
+
         return match($type) {
             'invoice_generated' => "*{$systemName}* 🏢\n\nNew invoice generated:\n\n📄 *Invoice:* #{$data['invoice_number']}\n📅 *Period:* {$data['period']}\n💰 *Amount:* {$data['amount']}\n📆 *Due:* {$data['due_date']}\n\n🔗 Pay here: {$data['payment_link']}",
             'payment_reminder' => "*{$systemName}* 🔔\n\nPayment Reminder:\n\n📄 *Invoice:* #{$data['invoice_number']}\n💰 *Amount:* {$data['amount']}\n📆 *Due:* {$data['due_date']}\n\n🔗 Pay now: {$data['payment_link']}",
@@ -807,27 +1003,605 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    // ========== YEAR-END ARCHIVE METHODS ==========
+    // ========== 🆕 HOMEPAGE CONTENT METHODS ==========
+
+    public function getHomepageConfig(): array    {
+        $stored = $this->homepage_config ?? [];
+
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        return $this->arrayReplaceRecursiveDeep(self::HOMEPAGE_DEFAULTS, $stored);
+    }
+
+    protected function arrayReplaceRecursiveDeep(array $defaults, array $stored): array
+    {
+        foreach ($stored as $key => $value) {
+            if (is_array($value) && isset($defaults[$key]) && is_array($defaults[$key])) {
+                $defaults[$key] = $this->arrayReplaceRecursiveDeep($defaults[$key], $value);
+            } else {
+                $defaults[$key] = $value;
+            }
+        }
+        return $defaults;
+    }
+
+    public function hasCustomHomepage(): bool
+    {
+        return !empty($this->homepage_config)
+            && is_array($this->homepage_config)
+            && count($this->homepage_config) > 0;
+    }
+
+    public function getHomepageHeroImageUrl(): ?string
+    {
+        $config = $this->getHomepageConfig();
+        $path   = $config['hero']['background'] ?? null;
+
+        if (empty($path)) {
+            return null;
+        }
+
+        try {
+            if (!Storage::disk('public')->exists($path)) {
+                return null;
+            }
+            return Storage::disk('public')->url($path);
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    public function getHomepageHeroImagePath(): ?string
+    {
+        $config = $this->getHomepageConfig();
+        $path   = $config['hero']['background'] ?? null;
+
+        return !empty($path) ? $path : null;
+    }
+
+    public function getHomepageHeroTitle(): string
+    {
+        $config = $this->getHomepageConfig();
+        $title  = $config['hero']['title'] ?? null;
+
+        return !empty($title) ? $title : ($this->system_name ?? 'Community Portal');
+    }
+
+    public function getHomepageHeroSubtitle(): string
+    {
+        $config = $this->getHomepageConfig();
+        return $config['hero']['subtitle'] ?? self::HOMEPAGE_DEFAULTS['hero']['subtitle'];
+    }
+
+    public function getHomepageHeroCtas(): array
+    {
+        $config = $this->getHomepageConfig();
+        return [
+            'primary'   => $config['hero']['cta_primary']   ?? self::HOMEPAGE_DEFAULTS['hero']['cta_primary'],
+            'secondary' => $config['hero']['cta_secondary'] ?? self::HOMEPAGE_DEFAULTS['hero']['cta_secondary'],
+        ];
+    }
+
+    public function getHomepageSections(): array
+    {
+        $config = $this->getHomepageConfig();
+        return $config['sections'] ?? self::HOMEPAGE_DEFAULTS['sections'];
+    }
+
+    public function isHomepageSectionVisible(string $section): bool
+    {
+        $sections = $this->getHomepageSections();
+        return (bool) ($sections[$section] ?? true);
+    }
+
+    public function getHomepageSocialLinks(): array
+    {
+        $config = $this->getHomepageConfig();
+        return $config['social'] ?? self::HOMEPAGE_DEFAULTS['social'];
+    }
+
+    public function getHomepageSocialLinksNonEmpty(): array
+    {
+        return array_filter(
+            $this->getHomepageSocialLinks(),
+            fn($v) => !empty($v)
+        );
+    }
+
+    public function getHomepageContact(): array
+    {
+        $config = $this->getHomepageConfig();
+        $c      = $config['contact'] ?? self::HOMEPAGE_DEFAULTS['contact'];
+
+        return [
+            'email'   => !empty($c['email'])   ? $c['email']   : ($this->system_email  ?? ''),
+            'phone'   => !empty($c['phone'])   ? $c['phone']   : ($this->system_phone  ?? ''),
+            'address' => !empty($c['address']) ? $c['address'] : ('Estate Office, ' . ($this->system_name ?? 'Community Portal')),
+            'hours'   => !empty($c['hours'])   ? $c['hours']   : self::HOMEPAGE_DEFAULTS['contact']['hours'],
+        ];
+    }
+
+    public function getHomepageFooter(): array
+    {
+        $config    = $this->getHomepageConfig();
+        $copyright = $config['footer']['copyright'] ?? null;
+
+        if (empty($copyright)) {
+            $copyright = '© ' . date('Y') . ' ' . ($this->system_name ?? 'Community Portal') . '. All rights reserved.';
+        }
+
+        return [
+            'copyright' => $copyright,
+        ];
+    }
+
+    public function resetHomepageConfig(): bool
+    {
+        $path = $this->getHomepageHeroImagePath();
+        if (!empty($path)) {
+            try {
+                Storage::disk('public')->delete($path);
+            } catch (\Throwable $e) {
+                // Silent
+            }
+        }
+
+        $this->homepage_config = null;
+        return $this->save();
+    }
+
+    public function setHomepageHeroBackground(?string $path): bool
+    {
+        $oldPath = $this->getHomepageHeroImagePath();
+        if (!empty($oldPath) && $oldPath !== $path) {
+            try {
+                Storage::disk('public')->delete($oldPath);
+            } catch (\Throwable $e) {
+                // Silent
+            }
+        }
+
+        $config = $this->getHomepageConfig();
+        $config['hero']['background'] = $path;
+
+        $this->homepage_config = $config;
+        return $this->save();
+    }
+
+    public function getHomepageStatus(): array
+    {
+        $config       = $this->getHomepageConfig();
+        $sections     = $config['sections'] ?? [];
+        $social       = $config['social']   ?? [];
+        $contact      = $config['contact']  ?? [];
+        $hero         = $config['hero']     ?? [];
+
+        $sectionsOn   = count(array_filter($sections));
+        $sectionsAll  = count($sections);
+        $socialSet    = count(array_filter($social));
+        $socialAll    = count($social);
+        $contactSet   = count(array_filter($contact)) > 0;
+
+        return [
+            'has_custom'      => $this->hasCustomHomepage(),
+            'hero_image_url'  => $this->getHomepageHeroImageUrl(),
+            'hero_title'      => $hero['title'] ?? null,
+            'hero_title_used' => $this->getHomepageHeroTitle(),
+            'hero_subtitle'   => $hero['subtitle'] ?? null,
+            'sections_on'     => $sectionsOn,
+            'sections_total'  => $sectionsAll,
+            'social_set'      => $socialSet,
+            'social_total'    => $socialAll,
+            'contact_custom'  => $contactSet,
+            'hero_custom'     => !empty($hero['title']) || !empty($hero['subtitle']),
+            'theme'           => $this->getHomepageThemeStatus(),
+        ];
+    }
+
+    // ========== 🎨 HOMEPAGE THEME METHODS ==========
+
+    public function getHomepageTheme(): array
+    {
+        $config = $this->getHomepageConfig();
+        return $config['theme'] ?? self::HOMEPAGE_DEFAULTS['theme'];
+    }
+
+    public function getHomepageThemePreset(): string
+    {
+        $theme = $this->getHomepageTheme();
+        return $theme['preset'] ?? 'default';
+    }
+
+    public function applyHomepageThemePreset(string $presetKey): array
+    {
+        $preset = self::THEME_PRESETS[$presetKey] ?? null;
+        if (!$preset) {
+            return $this->getHomepageTheme();
+        }
+
+        $current = $this->getHomepageTheme();
+        $merged  = $this->arrayReplaceRecursiveDeep($current, $preset['values']);
+        $merged['preset'] = $presetKey;
+
+        return $merged;
+    }
+
+    public function getHomepageThemeStatus(): array
+    {
+        $theme = $this->getHomepageTheme();
+
+        return [
+            'preset'           => $theme['preset'] ?? 'default',
+            'preset_name'      => self::THEME_PRESETS[$theme['preset'] ?? 'default']['name'] ?? 'Default',
+            'primary_color'    => $theme['colors']['primary']   ?? null,
+            'secondary_color'  => $theme['colors']['secondary'] ?? null,
+            'accent_color'     => $theme['colors']['accent']    ?? null,
+            'font_family'      => $theme['fonts']['family']     ?? 'system',
+            'hero_height'      => $theme['hero']['height']      ?? 'standard',
+            'is_customised'    => ($theme['preset'] ?? 'default') !== 'default'
+                                  || !empty($theme['colors']['primary'])
+                                  || !empty($theme['colors']['secondary'])
+                                  || !empty($theme['colors']['accent']),
+        ];
+    }
+
+    // ========== 🔐 LOGIN PAGE CONFIG METHODS ==========
+    // These are what HomepageContentController::index() / uploadLoginBackground()
+    // / removeLoginBackground() / updateLoginPage() / resetLoginPage() need.
 
     /**
-     * Check if year-end archiving is enabled for landlord invoices
+     * Get the resolved login-page config (defaults merged in).
+     * Always returns a complete, safe-to-render array.
      */
+    public function getLoginPageConfig(): array
+    {
+        $config = $this->getHomepageConfig();
+        $login  = $config['login'] ?? self::HOMEPAGE_DEFAULTS['login'];
+
+        if (!is_array($login)) {
+            $login = self::HOMEPAGE_DEFAULTS['login'];
+        }
+
+        // Merge in any defaults that a partial save may have dropped.
+        return $this->arrayReplaceRecursiveDeep(self::HOMEPAGE_DEFAULTS['login'], $login);
+    }
+
+    /**
+     * Resolve the login background image URL.
+     *
+     * Priority:
+     *   1. Uploaded file (storage/public/login-page/...)
+     *   2. External fallback URL (login.background_url)
+     *   3. null (caller uses a hard-coded default image)
+     */
+    public function getLoginPageBackgroundUrl(): ?string
+    {
+        $config = $this->getLoginPageConfig();
+
+        // 1. Uploaded file
+        $path = $config['background'] ?? null;
+        if (!empty($path)) {
+            try {
+                if (Storage::disk('public')->exists($path)) {
+                    return Storage::disk('public')->url($path);
+                }
+            } catch (\Throwable $e) {
+                // Fall through to external URL
+            }
+        }
+
+        // 2. External fallback URL
+        $externalUrl = $config['background_url'] ?? null;
+        if (!empty($externalUrl) && filter_var($externalUrl, FILTER_VALIDATE_URL)) {
+            return $externalUrl;
+        }
+
+        // 3. Nothing configured
+        return null;
+    }
+
+    /**
+     * Resolve the login background image PATH (for deletion / storage ops).
+     */
+    public function getLoginPageBackgroundPath(): ?string
+    {
+        $config = $this->getLoginPageConfig();
+        $path   = $config['background'] ?? null;
+
+        return !empty($path) ? $path : null;
+    }
+
+    /**
+     * Store / replace / remove the login background image.
+     *
+     * Pass a relative storage path to set a new image
+     * (e.g. "login-page/bg_abc123.jpg"), or null to remove it.
+     *
+     * Deletes the previous uploaded file when replacing/removing.
+     */
+    public function setLoginPageBackground(?string $path): bool
+    {
+        $oldPath = $this->getLoginPageBackgroundPath();
+
+        if (!empty($oldPath) && $oldPath !== $path) {
+            try {
+                Storage::disk('public')->delete($oldPath);
+            } catch (\Throwable $e) {
+                // Silent — file may already be gone
+            }
+        }
+
+        $config = $this->getHomepageConfig();
+        $login  = $config['login'] ?? self::HOMEPAGE_DEFAULTS['login'];
+
+        if (!is_array($login)) {
+            $login = self::HOMEPAGE_DEFAULTS['login'];
+        }
+
+        $login['background'] = $path;
+        $config['login']     = $login;
+
+        $this->homepage_config = $config;
+        return $this->save();
+    }
+
+    /**
+     * Reset the login-page config back to defaults.
+     * Deletes the uploaded background file if present.
+     *
+     * 🆕 Now also resets the login theme block to defaults, since
+     *    the whole `login` key is being replaced with HOMEPAGE_DEFAULTS['login'].
+     */
+    public function resetLoginPageConfig(): bool
+    {
+        $path = $this->getLoginPageBackgroundPath();
+        if (!empty($path)) {
+            try {
+                Storage::disk('public')->delete($path);
+            } catch (\Throwable $e) {
+                // Silent
+            }
+        }
+
+        $config = $this->getHomepageConfig();
+        $config['login'] = self::HOMEPAGE_DEFAULTS['login'];
+
+        $this->homepage_config = $config;
+        return $this->save();
+    }
+
+    /**
+     * Whether the login-page config deviates from defaults.
+     */
+    public function hasCustomLoginPage(): bool
+    {
+        $stored = $this->homepage_config['login'] ?? null;
+
+        if (empty($stored) || !is_array($stored)) {
+            return false;
+        }
+
+        $defaults = self::HOMEPAGE_DEFAULTS['login'];
+
+        // Shallow compare of key settings
+        foreach (['background', 'background_url', 'overlay_opacity', 'default_theme',
+                  'system_name_override', 'welcome_title', 'welcome_subtitle'] as $key) {
+            if (isset($stored[$key]) && $stored[$key] !== ($defaults[$key] ?? null)) {
+                return true;
+            }
+        }
+
+        foreach (['show_welcome_panel', 'show_social_icons', 'show_cookie_banner'] as $key) {
+            if (array_key_exists($key, $stored) && (bool)$stored[$key] !== (bool)($defaults[$key] ?? true)) {
+                return true;
+            }
+        }
+
+        if (!empty($stored['welcome_features']) || !empty($stored['footer_socials'])) {
+            return true;
+        }
+
+        return false;
+    }
+
+    // ========== 🆕 🔐 LOGIN THEME METHODS ==========
+
+    /**
+     * Get the resolved login theme (defaults merged in).
+     */
+    public function getLoginPageTheme(): array
+    {
+        $config = $this->getLoginPageConfig();
+        return $config['theme'] ?? self::HOMEPAGE_DEFAULTS['login']['theme'];
+    }
+
+    /**
+     * Current login theme preset key.
+     */
+    public function getLoginPageThemePreset(): string
+    {
+        $theme = $this->getLoginPageTheme();
+        return $theme['preset'] ?? 'default';
+    }
+
+    /**
+     * Summary of the login theme for admin cards / status panels.
+     */
+    public function getLoginPageThemeStatus(): array
+    {
+        $theme = $this->getLoginPageTheme();
+        $preset = $theme['preset'] ?? 'default';
+
+        return [
+            'preset'          => $preset,
+            'preset_name'     => self::THEME_PRESETS[$preset]['name'] ?? 'Custom',
+            'primary_color'   => $theme['colors']['primary']   ?? null,
+            'secondary_color' => $theme['colors']['secondary'] ?? null,
+            'accent_color'    => $theme['colors']['accent']    ?? null,
+            'font_family'     => $theme['fonts']['family']     ?? 'system',
+            'layout_split'    => $theme['layout']['split']     ?? 'panel-left',
+            'is_customised'   => $this->hasCustomLoginTheme(),
+        ];
+    }
+
+    /**
+     * Whether the admin has manually overridden the login theme.
+     */
+    public function hasCustomLoginTheme(): bool
+    {
+        $stored = $this->homepage_config['login']['theme'] ?? null;
+
+        if (empty($stored) || !is_array($stored)) {
+            return false;
+        }
+
+        // Anything other than the default preset with default palette counts as custom.
+        if (($stored['preset'] ?? 'default') !== 'default') {
+            return true;
+        }
+
+        $defaults = self::HOMEPAGE_DEFAULTS['login']['theme'];
+
+        // Compare color/font/layout keys against defaults
+        foreach (['colors', 'fonts', 'layout', 'buttons'] as $group) {
+            foreach (($stored[$group] ?? []) as $key => $value) {
+                if ($value !== ($defaults[$group][$key] ?? null)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 🆕 Return which login theme fields the admin has EXPLICITLY set.
+     *
+     * Used by the login Blade so it can:
+     *   - Render admin-set colors verbatim (both light + dark).
+     *   - Fall back to sensible dark-mode defaults for fields the admin
+     *     left at the theme default, preventing the "white card with
+     *     invisible dark text on a dark page" bug.
+     *
+     * A field counts as "explicit" if the stored value differs from
+     * HOMEPAGE_DEFAULTS['login']['theme'][...].
+     */
+    public function getLoginThemeOverrides(): array
+    {
+        $stored   = $this->homepage_config['login']['theme'] ?? [];
+        $defaults = self::HOMEPAGE_DEFAULTS['login']['theme'] ?? [];
+
+        $overrides = [
+            'colors'  => [],
+            'fonts'   => [],
+            'layout'  => [],
+            'buttons' => [],
+        ];
+
+        if (!is_array($stored)) {
+            return $overrides;
+        }
+
+        foreach ($overrides as $group => $_) {
+            foreach (($stored[$group] ?? []) as $key => $value) {
+                $defaultValue = $defaults[$group][$key] ?? null;
+                if ($value !== $defaultValue) {
+                    $overrides[$group][$key] = true;
+                }
+            }
+        }
+
+        // 🆕 If the preset was changed to a non-default preset, treat
+        //    every color the preset sets as "explicit" — otherwise the
+        //    dark-mode fallbacks would clobber the preset's palette.
+        $preset = $stored['preset'] ?? 'default';
+        if ($preset !== 'default') {
+            $presetValues = self::THEME_PRESETS[$preset]['values'] ?? [];
+
+            // Primary/secondary/accent are always overridden by a preset
+            foreach (['primary', 'secondary', 'accent'] as $k) {
+                if (!empty($presetValues['colors'][$k])) {
+                    $overrides['colors'][$k] = true;
+                }
+            }
+
+            // Form/panel colors: only override if the preset (or the
+            // store) actually sets them. Most presets only define
+            // primary/secondary/accent, so form/panel keep the dark
+            // fallbacks — which is exactly what we want.
+            foreach (['panel_bg', 'panel_text', 'form_bg', 'form_text'] as $k) {
+                if (!empty($stored['colors'][$k]) && $stored['colors'][$k] !== ($defaults['colors'][$k] ?? null)) {
+                    $overrides['colors'][$k] = true;
+                }
+            }
+        }
+
+        return $overrides;
+    }
+
+    /**
+     * Build the CSS variable map the login Blade can drop into :root.
+     *
+     * Keeping this in the model means the view stays dumb, and tests can
+     * assert on the resolved variables rather than scraping HTML.
+     */
+    public function getLoginPageCssVariables(): array
+    {
+        $theme = $this->getLoginPageTheme();
+        $c     = $theme['colors']  ?? [];
+        $f     = $theme['fonts']   ?? [];
+        $l     = $theme['layout']  ?? [];
+        $b     = $theme['buttons'] ?? [];
+
+        $radiusMap = [
+            'sharp'   => '0',
+            'rounded' => '0.75rem',
+            'pill'    => '999px',
+        ];
+
+        $shapeMap = [
+            'square'  => '0',
+            'rounded' => '0.5rem',
+            'pill'    => '999px',
+        ];
+
+        return [
+            '--login-primary'        => $c['primary']    ?? '#2563eb',
+            '--login-secondary'      => $c['secondary']  ?? '#1e40af',
+            '--login-accent'         => $c['accent']     ?? '#f59e0b',
+            '--login-panel-bg'       => $c['panel_bg']   ?? '#0f172a',
+            '--login-panel-text'     => $c['panel_text'] ?? '#f8fafc',
+            '--login-form-bg'        => $c['form_bg']    ?? '#ffffff',
+            '--login-form-text'      => $c['form_text']  ?? '#0f172a',
+            '--login-radius'         => $radiusMap[$l['radius_style'] ?? 'rounded'] ?? '0.75rem',
+            '--login-btn-radius'     => $shapeMap[$b['shape'] ?? 'rounded'] ?? '0.5rem',
+            '--login-font-family'    => $f['family'] ?? 'system',
+            '--login-base-size'      => ($f['base_size'] ?? 16) . 'px',
+            '--login-heading-weight' => $f['heading_weight'] ?? '700',
+            '--login-panel-width'    => ($l['panel_width'] ?? 50) . '%',
+            '--login-card-shadow'    => ($l['card_shadow'] ?? true)
+                ? '0 20px 40px rgba(0,0,0,.15)'
+                : 'none',
+            '--login-btn-shadow'     => ($b['shadow'] ?? true)
+                ? '0 6px 16px rgba(0,0,0,.15)'
+                : 'none',
+        ];
+    }
+
+    // ========== YEAR-END ARCHIVE METHODS ==========
+
     public function isYearEndArchiveEnabled(): bool
     {
         return (bool) ($this->enable_year_end_archive ?? true);
     }
 
-    /**
-     * Check if year-end archiving is enabled for tenant invoices
-     */
     public function isYearEndArchiveEnabledForTenant(): bool
     {
         return (bool) ($this->enable_year_end_archive_tenant ?? true);
     }
 
-    /**
-     * Get year-end archive configuration
-     */
     public function getYearEndArchiveConfig(): array
     {
         return [
@@ -844,9 +1618,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get tenant year-end archive configuration
-     */
     public function getTenantYearEndArchiveConfig(): array
     {
         return [
@@ -861,9 +1632,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get the next year-end archive date
-     */
     public function getNextYearEndArchiveDate(): ?Carbon
     {
         if (!$this->isYearEndArchiveEnabled()) {
@@ -872,19 +1640,16 @@ public function isOfflinePaymentAllowed(): bool
 
         $month = $this->year_end_archive_month ?? 1;
         $day = $this->year_end_archive_day ?? 15;
-        
+
         $archiveDate = Carbon::create(now()->year, $month, $day);
-        
+
         if ($archiveDate->isPast()) {
             $archiveDate->addYear();
         }
-        
+
         return $archiveDate;
     }
 
-    /**
-     * Get the next tenant year-end archive date
-     */
     public function getNextTenantYearEndArchiveDate(): ?Carbon
     {
         if (!$this->isYearEndArchiveEnabledForTenant()) {
@@ -893,19 +1658,16 @@ public function isOfflinePaymentAllowed(): bool
 
         $month = $this->year_end_archive_month_tenant ?? 1;
         $day = $this->year_end_archive_day_tenant ?? 16;
-        
+
         $archiveDate = Carbon::create(now()->year, $month, $day);
-        
+
         if ($archiveDate->isPast()) {
             $archiveDate->addYear();
         }
-        
+
         return $archiveDate;
     }
 
-    /**
-     * Check if today is the year-end archive date
-     */
     public function isYearEndArchiveDate(): bool
     {
         if (!$this->isYearEndArchiveEnabled()) {
@@ -914,13 +1676,10 @@ public function isOfflinePaymentAllowed(): bool
 
         $month = $this->year_end_archive_month ?? 1;
         $day = $this->year_end_archive_day ?? 15;
-        
+
         return now()->month == $month && now()->day == $day;
     }
 
-    /**
-     * Check if today is the tenant year-end archive date
-     */
     public function isTenantYearEndArchiveDate(): bool
     {
         if (!$this->isYearEndArchiveEnabledForTenant()) {
@@ -929,67 +1688,55 @@ public function isOfflinePaymentAllowed(): bool
 
         $month = $this->year_end_archive_month_tenant ?? 1;
         $day = $this->year_end_archive_day_tenant ?? 16;
-        
+
         return now()->month == $month && now()->day == $day;
     }
 
-    /**
-     * Get days until next year-end archive
-     */
     public function getDaysUntilYearEndArchive(): ?int
     {
         $archiveDate = $this->getNextYearEndArchiveDate();
-        
+
         if (!$archiveDate) {
             return null;
         }
-        
+
         return now()->diffInDays($archiveDate, false);
     }
 
-    /**
-     * Check if landlord archive reminders should be sent today
-     */
     public function shouldSendLandlordArchiveReminders(): bool
     {
         if (!$this->isYearEndArchiveEnabled()) {
             return false;
         }
-        
+
         $archiveDate = $this->getNextYearEndArchiveDate();
         if (!$archiveDate) {
             return false;
         }
-        
+
         $daysUntilArchive = (int) now()->diffInDays($archiveDate, false);
         $reminderDays = $this->archive_notification_days_landlord ?? 30;
-        
+
         return $daysUntilArchive == $reminderDays;
     }
 
-    /**
-     * Check if tenant archive reminders should be sent today
-     */
     public function shouldSendTenantArchiveReminders(): bool
     {
         if (!$this->isYearEndArchiveEnabledForTenant()) {
             return false;
         }
-        
+
         $archiveDate = $this->getNextTenantYearEndArchiveDate();
         if (!$archiveDate) {
             return false;
         }
-        
+
         $daysUntilArchive = (int) now()->diffInDays($archiveDate, false);
         $reminderDays = $this->archive_notification_days_tenant ?? 30;
-        
+
         return $daysUntilArchive == $reminderDays;
     }
 
-    /**
-     * Scope to get only configured systems
-     */
     public function scopeConfigured($query)
     {
         return $query->whereNotNull('system_name')
@@ -997,9 +1744,6 @@ public function isOfflinePaymentAllowed(): bool
                     ->whereNotNull('currency_code');
     }
 
-    /**
-     * Initialize system settings with default values
-     */
     public static function initialize(array $data, User $creator): self
     {
         $defaults = self::getDefaultSettings();
@@ -1010,9 +1754,6 @@ public function isOfflinePaymentAllowed(): bool
         return static::create($settings);
     }
 
-    /**
-     * Get default system settings
-     */
     public static function getDefaultSettings(): array
     {
         return [
@@ -1024,21 +1765,17 @@ public function isOfflinePaymentAllowed(): bool
             'system_logo' => null,
             'system_favicon' => null,
 
-            // Default SMS sender ID — inherits from config/sms.php if set,
-            // otherwise blank so the admin can fill it in.
             'sms_sender_id' => config('sms.sender_id', null),
-            
+
             'currency_code' => 'GHS',
             'currency_symbol' => 'GH₵',
             'currency_position' => 'left',
             'decimal_places' => 2,
-            
-            // Dues Configuration
+
             'monthly_dues_amount' => 100.00,
             'calculation_method' => 'fixed',
             'per_property_amount' => 50.00,
-            
-            // Tenant Dues Defaults
+
             'enable_tenant_invoicing' => true,
             'tenant_monthly_dues_amount' => 50.00,
             'tenant_calculation_method' => 'fixed',
@@ -1047,29 +1784,24 @@ public function isOfflinePaymentAllowed(): bool
             'tenant_grace_period_days' => 7,
             'tenant_late_payment_percentage' => 5.00,
             'tenant_fixed_penalty_amount' => 0.00,
-            
-            // Payment Terms
+
             'grace_period_days' => 7,
             'late_payment_percentage' => 5.00,
             'fixed_penalty_amount' => 0.00,
-            
-            // System Operations
+
             'auto_generate_invoices' => true,
             'send_payment_reminders' => true,
             'reminder_days_before' => 3,
-            
-            // Payment Gateways - All disabled by default
+
             'enable_expresspay' => false,
             'enable_hubtel' => false,
             'enable_paystack' => false,
             'enable_flutterwave' => false,
-            
-            // Bulk Payment Settings
+
             'enable_bulk_payments' => true,
             'max_bulk_months' => 6,
             'bulk_payment_discount' => 0,
-            
-            // WhatsApp Configuration Defaults
+
             'whatsapp_provider' => 'none',
             'twilio_sid' => '',
             'twilio_token' => '',
@@ -1079,54 +1811,44 @@ public function isOfflinePaymentAllowed(): bool
             'vonage_whatsapp_from' => '',
             'whatsapp_api_url' => '',
             'whatsapp_api_key' => '',
-            
-            // Registration Control Defaults
+
             'allow_registration' => true,
             'registration_disabled_message' => 'New registrations are currently disabled. Please contact the administrator for assistance.',
+
+            // 🆕 Starts as null — HOMEPAGE_DEFAULTS supplies everything else
+            'homepage_config' => null,
+
+            // 🆕 📢 Starts as null — AD_DEFAULTS supplies everything else
+            'ad_config' => null,
         ];
     }
 
     // ========== LOGO METHODS ==========
 
-    /**
-     * Check if logo exists
-     */
     public function hasLogo(): bool
     {
         return !empty($this->system_logo) && Storage::disk('public')->exists($this->system_logo);
     }
 
-    /**
-     * Get logo URL
-     */
     public function getLogoUrl(): string
     {
         if ($this->hasLogo()) {
             return Storage::disk('public')->url($this->system_logo);
         }
-        
+
         return asset('images/default-logo.png');
     }
 
-    /**
-     * Get display logo (for placeholder)
-     */
     public function getDisplayLogo(): string
     {
         return $this->getLogoUrl();
     }
 
-    /**
-     * Get default logo placeholder
-     */
     public function getDefaultLogoPlaceholder(): string
     {
         return asset('images/default-system-logo.png');
     }
 
-    /**
-     * Remove logo from system
-     */
     public function removeLogo(): bool
     {
         $this->system_logo = null;
@@ -1135,29 +1857,20 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== FAVICON METHODS ==========
 
-    /**
-     * Check if favicon exists
-     */
     public function hasFavicon(): bool
     {
         return !empty($this->system_favicon) && Storage::disk('public')->exists($this->system_favicon);
     }
 
-    /**
-     * Get favicon URL
-     */
     public function getFaviconUrl(): ?string
     {
         if ($this->hasFavicon()) {
             return Storage::disk('public')->url($this->system_favicon);
         }
-        
+
         return null;
     }
 
-    /**
-     * Get favicon HTML tag
-     */
     public function getFaviconHtml(): string
     {
         if ($this->hasFavicon()) {
@@ -1166,21 +1879,15 @@ public function isOfflinePaymentAllowed(): bool
                     <link rel="shortcut icon" href="' . e($url) . '" type="image/x-icon">
                     <link rel="apple-touch-icon" href="' . e($url) . '">';
         }
-        
+
         return '';
     }
 
-    /**
-     * Get favicon for layout/head section
-     */
     public function getFaviconForLayout(): string
     {
         return $this->getFaviconHtml();
     }
 
-    /**
-     * Get favicon paths for different sizes
-     */
     public function getFaviconSizes(): array
     {
         if (!$this->hasFavicon()) {
@@ -1188,7 +1895,7 @@ public function isOfflinePaymentAllowed(): bool
         }
 
         $url = $this->getFaviconUrl();
-        
+
         return [
             '16x16' => $url,
             '32x32' => $url,
@@ -1197,26 +1904,20 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Remove favicon from system
-     */
     public function removeFavicon(): bool
     {
         if ($this->hasFavicon()) {
             Storage::disk('public')->delete($this->system_favicon);
         }
-        
+
         $this->system_favicon = null;
         return $this->save();
     }
 
-    /**
-     * Get favicon status for display
-     */
     public function getFaviconStatus(): array
     {
         $hasFavicon = $this->hasFavicon();
-        
+
         return [
             'has_favicon' => $hasFavicon,
             'url' => $this->getFaviconUrl(),
@@ -1228,17 +1929,11 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== SYSTEM IDENTIFICATION METHODS ==========
 
-    /**
-     * Get system short name or fallback to system name
-     */
     public function getSystemShortName(): string
     {
         return $this->system_short_name ?? $this->system_name ?? config('app.name', 'System');
     }
 
-    /**
-     * Get system identifier (short name for URLs, full name for display)
-     */
     public function getSystemIdentifier(): array
     {
         return [
@@ -1249,9 +1944,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Generate a system short name from the system name
-     */
     public function generateShortName(): string
     {
         if (empty($this->system_name)) {
@@ -1268,7 +1960,7 @@ public function isOfflinePaymentAllowed(): bool
 
         $baseShortName = $shortName;
         $counter = 1;
-        
+
         while (self::where('system_short_name', $shortName)
                 ->where('id', '!=', $this->id)
                 ->exists()) {
@@ -1280,31 +1972,22 @@ public function isOfflinePaymentAllowed(): bool
     }
 
     // ========== REGISTRATION CONTROL METHODS ==========
-    
-    /**
-     * Check if registration is allowed
-     */
+
     public function isRegistrationAllowed(): bool
     {
         return $this->allow_registration ?? true;
     }
 
-    /**
-     * Get registration disabled message
-     */
     public function getRegistrationDisabledMessage(): string
     {
-        return $this->registration_disabled_message ?? 
+        return $this->registration_disabled_message ??
                'New registrations are currently disabled. Please contact the administrator for assistance.';
     }
 
-    /**
-     * Check if registration is allowed with detailed status
-     */
     public function getRegistrationStatus(): array
     {
         $allowed = $this->isRegistrationAllowed();
-        
+
         return [
             'allowed' => $allowed,
             'message' => $allowed ? 'Registration is enabled' : $this->getRegistrationDisabledMessage(),
@@ -1317,9 +2000,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Enable registration with optional message
-     */
     public function enableRegistration(?string $message = null): bool
     {
         $this->allow_registration = true;
@@ -1327,49 +2007,34 @@ public function isOfflinePaymentAllowed(): bool
         return $this->save();
     }
 
-    /**
-     * Disable registration with custom message
-     */
     public function disableRegistration(?string $message = null): bool
     {
         $this->allow_registration = false;
-        
+
         if ($message) {
             $this->registration_disabled_message = $message;
         }
-        
+
         return $this->save();
     }
 
     // ========== TENANT INVOICE METHODS ==========
 
-    /**
-     * Check if tenant invoicing is enabled
-     */
     public function isTenantInvoicingEnabled(): bool
     {
         return $this->enable_tenant_invoicing ?? false;
     }
 
-    /**
-     * Get tenant monthly dues amount
-     */
     public function getTenantMonthlyDuesAmount(): float
     {
         return (float) ($this->tenant_monthly_dues_amount ?? 0);
     }
 
-    /**
-     * Get tenant calculation method
-     */
     public function getTenantCalculationMethod(): string
     {
         return $this->tenant_calculation_method ?? 'fixed';
     }
 
-    /**
-     * Get tenant calculation method text for display
-     */
     public function getTenantCalculationMethodText(): string
     {
         if (!$this->isTenantInvoicingEnabled()) {
@@ -1377,7 +2042,7 @@ public function isOfflinePaymentAllowed(): bool
         }
 
         $method = $this->getTenantCalculationMethod();
-        
+
         return match($method) {
             'fixed' => 'Fixed Amount',
             'per_property_unit' => 'Per Property Unit',
@@ -1385,9 +2050,6 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Calculate tenant dues based on landlord dues and calculation method
-     */
     public function calculateTenantDues(?float $landlordDues = null): float
     {
         if (!$this->isTenantInvoicingEnabled()) {
@@ -1395,7 +2057,7 @@ public function isOfflinePaymentAllowed(): bool
         }
 
         $method = $this->getTenantCalculationMethod();
-        
+
         return match($method) {
             'fixed' => $this->getTenantMonthlyDuesAmount(),
             'per_property_unit' => $this->getTenantMonthlyDuesAmount(),
@@ -1403,30 +2065,21 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Alias for calculateTenantDues() to maintain compatibility with views
-     */
     public function getCalculatedTenantDues(): float
     {
         return $this->calculateTenantDues();
     }
 
-    /**
-     * Get formatted tenant monthly dues
-     */
     public function getFormattedTenantMonthlyDues(): string
     {
         if (!$this->isTenantInvoicingEnabled()) {
             return 'Not enabled';
         }
-        
+
         $amount = $this->calculateTenantDues();
         return $this->formatAmount($amount);
     }
 
-    /**
-     * Get tenant calculation method description
-     */
     public function getTenantCalculationMethodDescription(): string
     {
         if (!$this->isTenantInvoicingEnabled()) {
@@ -1435,7 +2088,7 @@ public function isOfflinePaymentAllowed(): bool
 
         $method = $this->getTenantCalculationMethod();
         $formattedAmount = $this->formatAmount($this->getTenantMonthlyDuesAmount());
-        
+
         return match($method) {
             'fixed' => "Fixed Amount - {$formattedAmount} per tenant",
             'per_property_unit' => "Per Property Unit - {$formattedAmount} per property unit",
@@ -1443,9 +2096,6 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Get tenant invoice generation settings
-     */
     public function getTenantInvoiceSettings(): array
     {
         return [
@@ -1462,45 +2112,33 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Check if auto-generate tenant invoices is enabled
-     */
     public function shouldAutoGenerateTenantInvoices(): bool
     {
         if (!$this->isTenantInvoicingEnabled()) {
             return false;
         }
-        
+
         return (bool) ($this->auto_generate_tenant_invoices ?? true);
     }
 
-    /**
-     * Check if tenant payment reminders should be sent
-     */
     public function shouldSendTenantPaymentReminders(): bool
     {
         if (!$this->isTenantInvoicingEnabled()) {
             return false;
         }
-        
+
         return (bool) ($this->send_tenant_payment_reminders ?? true);
     }
 
-    /**
-     * Get tenant grace period days
-     */
     public function getTenantGracePeriodDays(): int
     {
         return $this->tenant_grace_period_days ?? $this->grace_period_days ?? 7;
     }
 
-    /**
-     * Calculate tenant penalty for overdue payment
-     */
     public function calculateTenantPenalty(float $originalAmount, int $daysOverdue): float
     {
         $gracePeriod = $this->getTenantGracePeriodDays();
-        
+
         if ($daysOverdue <= $gracePeriod) {
             return 0.00;
         }
@@ -1513,25 +2151,19 @@ public function isOfflinePaymentAllowed(): bool
         return ($originalAmount * $penaltyPercentage) / 100;
     }
 
-    /**
-     * Get tenant penalty configuration
-     */
     public function getTenantPenaltyConfig(): array
     {
         return [
             'grace_period_days' => $this->getTenantGracePeriodDays(),
             'late_payment_percentage' => $this->tenant_late_payment_percentage ?? $this->late_payment_percentage,
             'fixed_penalty_amount' => $this->tenant_fixed_penalty_amount,
-            'formatted_fixed_penalty' => $this->tenant_fixed_penalty_amount ? 
+            'formatted_fixed_penalty' => $this->tenant_fixed_penalty_amount ?
                 $this->formatAmount($this->tenant_fixed_penalty_amount) : null,
             'uses_percentage' => empty($this->tenant_fixed_penalty_amount) || $this->tenant_fixed_penalty_amount == 0,
             'uses_fixed' => !empty($this->tenant_fixed_penalty_amount) && $this->tenant_fixed_penalty_amount > 0,
         ];
     }
 
-    /**
-     * Get complete tenant invoice configuration
-     */
     public function getTenantInvoiceConfig(): array
     {
         return [
@@ -1552,22 +2184,19 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== CURRENCY METHODS ==========
 
-    /**
-     * Format amount with currency
-     */
     public function formatAmount($amount): string
     {
         if ($amount === null || $amount === '' || !is_numeric($amount)) {
             $amount = 0;
         }
-        
+
         $amount = (float) $amount;
         $decimalPlaces = $this->decimal_places ?? 2;
         $formatted = number_format($amount, $decimalPlaces);
         $currencySymbol = $this->currency_symbol ?? '₵';
-        
+
         $position = $this->currency_position ?? 'left';
-        
+
         return match($position) {
             'left' => $currencySymbol . $formatted,
             'right' => $formatted . $currencySymbol,
@@ -1582,13 +2211,10 @@ public function isOfflinePaymentAllowed(): bool
         if ($amount === null || $amount === '' || !is_numeric($amount)) {
             $amount = $default;
         }
-        
+
         return $this->formatAmount($amount);
     }
 
-    /**
-     * Get currency info
-     */
     public function getCurrencyInfo(): array
     {
         return [
@@ -1601,28 +2227,19 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== PAYMENT METHODS ==========
 
-    /**
-     * Check if payment configuration is complete
-     */
     public function isPaymentConfigurationComplete(): bool
     {
         return $this->hasEnabledPaymentMethods();
     }
 
-    /**
-     * Check if any payment methods are enabled
-     */
     public function hasEnabledPaymentMethods(): bool
     {
-        return $this->enable_expresspay || 
-               $this->enable_hubtel || 
-               $this->enable_paystack || 
+        return $this->enable_expresspay ||
+               $this->enable_hubtel ||
+               $this->enable_paystack ||
                $this->enable_flutterwave;
     }
 
-    /**
-     * Get count of enabled payment providers
-     */
     public function getEnabledPaymentProvidersCount(): int
     {
         $count = 0;
@@ -1630,17 +2247,14 @@ public function isOfflinePaymentAllowed(): bool
         if ($this->enable_hubtel) $count++;
         if ($this->enable_paystack) $count++;
         if ($this->enable_flutterwave) $count++;
-        
+
         return $count;
     }
 
-    /**
-     * Get available payment methods
-     */
     public function getAvailablePaymentMethods(): array
     {
         $methods = [];
-        
+
         if ($this->enable_expresspay) {
             $methods['expresspay'] = 'ExpressPay';
         }
@@ -1653,13 +2267,10 @@ public function isOfflinePaymentAllowed(): bool
         if ($this->enable_flutterwave) {
             $methods['flutterwave'] = 'Flutterwave';
         }
-        
+
         return $methods;
     }
 
-    /**
-     * Check if specific payment method is enabled
-     */
     public function isPaymentMethodEnabled(string $method): bool
     {
         return match($method) {
@@ -1671,9 +2282,6 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Get list of enabled gateway names
-     */
     public function getEnabledGatewayNames(): array
     {
         $gateways = [];
@@ -1681,17 +2289,14 @@ public function isOfflinePaymentAllowed(): bool
         if ($this->enable_hubtel) $gateways[] = 'Hubtel';
         if ($this->enable_paystack) $gateways[] = 'Paystack';
         if ($this->enable_flutterwave) $gateways[] = 'Flutterwave';
-        
+
         return $gateways;
     }
 
-    /**
-     * Get payment methods for frontend display
-     */
     public function getPaymentMethodsForFrontend(): array
     {
         $methods = [];
-        
+
         if ($this->enable_expresspay) {
             $methods['expresspay'] = [
                 'name' => 'ExpressPay',
@@ -1724,15 +2329,12 @@ public function isOfflinePaymentAllowed(): bool
                 'color' => '#F97316'
             ];
         }
-        
+
         return $methods;
     }
 
     // ========== DUES CALCULATION METHODS ==========
 
-    /**
-     * Calculate dues for a property
-     */
     public function calculateDues(?Property $property = null): float
     {
         return match($this->calculation_method) {
@@ -1742,17 +2344,11 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Calculate monthly dues for a property
-     */
     public function calculateMonthlyDuesForProperty(Property $property): float
     {
         return $this->calculateDues($property);
     }
 
-    /**
-     * Get the calculation method description
-     */
     public function getCalculationMethodDescription(): string
     {
         return match($this->calculation_method) {
@@ -1762,9 +2358,6 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Get dues amount without property dependency
-     */
     public function getDuesAmount(): float
     {
         return match($this->calculation_method) {
@@ -1774,61 +2367,40 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Get formatted monthly dues amount
-     */
     public function getFormattedMonthlyDues(): string
     {
         return $this->formatAmount($this->getDuesAmount());
     }
 
-    /**
-     * Get formatted dues amount
-     */
     public function getFormattedDuesAmount(): string
     {
         if ($this->calculation_method === 'per_property') {
             return $this->formatAmount($this->per_property_amount) . ' per property';
         }
-        
+
         return $this->formatAmount($this->monthly_dues_amount);
     }
 
-    /**
-     * Get the monthly dues amount
-     */
     public function getMonthlyDuesAmount(): float
     {
         return (float) $this->monthly_dues_amount;
     }
 
-    /**
-     * Get the calculation method
-     */
     public function getCalculationMethod(): string
     {
         return $this->calculation_method;
     }
 
-    /**
-     * Get the per property amount
-     */
     public function getPerPropertyAmount(): float
     {
         return (float) $this->per_property_amount;
     }
 
-    /**
-     * Check if calculation is per property
-     */
     public function isPerPropertyCalculation(): bool
     {
         return $this->calculation_method === 'per_property';
     }
 
-    /**
-     * Check if calculation is fixed amount
-     */
     public function isFixedCalculation(): bool
     {
         return $this->calculation_method === 'fixed';
@@ -1836,25 +2408,16 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== PAYMENT REMINDER METHODS ==========
 
-    /**
-     * Check if payment reminders should be sent
-     */
     public function shouldSendPaymentReminders(): bool
     {
         return $this->send_payment_reminders === true;
     }
 
-    /**
-     * Get the number of days before due date to send reminders
-     */
     public function getReminderDaysBefore(): int
     {
         return $this->reminder_days_before ?? 3;
     }
 
-    /**
-     * Get payment reminder configuration
-     */
     public function getPaymentReminderConfig(): array
     {
         return [
@@ -1864,9 +2427,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Generate reminder schedule based on configuration
-     */
     protected function generateReminderSchedule(): array
     {
         if (!$this->shouldSendPaymentReminders()) {
@@ -1875,30 +2435,27 @@ public function isOfflinePaymentAllowed(): bool
 
         $schedule = [];
         $daysBefore = $this->getReminderDaysBefore();
-        
+
         $schedule[] = [
             'days_before' => $daysBefore,
             'description' => "First reminder: {$daysBefore} days before due date"
         ];
-        
+
         if ($daysBefore > 1) {
             $schedule[] = [
                 'days_before' => 1,
                 'description' => "Final reminder: 1 day before due date"
             ];
         }
-        
+
         $schedule[] = [
             'days_before' => 0,
             'description' => "Due date reminder: On the due date"
         ];
-        
+
         return $schedule;
     }
 
-    /**
-     * Calculate next reminder date based on due date
-     */
     public function calculateNextReminderDate(Carbon $dueDate): ?Carbon
     {
         if (!$this->shouldSendPaymentReminders()) {
@@ -1907,23 +2464,20 @@ public function isOfflinePaymentAllowed(): bool
 
         $today = Carbon::today();
         $daysUntilDue = $today->diffInDays($dueDate, false);
-        
+
         if ($daysUntilDue < 0) {
             return null;
         }
 
         $reminderDays = $this->getReminderDaysBefore();
-        
+
         if ($daysUntilDue <= $reminderDays) {
             return $today;
         }
-        
+
         return $dueDate->copy()->subDays($reminderDays);
     }
 
-    /**
-     * Get all scheduled reminder dates for a billing period
-     */
     public function getScheduledReminderDates(Carbon $dueDate): array
     {
         if (!$this->shouldSendPaymentReminders()) {
@@ -1932,7 +2486,7 @@ public function isOfflinePaymentAllowed(): bool
 
         $reminderDates = [];
         $daysBefore = $this->getReminderDaysBefore();
-        
+
         if ($daysBefore > 0) {
             $reminderDates[] = [
                 'type' => 'first_reminder',
@@ -1940,7 +2494,7 @@ public function isOfflinePaymentAllowed(): bool
                 'days_before' => $daysBefore
             ];
         }
-        
+
         if ($daysBefore > 1) {
             $reminderDates[] = [
                 'type' => 'final_reminder',
@@ -1948,37 +2502,28 @@ public function isOfflinePaymentAllowed(): bool
                 'days_before' => 1
             ];
         }
-        
+
         $reminderDates[] = [
             'type' => 'due_date_reminder',
             'date' => $dueDate->format('Y-m-d'),
             'days_before' => 0
         ];
-        
+
         return $reminderDates;
     }
 
     // ========== BULK PAYMENT METHODS ==========
 
-    /**
-     * Check if bulk payments are enabled
-     */
     public function isBulkPaymentEnabled(): bool
     {
         return (bool) $this->enable_bulk_payments;
     }
 
-    /**
-     * Get maximum bulk payment months allowed
-     */
     public function getMaxBulkMonths(): int
     {
         return (int) $this->max_bulk_months;
     }
 
-    /**
-     * Validate if requested bulk months are within limits
-     */
     public function validateBulkMonths(int $months): bool
     {
         if (!$this->isBulkPaymentEnabled()) {
@@ -1988,9 +2533,6 @@ public function isOfflinePaymentAllowed(): bool
         return $months >= 2 && $months <= $this->getMaxBulkMonths();
     }
 
-    /**
-     * Get bulk payment configuration
-     */
     public function getBulkPaymentConfig(): array
     {
         return [
@@ -2001,23 +2543,17 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get bulk payment discount information
-     */
     public function getBulkDiscountInfo(): array
     {
         return [
             'enabled' => isset($this->bulk_payment_discount) && $this->bulk_payment_discount > 0,
             'percentage' => $this->bulk_payment_discount ?? 0,
-            'description' => $this->bulk_payment_discount > 0 
-                ? "Save {$this->bulk_payment_discount}% on bulk payments!" 
+            'description' => $this->bulk_payment_discount > 0
+                ? "Save {$this->bulk_payment_discount}% on bulk payments!"
                 : "No discount applied for bulk payments"
         ];
     }
 
-    /**
-     * Calculate bulk payment amount with discount
-     */
     public function calculateBulkPaymentAmount(Property $property, int $months): float
     {
         if (!$this->validateBulkMonths($months)) {
@@ -2028,18 +2564,15 @@ public function isOfflinePaymentAllowed(): bool
 
         $monthlyDues = $this->calculateDues($property);
         $total = $monthlyDues * $months;
-        
+
         if (isset($this->bulk_payment_discount) && $this->bulk_payment_discount > 0) {
             $discount = $total * ($this->bulk_payment_discount / 100);
             $total -= $discount;
         }
-        
+
         return round($total, 2);
     }
 
-    /**
-     * Calculate bulk dues for multiple months
-     */
     public function calculateBulkDues(Property $property, int $months): float
     {
         if (!$this->validateBulkMonths($months)) {
@@ -2052,9 +2585,6 @@ public function isOfflinePaymentAllowed(): bool
         return $monthlyDues * $months;
     }
 
-    /**
-     * Get available bulk payment options
-     */
     public function getBulkPaymentOptions(): array
     {
         if (!$this->enable_bulk_payments) {
@@ -2063,15 +2593,15 @@ public function isOfflinePaymentAllowed(): bool
 
         $options = [];
         $monthlyAmount = $this->monthly_dues_amount;
-        
+
         for ($i = 2; $i <= $this->max_bulk_months; $i++) {
             $total = $monthlyAmount * $i;
-            
+
             if (isset($this->bulk_payment_discount) && $this->bulk_payment_discount > 0) {
                 $discount = $total * ($this->bulk_payment_discount / 100);
                 $total -= $discount;
             }
-            
+
             $options[$i] = [
                 'months' => $i,
                 'original_amount' => $monthlyAmount * $i,
@@ -2079,22 +2609,19 @@ public function isOfflinePaymentAllowed(): bool
                 'savings' => isset($this->bulk_payment_discount) ? ($monthlyAmount * $i) - $total : 0,
                 'discount_percentage' => $this->bulk_payment_discount ?? 0,
                 'formatted_amount' => $this->formatAmount($total),
-                'formatted_savings' => isset($this->bulk_payment_discount) 
-                    ? $this->formatAmount(($monthlyAmount * $i) - $total) 
+                'formatted_savings' => isset($this->bulk_payment_discount)
+                    ? $this->formatAmount(($monthlyAmount * $i) - $total)
                     : 'GH₵0.00'
             ];
         }
-        
+
         return $options;
     }
 
-    /**
-     * Generate due dates for bulk payment
-     */
     public function generateBulkDueDates(Carbon $startDate, int $months): array
     {
         $dueDates = [];
-        
+
         for ($i = 0; $i < $months; $i++) {
             $dueDate = $startDate->copy()->addMonths($i);
             $dueDates[] = [
@@ -2103,13 +2630,10 @@ public function isOfflinePaymentAllowed(): bool
                 'period' => $dueDate->format('Y-m')
             ];
         }
-        
+
         return $dueDates;
     }
 
-    /**
-     * Get bulk payment settings
-     */
     public function getBulkPaymentSettings(): array
     {
         return [
@@ -2119,9 +2643,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Check if system can process bulk payments
-     */
     public function canProcessBulkPayments(): bool
     {
         return $this->isBulkPaymentEnabled() && $this->getMaxBulkMonths() > 0;
@@ -2129,41 +2650,32 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== INVOICE GENERATION METHODS ==========
 
-    /**
-     * Check if auto invoice generation is enabled
-     */
     public function isAutoInvoiceGenerationEnabled(): bool
     {
         return $this->auto_generate_invoices === true;
     }
 
-    /**
-     * Get the next invoice generation date
-     */
     public function getNextInvoiceGenerationDate(): Carbon
     {
         return Carbon::now()->addMonth()->startOfMonth();
     }
 
-    /**
-     * Check if system is ready for auto-invoice generation
-     */
     public function isReadyForAutoInvoiceGeneration(): array
     {
         $issues = [];
-        
+
         if (!$this->isAutoInvoiceGenerationEnabled()) {
             $issues[] = 'Auto invoice generation is disabled';
         }
-        
+
         if ($this->getDuesAmount() <= 0) {
             $issues[] = 'Monthly dues amount is not set or is zero';
         }
-        
+
         if (!$this->hasEnabledPaymentMethods()) {
             $issues[] = 'No payment methods are enabled';
         }
-        
+
         return [
             'ready' => empty($issues),
             'issues' => $issues,
@@ -2177,9 +2689,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get invoice generation settings
-     */
     public function getInvoiceGenerationSettings(): array
     {
         return [
@@ -2195,9 +2704,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get due date for a period (end of month + grace period)
-     */
     public function getDueDateForPeriod(Carbon $period): Carbon
     {
         return $period->copy()->endOfMonth()->addDays($this->grace_period_days);
@@ -2205,54 +2711,45 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== PENALTY CALCULATION ==========
 
-    /**
-     * Calculate penalty for overdue payment
-     */
     public function calculatePenalty($amount, $daysOverdue)
     {
         $daysOverdue = abs($daysOverdue);
-        
+
         if ($this->fixed_penalty_amount > 0) {
             return $this->fixed_penalty_amount;
         }
-        
+
         if ($this->late_payment_percentage > 0) {
             return ($amount * $this->late_payment_percentage / 100);
         }
-        
+
         return 0;
     }
 
     // ========== EMAIL CONFIGURATION METHODS ==========
 
-    /**
-     * Check if system can send emails
-     */
     public function canSendEmails(): array
     {
         $issues = [];
-        
+
         if (empty($this->system_email)) {
             $issues[] = 'System email not set';
         }
-        
+
         if (empty($this->system_name)) {
             $issues[] = 'System name not set';
         }
-        
+
         return [
             'can_send' => empty($issues),
             'issues' => $issues
         ];
     }
 
-    /**
-     * Get email configuration status
-     */
     public function getEmailConfigurationStatus(): array
     {
         $emailCheck = $this->canSendEmails();
-        
+
         return [
             'configured' => $emailCheck['can_send'],
             'issues' => $emailCheck['issues'],
@@ -2262,9 +2759,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get email configuration for system emails
-     */
     public function getEmailConfiguration(): array
     {
         return [
@@ -2280,33 +2774,24 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Check if system email is configured
-     */
     public function isEmailConfigured(): bool
     {
-        return !empty($this->system_email) && 
+        return !empty($this->system_email) &&
                filter_var($this->system_email, FILTER_VALIDATE_EMAIL) &&
                !empty($this->system_name);
     }
 
-    /**
-     * Check if email password is configured in environment
-     */
     public function isEmailPasswordConfigured(): bool
     {
         $mailPassword = config('mail.password');
         return !empty($mailPassword) && $mailPassword !== 'your_email_password';
     }
 
-    /**
-     * Get email configuration status including password check
-     */
     public function getEmailConfigurationStatusFull(): array
     {
         $emailConfigured = $this->isEmailConfigured();
         $passwordConfigured = $this->isEmailPasswordConfigured();
-        
+
         $status = 'not_configured';
         $issues = [];
 
@@ -2334,13 +2819,10 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Validate email configuration for sending
-     */
     public function validateEmailConfiguration(): array
     {
         $configStatus = $this->getEmailConfigurationStatusFull();
-        
+
         return [
             'is_valid' => $configStatus['can_send_emails'],
             'errors' => $configStatus['issues'],
@@ -2349,13 +2831,10 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get email sender information for invitations
-     */
     public function getEmailSenderInfo(): array
     {
         $validation = $this->validateEmailConfiguration();
-        
+
         if (!$validation['is_valid']) {
             return [
                 'from_email' => config('mail.from.address'),
@@ -2383,13 +2862,10 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get email template variables for agent invitations
-     */
     public function getEmailTemplateVariables(): array
     {
         $senderInfo = $this->getEmailSenderInfo();
-        
+
         return [
             'systemName' => $senderInfo['system_name'],
             'systemShortName' => $senderInfo['system_short_name'],
@@ -2404,16 +2880,13 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Check if system can send emails (comprehensive version)
-     */
     public function canSendEmailsFull(): array
     {
         $emailValidation = $this->validateEmailConfiguration();
         $laravelConfig = $this->checkLaravelMailConfiguration();
-        
+
         $canSend = $emailValidation['is_valid'] && $laravelConfig['configured'];
-        
+
         return [
             'can_send' => $canSend,
             'email_validation' => $emailValidation,
@@ -2422,15 +2895,12 @@ public function isOfflinePaymentAllowed(): bool
                 $emailValidation['errors'],
                 $laravelConfig['issues']
             ),
-            'recommendation' => $canSend ? 
-                'System is ready to send emails' : 
+            'recommendation' => $canSend ?
+                'System is ready to send emails' :
                 'Please configure system email and Laravel mail settings'
         ];
     }
 
-    /**
-     * Check Laravel mail configuration
-     */
     public function checkLaravelMailConfiguration(): array
     {
         $issues = [];
@@ -2470,9 +2940,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get complete email status for admin dashboard
-     */
     public function getEmailStatus(): array
     {
         $canSend = $this->canSendEmailsFull();
@@ -2497,9 +2964,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get email configuration recommendations
-     */
     protected function getEmailConfigurationRecommendations(): array
     {
         $recommendations = [];
@@ -2524,9 +2988,6 @@ public function isOfflinePaymentAllowed(): bool
         return $recommendations;
     }
 
-    /**
-     * Get email configuration for agent invitations
-     */
     public function getAgentInvitationEmailConfig(): array
     {
         $emailConfig = $this->getEmailConfiguration();
@@ -2547,9 +3008,6 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== WHATSAPP CONFIGURATION METHODS ==========
 
-    /**
-     * Check if WhatsApp is configured
-     */
     public function isWhatsAppConfigured(): bool
     {
         if (empty($this->whatsapp_provider) || $this->whatsapp_provider === 'none') {
@@ -2564,9 +3022,6 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    /**
-     * Get WhatsApp configuration status
-     */
     public function getWhatsAppConfigurationStatus(): array
     {
         $configured = $this->isWhatsAppConfigured();
@@ -2601,9 +3056,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get WhatsApp configuration for services
-     */
     public function getWhatsAppConfiguration(): array
     {
         return [
@@ -2619,9 +3071,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get WhatsApp provider display name
-     */
     public function getWhatsAppProviderDisplayName(): string
     {
         return match($this->whatsapp_provider) {
@@ -2633,11 +3082,215 @@ public function isOfflinePaymentAllowed(): bool
         };
     }
 
-    // ========== CONFIGURATION STATUS METHODS ==========
+    // ========== 🆕 📢 AD SPACE METHODS ==========
+    // These power the admin "AD Space" tab and the homepage ad loader.
+    //
+    // ⚠️ MIGRATION NOTE: the `ad_config` column must exist on
+    //    `system_settings`. If it doesn't, all these methods still work
+    //    (they return AD_DEFAULTS), but writes will fail. Run:
+    //      php artisan migrate
+    //    with the migration in database/migrations that adds:
+    //      $table->json('ad_config')->nullable()->after('homepage_config');
 
     /**
-     * Get system configuration status
+     * Resolve the ad config (defaults merged in).
+     * Never returns a partial array — the caller can trust every key.
      */
+    public function getAdConfig(): array
+    {
+        $stored = $this->ad_config ?? [];
+
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+
+        return $this->arrayReplaceRecursiveDeep(self::AD_DEFAULTS, $stored);
+    }
+
+    /**
+     * Persist a new ad config.
+     * Recursively merges with AD_DEFAULTS so unknown keys don't survive
+     * a config reset, and missing keys don't break readers.
+     */
+    public function setAdConfig(array $config): bool
+    {
+        $this->ad_config = $this->arrayReplaceRecursiveDeep(self::AD_DEFAULTS, $config);
+        return $this->save();
+    }
+
+    /**
+     * Master switch — is the AD space subsystem on?
+     */
+    public function isAdSpaceEnabled(): bool
+    {
+        $config = $this->getAdConfig();
+        return !empty($config['enabled']);
+    }
+
+    /**
+     * Which channels are enabled. Returns only the enabled ones,
+     * ordered for display (homepage first, then socials).
+     */
+    public function getAdChannels(): array
+    {
+        $config = $this->getAdConfig();
+        $channels = $config['channels'] ?? [];
+
+        $order = ['homepage', 'facebook', 'whatsapp', 'twitter', 'linkedin', 'instagram'];
+        $enabled = [];
+
+        foreach ($order as $channel) {
+            if (!empty($channels[$channel])) {
+                $enabled[] = $channel;
+            }
+        }
+
+        return $enabled;
+    }
+
+    /**
+     * All channels with their on/off state (for the admin form).
+     */
+    public function getAllAdChannels(): array
+    {
+        $config = $this->getAdConfig();
+        $channels = $config['channels'] ?? self::AD_DEFAULTS['channels'];
+
+        return [
+            'homepage'  => (bool) ($channels['homepage']  ?? false),
+            'facebook'  => (bool) ($channels['facebook']  ?? false),
+            'whatsapp'  => (bool) ($channels['whatsapp']  ?? false),
+            'twitter'   => (bool) ($channels['twitter']   ?? false),
+            'linkedin'  => (bool) ($channels['linkedin']  ?? false),
+            'instagram' => (bool) ($channels['instagram'] ?? false),
+        ];
+    }
+
+    /**
+     * Is a specific channel enabled for ads?
+     */
+    public function isChannelEnabledForAds(string $channel): bool
+    {
+        $config = $this->getAdConfig();
+        return !empty($config['channels'][$channel]);
+    }
+
+    /**
+     * The limits block — max active per landlord + max on homepage.
+     */
+    public function getAdLimits(): array
+    {
+        $config = $this->getAdConfig();
+
+        return [
+            'max_active_per_landlord' => (int) ($config['max_active_per_landlord'] ?? 3),
+            'max_on_homepage'         => (int) ($config['max_on_homepage']         ?? 6),
+        ];
+    }
+
+    /**
+     * Does a new campaign require admin approval before going live?
+     */
+    public function shouldRequireAdApproval(): bool
+    {
+        $config = $this->getAdConfig();
+        return !empty($config['require_admin_approval']);
+    }
+
+    /**
+     * Should a landlord's "mark as rented" request auto-approve?
+     * (Default: false — admin review recommended.)
+     */
+    public function shouldAutoApproveMarkRented(): bool
+    {
+        $config = $this->getAdConfig();
+        return !empty($config['auto_approve_mark_rented']);
+    }
+
+    /**
+     * Currency-aware price formatter for ad plans / invoices.
+     *
+     * Uses the system's currency config so a plan priced in GHS renders
+     * as "₵50.00" and a plan priced in USD renders as "$50.00".
+     */
+    public function formatAdPrice(float $amount, ?string $currency = null): string
+    {
+        $currency = $currency ?? $this->currency_code ?? 'GHS';
+
+        // If the plan's currency differs from the system default,
+        // still render a sensible symbol.
+        if ($currency !== ($this->currency_code ?? 'GHS')) {
+            $symbol = match (strtoupper($currency)) {
+                'GHS' => '₵',
+                'USD' => '$',
+                'EUR' => '€',
+                'GBP' => '£',
+                'NGN' => '₦',
+                default => $currency . ' ',
+            };
+
+            return $symbol . number_format($amount, 2);
+        }
+
+        return $this->formatAmount($amount);
+    }
+
+    /**
+     * Full ad space status snapshot — used by the admin card + Blade.
+     */
+    public function getAdSpaceStatus(): array
+    {
+        $config = $this->getAdConfig();
+        $limits = $this->getAdLimits();
+
+        return [
+            'enabled'                  => $this->isAdSpaceEnabled(),
+            'max_active_per_landlord'  => $limits['max_active_per_landlord'],
+            'max_on_homepage'          => $limits['max_on_homepage'],
+            'require_admin_approval'   => $this->shouldRequireAdApproval(),
+            'auto_approve_mark_rented' => $this->shouldAutoApproveMarkRented(),
+
+            // Channel lists
+            'enabled_channels'         => $this->getAdChannels(),
+            'all_channels'             => $this->getAllAdChannels(),
+            'enabled_channel_count'    => count($this->getAdChannels()),
+
+            // Display options
+            'show_sponsored_badge'     => !empty($config['show_sponsored_badge']),
+            'show_view_count'          => !empty($config['show_view_count']),
+            'allow_landlord_proof_upload' => !empty($config['allow_landlord_proof_upload']),
+
+            // Ready state
+            'is_configured'            => $this->isAdSpaceEnabled()
+                                          && $this->isChannelEnabledForAds('homepage'),
+            'has_custom_config'        => !empty($this->ad_config)
+                                          && is_array($this->ad_config)
+                                          && count($this->ad_config) > 0,
+        ];
+    }
+
+    /**
+     * Return the pricing-plan presets the admin can one-click create.
+     * Values are already formatted for direct insertion via
+     * AdPricingPlan::create(...).
+     */
+    public static function getAdPlanPresets(): array
+    {
+        return self::AD_PLAN_PRESETS;
+    }
+
+    /**
+     * Convenience: is the ad space ready to accept new campaigns?
+     * (enabled + at least homepage channel on)
+     */
+    public function canAcceptNewAdCampaigns(): bool
+    {
+        return $this->isAdSpaceEnabled()
+            && $this->isChannelEnabledForAds('homepage');
+    }
+
+    // ========== CONFIGURATION STATUS METHODS ==========
+
     public function getSystemConfigurationStatus(): array
     {
         return [
@@ -2652,12 +3305,13 @@ public function isOfflinePaymentAllowed(): bool
             'registration' => $this->isRegistrationAllowed(),
             'tenant_invoicing' => $this->isTenantInvoicingEnabled(),
             'sms_sender_id' => $this->hasSmsSenderId(),
+            'homepage' => $this->hasCustomHomepage(),
+            'login_page' => $this->hasCustomLoginPage(),
+            'login_theme' => $this->hasCustomLoginTheme(),
+            'ad_space' => $this->getAdSpaceStatus()['is_configured'],
         ];
     }
 
-    /**
-     * Get payment configuration status
-     */
     public function getPaymentConfigurationStatus(): array
     {
         return [
@@ -2668,9 +3322,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get complete system configuration status
-     */
     public function getSystemConfigurationStatusFull(): array
     {
         $emailStatus = $this->getEmailStatus();
@@ -2692,11 +3343,18 @@ public function isOfflinePaymentAllowed(): bool
                 'sms_sender_id' => $this->getSmsSenderId(),
                 'can_send_emails' => $emailStatus['can_send_emails'],
                 'email_issues' => $emailStatus['issues'],
+                'homepage_configured' => $this->hasCustomHomepage(),
+                'login_page_configured' => $this->hasCustomLoginPage(),
+                'login_theme_configured' => $this->hasCustomLoginTheme(),
+                'ad_space_configured' => $this->getAdSpaceStatus()['is_configured'],
             ],
             'payment_configuration' => $paymentStatus,
             'whatsapp_configuration' => $whatsappStatus,
             'registration_control' => $registrationStatus,
             'tenant_invoicing' => $tenantInvoiceStatus,
+            'homepage_config' => $this->getHomepageStatus(),
+            'login_page_config' => $this->getLoginPageStatus(),
+            'ad_space_config' => $this->getAdSpaceStatus(),
             'dues_configuration' => [
                 'method' => $this->calculation_method,
                 'amount_configured' => $this->getDuesAmount() > 0,
@@ -2715,9 +3373,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get overall system status
-     */
     protected function getOverallSystemStatus(): string
     {
         $emailStatus = $this->getEmailStatus();
@@ -2740,14 +3395,11 @@ public function isOfflinePaymentAllowed(): bool
 
     // ========== COMPOSITE METHODS ==========
 
-    /**
-     * Get system information
-     */
     public function getSystemInfo(): array
     {
         $emailStatus = $this->getEmailStatus();
         $whatsappStatus = $this->getWhatsAppConfigurationStatus();
-        
+
         return [
             'name' => $this->system_name,
             'short_name' => $this->getSystemShortName(),
@@ -2765,13 +3417,13 @@ public function isOfflinePaymentAllowed(): bool
             'whatsapp_status' => $whatsappStatus,
             'can_send_emails' => $emailStatus['can_send_emails'],
             'can_send_whatsapp' => $whatsappStatus['can_send_messages'],
-            'identifier' => $this->getSystemIdentifier()
+            'identifier' => $this->getSystemIdentifier(),
+            'homepage_status' => $this->getHomepageStatus(),
+            'login_page_status' => $this->getLoginPageStatus(),
+            'ad_space_status' => $this->getAdSpaceStatus(),
         ];
     }
 
-    /**
-     * Get payment configuration for frontend
-     */
     public function getPaymentConfiguration(): array
     {
         return [
@@ -2784,9 +3436,6 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
-    /**
-     * Get complete system overview for dashboard
-     */
     public function getSystemOverview(): array
     {
         return [
@@ -2796,6 +3445,9 @@ public function isOfflinePaymentAllowed(): bool
             'email' => $this->getEmailConfigurationStatusFull(),
             'whatsapp' => $this->getWhatsAppConfigurationStatus(),
             'tenant_invoicing' => $this->getTenantInvoiceConfig(),
+            'homepage' => $this->getHomepageStatus(),
+            'login_page' => $this->getLoginPageStatus(),
+            'ad_space' => $this->getAdSpaceStatus(),
             'configuration_status' => $this->getSystemConfigurationStatusFull(),
             'sms_sender_id' => $this->getSmsSenderIdStatus(),
             'last_updated' => [
@@ -2805,21 +3457,51 @@ public function isOfflinePaymentAllowed(): bool
         ];
     }
 
+    /**
+     * Summary of the current login-page config for admin cards.
+     *
+     * 🆕 Now exposes the theme block, theme status, and resolved
+     *    CSS variables so the Blade view doesn't have to dig
+     *    into nested arrays itself.
+     */
+    public function getLoginPageStatus(): array
+    {
+        $config = $this->getLoginPageConfig();
+
+        return [
+            'has_custom'        => $this->hasCustomLoginPage(),
+            'background_url'    => $this->getLoginPageBackgroundUrl(),
+            'has_uploaded_bg'   => !empty($config['background']),
+            'background_url_external' => $config['background_url'] ?? null,
+            'overlay_opacity'   => $config['overlay_opacity'] ?? 0.85,
+            'default_theme'     => $config['default_theme'] ?? 'dark',
+            'welcome_title'     => $config['welcome_title'] ?? null,
+            'welcome_subtitle'  => $config['welcome_subtitle'] ?? null,
+            'show_welcome_panel'=> (bool) ($config['show_welcome_panel'] ?? true),
+            'show_social_icons' => (bool) ($config['show_social_icons'] ?? true),
+            'show_cookie_banner'=> (bool) ($config['show_cookie_banner'] ?? true),
+            'features_count'    => count($config['welcome_features'] ?? []),
+            'socials_count'     => count(array_filter(
+                $config['footer_socials'] ?? [],
+                fn($s) => !empty($s['url'])
+            )),
+
+            // 🆕 Theme summary + CSS variables ready for the Blade
+            'theme'             => $config['theme'] ?? self::HOMEPAGE_DEFAULTS['login']['theme'],
+            'theme_status'      => $this->getLoginPageThemeStatus(),
+            'css_variables'     => $this->getLoginPageCssVariables(),
+        ];
+    }
+
     // ========== UTILITY METHODS ==========
 
-    /**
-     * Update settings with audit trail
-     */
     public function updateSettings(array $data, User $updater): bool
     {
         $data['updated_by'] = $updater->id;
-        
+
         return $this->update($data);
     }
 
-    /**
-     * Boot method for clearing cache
-     */
     protected static function boot()
     {
         parent::boot();
@@ -2837,19 +3519,16 @@ public function isOfflinePaymentAllowed(): bool
         });
     }
 
-    /**
-     * Calculate due date for a given period based on settings
-     */
     public function calculateDueDateForPeriod(Carbon $periodDate): Carbon
     {
         $dueDay = 5;
-        
+
         $dueDate = $periodDate->copy()->startOfMonth()->addDays($dueDay - 1);
-        
+
         if ($this->grace_period_days > 0) {
             $dueDate->addDays($this->grace_period_days);
         }
-        
+
         return $dueDate;
     }
 }

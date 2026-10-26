@@ -4,6 +4,7 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\DeveloperSetting;
 use App\Models\User;
 use App\Models\UserActivity;
 use App\Services\Authentication\PhoneNormalizationService;
@@ -17,7 +18,7 @@ use App\Services\Authentication\LoginActivityService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -34,6 +35,9 @@ class AuthController extends Controller
     protected int $decayMinutes = 1;
     protected int $tokenExpiryMonths = 6;
     protected int $maxDevicesPerUser = 5;
+
+    /** Short-lived token TTL for the mobile 2FA handoff. */
+    protected int $twoFactorTokenTtlSeconds = 300;
 
     protected const LOGIN_ALLOWED_TYPES = [
         User::TYPE_SUPER_ADMIN,
@@ -106,7 +110,7 @@ class AuthController extends Controller
                 );
             }
 
-            // ---- Find user ----
+            // ---- Find user (archival-aware) ----
             $credentials = $this->getCredentials($request);
             $user = $this->findUserByCredentials($credentials);
 
@@ -121,18 +125,13 @@ class AuthController extends Controller
                 );
             }
 
-            // ---- Archived ----
-            if ($user->isArchived()) {
+            // ---- Archived (trashed OR status=archived) ----
+            if (method_exists($user, 'isArchived') && $user->isArchived()) {
                 return $this->archivedAccountService->handleMobileArchivedLogin($user);
             }
 
-            // ---- Soft deleted ----
-            if ($user->trashed()) {
-                return $this->errorResponse(
-                    'account_deactivated',
-                    'This account has been deactivated. Please contact administrator.',
-                    403
-                );
+            if (method_exists($user, 'trashed') && $user->trashed()) {
+                return $this->archivedAccountService->handleMobileArchivedLogin($user);
             }
 
             // ---- Permission ----
@@ -161,38 +160,41 @@ class AuthController extends Controller
 
             // ---- 2FA ----
             if ($this->twoFactorAuthService->isEnabled($user)) {
-                if (!$request->filled('two_factor_code')) {
+                if ($request->filled('two_factor_code')) {
+                    if ($this->hasTooMany2faAttempts($user)) {
+                        $seconds = RateLimiter::availableIn($this->twoFactorThrottleKey($user));
+                        return $this->errorResponse(
+                            'too_many_2fa_attempts',
+                            "Too many 2FA attempts. Try again in {$seconds} seconds.",
+                            429,
+                            ['retry_after' => $seconds]
+                        );
+                    }
+
+                    if (!$this->twoFactorAuthService->verify($user, $request->two_factor_code)) {
+                        $this->recordFailed2fa($user);
+                        $this->activityService->recordTwoFactorFailure($user, $request);
+                        return $this->errorResponse(
+                            'invalid_2fa_code',
+                            'Invalid two-factor authentication code.',
+                            401
+                        );
+                    }
+
+                    $this->clear2faAttempts($user);
+                    $this->activityService->recordTwoFactorSuccess($user, $request);
+                } else {
+                    $twoFactorToken = $this->issueTwoFactorToken($user);
+
                     return response()->json([
-                        'success'      => false,
-                        'error'        => 'two_factor_required',
-                        'message'      => 'Two-factor authentication code is required.',
-                        'requires_2fa' => true,
-                        'user_id'      => $user->id,
+                        'success'          => false,
+                        'error'            => 'two_factor_required',
+                        'message'          => 'Two-factor authentication code is required.',
+                        'requires_2fa'     => true,
+                        'two_factor_token' => $twoFactorToken,
+                        'expires_in'       => $this->twoFactorTokenTtlSeconds,
                     ], 401);
                 }
-
-                if ($this->hasTooMany2faAttempts($user)) {
-                    $seconds = RateLimiter::availableIn($this->twoFactorThrottleKey($user));
-                    return $this->errorResponse(
-                        'too_many_2fa_attempts',
-                        "Too many 2FA attempts. Try again in {$seconds} seconds.",
-                        429,
-                        ['retry_after' => $seconds]
-                    );
-                }
-
-                if (!$this->twoFactorAuthService->verify($user, $request->two_factor_code)) {
-                    $this->recordFailed2fa($user);
-                    $this->activityService->recordTwoFactorFailure($user, $request);
-                    return $this->errorResponse(
-                        'invalid_2fa_code',
-                        'Invalid two-factor authentication code.',
-                        401
-                    );
-                }
-
-                $this->clear2faAttempts($user);
-                $this->activityService->recordTwoFactorSuccess($user, $request);
             }
 
             // ---- Success ----
@@ -214,13 +216,19 @@ class AuthController extends Controller
                 $this->storeDeviceToken($user, $deviceName, $request->input('device_token'));
             }
 
+            // ✅ FIX: prune old tokens BEFORE creating the new one.
+            //    Previously the cleanup ran *after* createToken() and
+            //    sorted by `last_used_at DESC`, which put freshly-created
+            //    tokens (last_used_at = NULL) at the bottom of the list
+            //    and deleted them. The client got a token string whose
+            //    database row was gone, so every subsequent request 401'd.
+            $this->cleanupTokensForUser($user, $deviceName);
+
             $token = $user->createToken(
                 $deviceName,
                 ['*'],
                 now()->addMonths($this->tokenExpiryMonths)
             )->plainTextToken;
-
-            $this->cleanupTokensForUser($user, $deviceName);
 
             return response()->json([
                 'success' => true,
@@ -233,15 +241,113 @@ class AuthController extends Controller
                     'requires_verification' => method_exists($user, 'hasVerifiedEmail')
                                                 && !$user->hasVerifiedEmail(),
                     'dashboard_url'         => $this->dashboardUrlFor($user),
+                    'billing'               => $this->billingPayloadFor($user),
                 ],
             ]);
         } catch (ValidationException $e) {
             return $this->validationError($e);
         } catch (\Throwable $e) {
             Log::error('❌ API Login error: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString(),
+                'exception_class' => get_class($e),
+                'file'            => $e->getFile(),
+                'line'            => $e->getLine(),
+                'trace'           => $e->getTraceAsString(),
+                'request'         => [
+                    'login'       => $request->input('login'),
+                    'device_name' => $request->input('device_name'),
+                    'ip'          => $request->ip(),
+                    'ua'          => (string) $request->userAgent(),
+                ],
             ]);
             return $this->errorResponse('login_failed', 'Login failed. Please try again.', 500);
+        }
+    }
+
+    // ==================== ✅ TOKEN VALIDATION ====================
+
+    public function checkAuth(Request $request): JsonResponse
+    {
+        return response()->json([
+            'success' => true,
+            'message' => 'Token is valid.',
+            'data'    => [
+                'user'    => $this->userPayload($request->user()),
+                'billing' => $this->billingPayloadFor($request->user()),
+            ],
+        ]);
+    }
+
+    // ==================== ✅ LOGIN METADATA ====================
+
+    public function loginMetadata(Request $request): JsonResponse
+    {
+        try {
+            $settings = \Illuminate\Support\Facades\Cache::remember(
+                'system_settings_login_metadata',
+                now()->addMinutes(30),
+                fn () => \App\Models\SystemSetting::getSettings()
+            );
+
+            $system = [
+                'name'          => $settings->system_name
+                                    ?? config('app.name', 'Hilltop Estate Management'),
+                'support_email' => $settings->contact_email
+                                    ?? config('mail.from.address', 'support@hilltop.com'),
+                'support_phone' => $settings->contact_phone
+                                    ?? config('app.support_phone', '+233 123 456 789'),
+            ];
+
+            $notice = null;
+
+            if ($request->hasSession()) {
+                $archivedTenantMsg   = $request->session()->get('archived_tenant_account');
+                $archivedLandlordMsg = $request->session()->get('archived_account')
+                                        ?? $request->session()->get('archived_landlord_account');
+
+                if (!empty($archivedTenantMsg)) {
+                    $notice = [
+                        'kind'    => 'archived_tenant',
+                        'title'   => 'Tenant Account Archived',
+                        'message' => $archivedTenantMsg,
+                        'reason'  => 'Your tenant account has been archived because it remained unassigned to any property unit for 30+ days.',
+                        'next'    => 'Please contact the administration to have your account restored or to be assigned to a property unit.',
+                    ];
+                } elseif (!empty($archivedLandlordMsg)) {
+                    $notice = [
+                        'kind'    => 'archived_landlord',
+                        'title'   => 'Landlord Account Archived',
+                        'message' => $archivedLandlordMsg,
+                        'reason'  => 'Your account has been archived because you no longer own any properties.',
+                        'next'    => 'Please contact the administration to have your account restored.',
+                    ];
+                }
+            }
+
+            $existingSession = null;
+
+            return response()->json([
+                'success' => true,
+                'data'    => [
+                    'system'           => $system,
+                    'notice'           => $notice,
+                    'existing_session' => $existingSession,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('loginMetadata failed: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => true,
+                'data'    => [
+                    'system' => [
+                        'name'          => config('app.name', 'Hilltop Estate Management'),
+                        'support_email' => config('mail.from.address', 'support@hilltop.com'),
+                        'support_phone' => config('app.support_phone', ''),
+                    ],
+                    'notice'           => null,
+                    'existing_session' => null,
+                ],
+            ]);
         }
     }
 
@@ -290,8 +396,14 @@ class AuthController extends Controller
                 return $this->unauthenticated();
             }
 
-            $count = $user->tokens()->count();
-            $user->tokens()->delete();
+            $currentTokenId = optional($user->currentAccessToken())->id;
+
+            $query = $user->tokens();
+            if ($currentTokenId) {
+                $query->where('id', '!=', $currentTokenId);
+            }
+            $count = (clone $query)->count();
+            $query->delete();
 
             if (config('session.driver') === 'database' && Schema::hasTable('sessions')) {
                 DB::table('sessions')->where('user_id', $user->id)->delete();
@@ -306,7 +418,7 @@ class AuthController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Logged out from all devices',
+                'message' => 'Logged out from all other devices',
                 'data'    => ['tokens_deleted' => $count],
             ]);
         } catch (\Throwable $e) {
@@ -326,7 +438,9 @@ class AuthController extends Controller
 
             return response()->json([
                 'success' => true,
-                'data'    => $this->userPayload($user),
+                'data'    => array_merge($this->userPayload($user), [
+                    'billing' => $this->billingPayloadFor($user),
+                ]),
             ]);
         } catch (\Throwable $e) {
             return $this->errorResponse('user_fetch_failed', 'Failed to fetch user.', 500);
@@ -345,6 +459,10 @@ class AuthController extends Controller
                 return $this->unauthenticated();
             }
 
+            // ✅ Delete the old token BEFORE creating the new one, so
+            //    the cleanup logic and the create order are always
+            //    consistent — and the fresh token can never be a
+            //    cleanup target.
             $user->currentAccessToken()?->delete();
 
             $token = $user->createToken(
@@ -361,6 +479,7 @@ class AuthController extends Controller
                     'token_type' => 'Bearer',
                     'expires_in' => now()->addMonths($this->tokenExpiryMonths)->timestamp,
                     'user'       => $this->userPayload($user),
+                    'billing'    => $this->billingPayloadFor($user),
                 ],
             ]);
         } catch (ValidationException $e) {
@@ -376,15 +495,20 @@ class AuthController extends Controller
     {
         try {
             $request->validate([
-                'user_id'      => 'required|exists:users,id',
-                'code'         => 'required|string|size:6',
-                'device_name'  => 'nullable|string|max:255',
-                'device_token' => 'nullable|string',
+                'two_factor_token' => 'required|string',
+                'code'             => 'required|string|size:6',
+                'device_name'      => 'nullable|string|max:255',
+                'device_token'     => 'nullable|string',
             ]);
 
-            $user = User::find($request->user_id);
+            $user = $this->resolveTwoFactorToken($request->two_factor_token);
+
             if (!$user) {
-                return $this->errorResponse('user_not_found', 'User not found.', 404);
+                return $this->errorResponse(
+                    'invalid_token',
+                    'Verification session has expired. Please login again.',
+                    401
+                );
             }
 
             if ($this->hasTooMany2faAttempts($user)) {
@@ -416,6 +540,9 @@ class AuthController extends Controller
                 $this->storeDeviceToken($user, $deviceName, $request->input('device_token'));
             }
 
+            // ✅ FIX: cleanup BEFORE createToken (same as login()).
+            $this->cleanupTokensForUser($user, $deviceName);
+
             $token = $user->createToken(
                 $deviceName,
                 ['*'],
@@ -425,7 +552,6 @@ class AuthController extends Controller
             $user->updateLastActivity();
             $this->activityService->recordLogin($user, $request, 'mobile_2fa');
             $this->trackDevice($request, $user);
-            $this->cleanupTokensForUser($user, $deviceName);
 
             return response()->json([
                 'success' => true,
@@ -435,12 +561,16 @@ class AuthController extends Controller
                     'token'      => $token,
                     'token_type' => 'Bearer',
                     'expires_in' => now()->addMonths($this->tokenExpiryMonths)->timestamp,
+                    'billing'    => $this->billingPayloadFor($user),
                 ],
             ]);
         } catch (ValidationException $e) {
             return $this->validationError($e);
         } catch (\Throwable $e) {
-            Log::error('2FA verify failed: ' . $e->getMessage());
+            Log::error('2FA verify failed: ' . $e->getMessage(), [
+                'file'  => $e->getFile(),
+                'line'  => $e->getLine(),
+            ]);
             return $this->errorResponse('2fa_failed', '2FA verification failed.', 500);
         }
     }
@@ -448,14 +578,27 @@ class AuthController extends Controller
     public function resendTwoFactorCode(Request $request): JsonResponse
     {
         try {
-            $request->validate(['user_id' => 'required|exists:users,id']);
+            $request->validate([
+                'two_factor_token' => 'required|string',
+            ]);
 
-            $user = User::find($request->user_id);
+            $cacheKey = 'mobile_2fa_token:' . hash('sha256', $request->two_factor_token);
+            $payload  = Cache::get($cacheKey);
+
+            if (!$payload || empty($payload['user_id'])) {
+                return $this->errorResponse(
+                    'invalid_token',
+                    'Verification session has expired. Please login again.',
+                    401
+                );
+            }
+
+            $user = User::find($payload['user_id']);
             if (!$user) {
                 return $this->errorResponse('user_not_found', 'User not found.', 404);
             }
 
-            $key = 'resend-2fa:' . $user->id;
+            $key = 'mobile-2fa-resend:' . $user->id;
             if (RateLimiter::tooManyAttempts($key, 3)) {
                 $seconds = RateLimiter::availableIn($key);
                 return $this->errorResponse(
@@ -525,9 +668,9 @@ class AuthController extends Controller
             $backupCodes = $this->twoFactorAuthService->generateBackupCodes($user);
 
             return response()->json([
-                'success'      => true,
-                'message'      => 'Two-factor authentication enabled.',
-                'data'         => [
+                'success' => true,
+                'message' => 'Two-factor authentication enabled.',
+                'data'    => [
                     'backup_codes' => $backupCodes,
                 ],
             ]);
@@ -839,7 +982,18 @@ class AuthController extends Controller
 
             $this->storeDeviceToken($user, $request->device_name, $request->push_token);
 
-            if (Schema::hasTable('device_tokens') && Schema::hasColumn('device_tokens', 'platform')) {
+            if (Schema::hasTable('device_tokens')
+                && Schema::hasColumn('device_tokens', 'platform')
+                && Schema::hasColumn('device_tokens', 'updated_at')) {
+                DB::table('device_tokens')
+                    ->where('user_id', $user->id)
+                    ->where('device_name', $request->device_name)
+                    ->update([
+                        'platform'   => $request->platform,
+                        'updated_at' => now(),
+                    ]);
+            } elseif (Schema::hasTable('device_tokens')
+                && Schema::hasColumn('device_tokens', 'platform')) {
                 DB::table('device_tokens')
                     ->where('user_id', $user->id)
                     ->where('device_name', $request->device_name)
@@ -949,6 +1103,7 @@ class AuthController extends Controller
                 'data'    => [
                     'dashboard_url' => $this->dashboardUrlFor($user),
                     'user_type'     => $user->type,
+                    'billing'       => $this->billingPayloadFor($user),
                 ],
             ]);
         } catch (\Throwable $e) {
@@ -1060,6 +1215,13 @@ class AuthController extends Controller
 
             $deviceName = $request->input('device_name', 'flutter_app');
 
+            if ($request->filled('device_token')) {
+                $this->storeDeviceToken($user, $deviceName, $request->input('device_token'));
+            }
+
+            // ✅ FIX: cleanup BEFORE createToken (same as login()).
+            $this->cleanupTokensForUser($user, $deviceName);
+
             $token = $user->createToken(
                 $deviceName,
                 ['*'],
@@ -1070,12 +1232,6 @@ class AuthController extends Controller
             $this->activityService->recordLogin($user, $request, "social_{$provider}");
             $this->trackDevice($request, $user);
 
-            if ($request->filled('device_token')) {
-                $this->storeDeviceToken($user, $deviceName, $request->input('device_token'));
-            }
-
-            $this->cleanupTokensForUser($user, $deviceName);
-
             return response()->json([
                 'success' => true,
                 'message' => "Logged in with {$provider}.",
@@ -1084,6 +1240,7 @@ class AuthController extends Controller
                     'token'      => $token,
                     'token_type' => 'Bearer',
                     'expires_in' => now()->addMonths($this->tokenExpiryMonths)->timestamp,
+                    'billing'    => $this->billingPayloadFor($user),
                 ],
             ]);
         } catch (ValidationException $e) {
@@ -1208,11 +1365,11 @@ class AuthController extends Controller
 
             if (!in_array($actor->getRawOriginal('type'), [
                 User::TYPE_SUPER_ADMIN,
-                User::TYPE_ADMIN,
+                User::TYPE_DEVELOPER,
             ], true)) {
                 return $this->errorResponse(
                     'forbidden',
-                    'Only administrators can impersonate users.',
+                    'Only super-admins and developers can impersonate users.',
                     403
                 );
             }
@@ -1222,7 +1379,7 @@ class AuthController extends Controller
                 return $this->errorResponse('user_not_found', 'User not found.', 404);
             }
 
-            if ($target->id === $actor->id) {
+            if ((int) $target->id === (int) $actor->id) {
                 return $this->errorResponse(
                     'invalid_target',
                     'You cannot impersonate yourself.',
@@ -1230,11 +1387,21 @@ class AuthController extends Controller
                 );
             }
 
-            if ($target->getRawOriginal('type') === User::TYPE_SUPER_ADMIN
-                && $actor->getRawOriginal('type') !== User::TYPE_SUPER_ADMIN) {
+            if ($target->getRawOriginal('type') === User::TYPE_DEVELOPER
+                && $actor->getRawOriginal('type') !== User::TYPE_DEVELOPER) {
                 return $this->errorResponse(
                     'forbidden',
-                    'Only super-admins can impersonate other super-admins.',
+                    'Only developers can impersonate other developers.',
+                    403
+                );
+            }
+
+            if ($target->getRawOriginal('type') === User::TYPE_SUPER_ADMIN
+                && $actor->getRawOriginal('type') !== User::TYPE_DEVELOPER
+                && (int) $target->id !== (int) $actor->id) {
+                return $this->errorResponse(
+                    'forbidden',
+                    'Super admins cannot impersonate other super admins.',
                     403
                 );
             }
@@ -1300,10 +1467,6 @@ class AuthController extends Controller
     public function checkEmailExists(Request $request): JsonResponse
     {
         try {
-            if (!$request->user()) {
-                return $this->unauthenticated();
-            }
-
             $request->validate(['email' => 'required|email']);
 
             $key = 'api-check-email:' . $request->ip();
@@ -1316,12 +1479,9 @@ class AuthController extends Controller
             }
             RateLimiter::hit($key, 60);
 
-            $email = strtolower($request->email);
-            $exists = User::whereRaw('LOWER(email) = ?', [$email])->exists();
-
             return response()->json([
                 'success' => true,
-                'data'    => ['exists' => $exists],
+                'message' => 'If an account exists with that email, you will receive a recovery email.',
             ]);
         } catch (ValidationException $e) {
             return $this->validationError($e);
@@ -1333,10 +1493,6 @@ class AuthController extends Controller
     public function checkPhoneExists(Request $request): JsonResponse
     {
         try {
-            if (!$request->user()) {
-                return $this->unauthenticated();
-            }
-
             $request->validate(['phone' => 'required|string']);
 
             $key = 'api-check-phone:' . $request->ip();
@@ -1349,22 +1505,9 @@ class AuthController extends Controller
             }
             RateLimiter::hit($key, 60);
 
-            try {
-                $phone = $this->phoneService->normalize($request->phone);
-            } catch (\Throwable $e) {
-                return $this->errorResponse(
-                    'invalid_phone',
-                    'The phone number is invalid.',
-                    422
-                );
-            }
-
-            $formats = $this->phoneService->getAllFormats($phone);
-            $exists = User::whereIn('phone', $formats)->exists();
-
             return response()->json([
                 'success' => true,
-                'data'    => ['exists' => $exists],
+                'message' => 'If an account exists with that phone number, you will receive a recovery SMS.',
             ]);
         } catch (ValidationException $e) {
             return $this->validationError($e);
@@ -1592,6 +1735,37 @@ class AuthController extends Controller
         return $map[$user->getRawOriginal('type')] ?? '/dashboard';
     }
 
+    protected function billingPayloadFor(User $user): array
+    {
+        try {
+            $developer = DeveloperSetting::current();
+            if (!$developer) {
+                return ['state' => null, 'restricted' => false, 'pay_url' => null];
+            }
+
+            $restricted = false;
+            $payUrl     = null;
+
+            if ($user->type === User::TYPE_SUPER_ADMIN) {
+                $restricted = $developer->isBillingRestrictingSuperAdmin();
+                $payUrl     = $restricted
+                    ? route('superadmin.billing.dashboard')
+                    : null;
+            } elseif ($user->type === User::TYPE_ADMIN) {
+                $restricted = $developer->isBillingRestrictingAdmins();
+            }
+
+            return [
+                'state'          => $developer->billing_state,
+                'restricted'     => $restricted,
+                'pay_url'        => $payUrl,
+                'days_until_due' => $developer->daysUntilDue(),
+            ];
+        } catch (\Throwable $e) {
+            return ['state' => null, 'restricted' => false, 'pay_url' => null];
+        }
+    }
+
     protected function getCredentials(Request $request): array
     {
         $login = $request->input('login');
@@ -1612,11 +1786,72 @@ class AuthController extends Controller
     protected function findUserByCredentials(array $credentials): ?User
     {
         if (isset($credentials['email'])) {
-            return User::whereRaw('LOWER(email) = ?', [$credentials['email']])->first();
+            $email = $credentials['email'];
+
+            $user = User::withTrashed()
+                ->whereRaw('LOWER(email) = ?', [$email])
+                ->first();
+            if ($user) {
+                return $user;
+            }
+
+            if (preg_match('/^(.+)\.archived\.\d+@(.+)$/', $email, $m)) {
+                $originalEmail = $m[1] . '@' . $m[2];
+                $user = User::withTrashed()
+                    ->whereRaw('LOWER(email) = ?', [$originalEmail])
+                    ->first();
+                if ($user) {
+                    return $user;
+                }
+            }
+
+            if (str_contains($email, '@')) {
+                [$local, $domain] = explode('@', $email, 2);
+                $tombstonePattern = $local . '.archived.%@' . $domain;
+
+                $user = User::withTrashed()
+                    ->where('email', 'like', $tombstonePattern)
+                    ->first();
+                if ($user) {
+                    return $user;
+                }
+            }
+
+            return null;
         }
 
-        $formats = $this->phoneService->getAllFormats($credentials['phone']);
-        return User::whereIn('phone', $formats)->first();
+        $phone = $credentials['phone'] ?? null;
+        if (!$phone) {
+            return null;
+        }
+
+        $formats = $this->phoneService->getAllFormats($phone);
+        if (!empty($formats)) {
+            $user = User::withTrashed()->whereIn('phone', $formats)->first();
+            if ($user) {
+                return $user;
+            }
+        }
+
+        $user = User::withTrashed()->where('phone', $phone)->first();
+        if ($user) {
+            return $user;
+        }
+
+        if (is_string($phone) && strlen($phone) >= 6) {
+            $needle = ltrim($phone, '+');
+            $user = User::withTrashed()
+                ->where(function ($q) use ($needle, $phone) {
+                    $q->where('phone', 'like', '%' . $needle . '%')
+                      ->orWhere('phone', 'like', '%' . $phone . '%');
+                })
+                ->first();
+            if ($user) {
+                return $user;
+            }
+        }
+
+        return null;
     }
 
     protected function hasPermissionToLogin(User $user): bool
@@ -1651,7 +1886,7 @@ class AuthController extends Controller
 
     protected function twoFactorThrottleKey(User $user): string
     {
-        return '2fa:' . $user->id;
+        return 'api-2fa:' . $user->id;
     }
 
     protected function hasTooMany2faAttempts(User $user): bool
@@ -1671,7 +1906,7 @@ class AuthController extends Controller
 
     protected function passwordThrottleKey(User $user): string
     {
-        return 'password:' . $user->id;
+        return 'api-password:' . $user->id;
     }
 
     protected function hasTooManyPasswordAttempts(User $user): bool
@@ -1689,37 +1924,49 @@ class AuthController extends Controller
         RateLimiter::clear($this->passwordThrottleKey($user));
     }
 
-    // ============================================================
-    // ✅ DEVICE TRACKING — FIXED (2026-10-01)
-    // ------------------------------------------------------------
-    // The previous implementation performed a raw updateOrInsert()
-    // into device_tokens but never supplied a value for the
-    // `token` column, which is NOT NULL with no default. Under
-    // MySQL strict mode this produced:
-    //
-    //   SQLSTATE[HY000]: General error: 1364
-    //   Field 'token' doesn't have a default value
-    //
-    // The fix:
-    //  1. Generate a deterministic SHA-256 `token` derived from
-    //     (user_id, user_agent, ip, accept-language) — so the same
-    //     browser always maps to the same row and upserts are
-    //     idempotent.
-    //  2. Use (user_id, token) as the natural key for
-    //     updateOrInsert().
-    //  3. Store a human-readable `device_name` like
-    //     "Microsoft Edge on Windows" instead of the raw UA string.
-    //  4. Populate every device_* column the table actually has
-    //     (checked via Schema::hasColumn), so schema drift is
-    //     tolerated across environments.
-    // ============================================================
+    // ==================== 2FA TOKEN HANDOFF ====================
+
+    protected function issueTwoFactorToken(User $user): string
+    {
+        $plain = Str::random(64);
+
+        Cache::put(
+            'mobile_2fa_token:' . hash('sha256', $plain),
+            [
+                'user_id'   => $user->id,
+                'issued_at' => now()->timestamp,
+            ],
+            now()->addSeconds($this->twoFactorTokenTtlSeconds)
+        );
+
+        return $plain;
+    }
+
+    protected function resolveTwoFactorToken(?string $token): ?User
+    {
+        if (!$token) {
+            return null;
+        }
+
+        $cacheKey = 'mobile_2fa_token:' . hash('sha256', $token);
+        $payload  = Cache::get($cacheKey);
+
+        if (!$payload || empty($payload['user_id'])) {
+            return null;
+        }
+
+        Cache::forget($cacheKey);
+
+        return User::find($payload['user_id']);
+    }
+
+    // ==================== DEVICE TRACKING ====================
 
     protected function trackDevice(Request $request, User $user): void
     {
         try {
             $userAgent = (string) $request->userAgent();
 
-            // ---- Derive all device facts once ----
             $platform    = $this->getDevicePlatform($userAgent);
             $browser     = $this->getDeviceBrowser($userAgent);
             $type        = $this->getDeviceType($userAgent);
@@ -1727,7 +1974,6 @@ class AuthController extends Controller
             $osVersion   = $this->getOsVersion($userAgent);
             $deviceName  = $this->getDeviceName($userAgent, $browser, $platform);
 
-            // Deterministic token — same browser + IP + UA → same token.
             $token = hash('sha256', implode('|', [
                 'user:' . $user->id,
                 'ua:'   . $userAgent,
@@ -1737,7 +1983,6 @@ class AuthController extends Controller
 
             $now = now();
 
-            // ---- device_tokens: upsert on (user_id, token) ----
             if (Schema::hasTable('device_tokens')) {
                 try {
                     $data = [
@@ -1750,9 +1995,8 @@ class AuthController extends Controller
                         'updated_at'   => $now,
                     ];
 
-                    // Only set columns that actually exist on the table.
                     $optional = [
-                        'session_id'      => null, // API requests have no web session
+                        'session_id'      => null,
                         'device_type'     => $type,
                         'device_platform' => $platform,
                         'device_browser'  => $browser,
@@ -1769,8 +2013,6 @@ class AuthController extends Controller
                         }
                     }
 
-                    // updateOrInsert only applies the update array on
-                    // existing rows, so guard created_at on first insert.
                     if (Schema::hasColumn('device_tokens', 'created_at')) {
                         $exists = DB::table('device_tokens')
                             ->where('user_id', $user->id)
@@ -1799,12 +2041,9 @@ class AuthController extends Controller
                 }
             }
 
-            // ---- user_activities: log the tracking event ----
             if (Schema::hasTable('user_activities')) {
                 try {
-                    $payload = [
-                        'user_id' => $user->id,
-                    ];
+                    $payload = ['user_id' => $user->id];
 
                     if (Schema::hasColumn('user_activities', 'created_at')) {
                         $payload['created_at'] = $now;
@@ -1832,13 +2071,13 @@ class AuthController extends Controller
                         $payload['description'] = 'Device tracked for user';
                     }
                     if (Schema::hasColumn('user_activities', 'metadata')) {
-                        $payload['metadata'] = [
+                        $payload['metadata'] = json_encode([
                             'device_name'     => $deviceName,
                             'device_type'     => $type,
                             'device_platform' => $platform,
                             'device_browser'  => $browser,
                             'token'           => $token,
-                        ];
+                        ]);
                     }
                     if (Schema::hasColumn('user_activities', 'performed_at')) {
                         $payload['performed_at'] = $now;
@@ -1847,8 +2086,6 @@ class AuthController extends Controller
                         $payload['is_suspicious'] = false;
                     }
 
-                    // Route through the model so the creating hook can
-                    // backstop any NOT NULL column the caller forgot.
                     UserActivity::create($payload);
                 } catch (\Throwable $e) {
                     Log::warning('Failed to log device activity: ' . $e->getMessage(), [
@@ -1863,9 +2100,6 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * Classify a device as Desktop / Mobile / Tablet.
-     */
     protected function getDeviceType(?string $userAgent): string
     {
         if (!$userAgent) return 'Unknown';
@@ -1875,9 +2109,6 @@ class AuthController extends Controller
         return 'Desktop';
     }
 
-    /**
-     * Extract the operating system family from a UA string.
-     */
     protected function getDevicePlatform(?string $userAgent): string
     {
         if (!$userAgent) return 'Unknown';
@@ -1890,9 +2121,6 @@ class AuthController extends Controller
         return 'Unknown';
     }
 
-    /**
-     * Extract the browser family from a UA string.
-     */
     protected function getDeviceBrowser(?string $userAgent): string
     {
         if (!$userAgent) return 'Unknown';
@@ -1906,9 +2134,6 @@ class AuthController extends Controller
         return 'Unknown';
     }
 
-    /**
-     * Human-readable device label, e.g. "Microsoft Edge on Windows".
-     */
     protected function getDeviceName(?string $userAgent, ?string $browser = null, ?string $platform = null): string
     {
         $browser  = $browser  ?? $this->getDeviceBrowser($userAgent);
@@ -1927,9 +2152,6 @@ class AuthController extends Controller
         return $browser . ' on ' . $platform;
     }
 
-    /**
-     * Best-effort device model extraction (only meaningful on mobile).
-     */
     protected function getDeviceModel(?string $userAgent): ?string
     {
         if (!$userAgent) return null;
@@ -1947,9 +2169,6 @@ class AuthController extends Controller
         return null;
     }
 
-    /**
-     * Best-effort OS version extraction.
-     */
     protected function getOsVersion(?string $userAgent): ?string
     {
         if (!$userAgent) return null;
@@ -1983,8 +2202,25 @@ class AuthController extends Controller
     }
 
     /**
-     * Token retention — keeps the current token plus the (N-1)
-     * newest tokens, deletes everything else.
+     * Prune old access tokens for a user.
+     *
+     * ✅ FIXED: sort by `id DESC` (creation order) instead of
+     *    `last_used_at DESC`.
+     *
+     * Why this matters: when the newly-created token is passed in
+     * (or exists at all), its `last_used_at` is NULL. In MySQL and
+     * SQLite, `ORDER BY ... DESC` puts NULLs last — so the freshly
+     * created token lands at the bottom of the list, gets picked by
+     * `skip($keep)`, and is deleted by the cleanup. The client then
+     * holds a token string whose database row is gone, and every
+     * subsequent authenticated request 401s.
+     *
+     * Sorting by id instead of last_used_at guarantees the newest
+     * tokens are always kept, regardless of usage.
+     *
+     * Note: callers now invoke this BEFORE `createToken()`, so even
+     * if the sort order ever changed, the fresh token would not exist
+     * yet and could not be a cleanup target.
      */
     protected function cleanupTokensForUser(User $user, string $currentDeviceName): void
     {
@@ -1992,7 +2228,6 @@ class AuthController extends Controller
             $keep = max(1, $this->maxDevicesPerUser - 1);
 
             $ids = $user->tokens()
-                ->orderByDesc('last_used_at')
                 ->orderByDesc('id')
                 ->skip($keep)
                 ->take(PHP_INT_MAX)
@@ -2006,13 +2241,9 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * ✅ FIXED — same token-generation fix as trackDevice().
-     */
     protected function storeDeviceToken(User $user, string $deviceName, string $token): void
     {
         if (Schema::hasTable('device_tokens') && Schema::hasColumn('device_tokens', 'token')) {
-            // Normalize the token so it's always non-empty.
             $token = trim($token);
             if ($token === '') {
                 $token = hash('sha256', implode('|', [
@@ -2055,7 +2286,6 @@ class AuthController extends Controller
             return;
         }
 
-        // Legacy JSON fallback
         $devices = $user->devices ?? [];
         if (is_string($devices)) {
             $devices = json_decode($devices, true) ?: [];

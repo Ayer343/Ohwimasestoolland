@@ -167,6 +167,7 @@
                        style="color: var(--primary);">
                         <i class="fas fa-eye mr-2"></i> View Details
                     </a>
+                    {{-- FIXED: route name is 'change-password' (GET form) --}}
                     <a href="{{ route('developer.super-admins.change-password', $user->id) }}" 
                        class="inline-flex items-center text-sm font-medium" 
                        style="color: var(--warning);">
@@ -538,6 +539,7 @@
                             </button>
                             
                             <!-- Change Password -->
+                            {{-- FIXED: route name is 'change-password' (GET form) --}}
                             <a href="{{ route('developer.super-admins.change-password', $user->id) }}"
                                class="flex items-center justify-center p-4 rounded-lg text-sm font-medium btn-warning">
                                 <i class="fas fa-key mr-3"></i>

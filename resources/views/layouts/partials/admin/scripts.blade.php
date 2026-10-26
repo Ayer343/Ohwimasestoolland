@@ -1,39 +1,30 @@
 <script>
-(function() {
+(function () {
+    'use strict';
+
     // =========================================================================
     // SIDEBAR COLLAPSE STATE MANAGEMENT
     // =========================================================================
-    
-    const initialSidebarState = window.__INITIAL_SIDEBAR_STATE !== undefined 
-        ? window.__INITIAL_SIDEBAR_STATE 
+
+    const initialSidebarState = window.__INITIAL_SIDEBAR_STATE !== undefined
+        ? window.__INITIAL_SIDEBAR_STATE
         : localStorage.getItem('sidebarCollapsed') === 'true';
-    
+
     if (localStorage.getItem('sidebarCollapsed') === null) {
         localStorage.setItem('sidebarCollapsed', initialSidebarState);
     }
-    
+
     function toggleSidebar(collapsed, saveToStorage = true) {
         const sidebar = document.querySelector('.sidebar');
         const mainContent = document.querySelector('.content');
         const mainContentAlt = document.getElementById('main-content');
-        
-        if (sidebar) {
-            sidebar.classList.toggle('collapsed', collapsed);
-        }
-        
-        if (mainContent) {
-            mainContent.classList.toggle('collapsed', collapsed);
-        }
-        
-        if (mainContentAlt && !mainContent) {
-            mainContentAlt.classList.toggle('collapsed', collapsed);
-        }
-        
-        if (saveToStorage) {
-            localStorage.setItem('sidebarCollapsed', collapsed);
-        }
-        
-        // Update Alpine.js state if it exists
+
+        if (sidebar) sidebar.classList.toggle('collapsed', collapsed);
+        if (mainContent) mainContent.classList.toggle('collapsed', collapsed);
+        if (mainContentAlt && !mainContent) mainContentAlt.classList.toggle('collapsed', collapsed);
+
+        if (saveToStorage) localStorage.setItem('sidebarCollapsed', collapsed);
+
         if (window.Alpine) {
             document.querySelectorAll('[x-data]').forEach(el => {
                 if (el.__x && el.__x.$data.sidebarCollapsed !== undefined) {
@@ -41,177 +32,553 @@
                 }
             });
         }
-        
         return collapsed;
     }
-    
+
     if (document.querySelector('.sidebar')) {
         toggleSidebar(initialSidebarState, false);
     }
-    
+
+    // =========================================================================
+    // THEME MANAGER  (plain JS, no Alpine dependency)
+    // =========================================================================
+    /*
+     * Responsibilities:
+     *   • Apply appearance / sidebar theme / custom colors to <html> tokens
+     *   • Bind the #themeSettingsModal controls (buttons + color inputs)
+     *   • Debounce POSTs to /theme/update and /theme/update-colors
+     *   • Drive #themeSaveIndicator, aria-checked, swatches, hex labels
+     *   • Update the live preview frame in real time
+     *   • Expose window.ThemeManager for other scripts
+     */
+
+    const THEME = {
+        appearance: 'system',        // light | dark | system
+        sidebarTheme: 'default',     // default | dark | light | blue | green | custom
+        customColors: {
+            primary:   '#7267f0',
+            secondary: '#6258e0',
+            accent:    '#f59e0b'
+        }
+    };
+
+    const STORAGE_KEY = 'app_theme_v2';
+    const CSRF = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const ROUTES = window.__THEME_ROUTES__ || {
+        update:       '/theme/update',
+        updateColors: '/theme/update-colors',
+        reset:        '/theme/reset',
+        resetColors:  '/theme/reset-colors'
+    };
+
+    // Seed from server-rendered config if present.
+    if (window.__THEME__ && typeof window.__THEME__ === 'object') {
+        if (window.__THEME__.appearance)   THEME.appearance = window.__THEME__.appearance;
+        if (window.__THEME__.sidebarTheme) THEME.sidebarTheme = window.__THEME__.sidebarTheme;
+        if (window.__THEME__.customColors) Object.assign(THEME.customColors, window.__THEME__.customColors);
+    }
+
+    // Fall back to localStorage.
+    try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        if (saved) {
+            if (saved.appearance)   THEME.appearance = saved.appearance;
+            if (saved.sidebarTheme) THEME.sidebarTheme = saved.sidebarTheme;
+            if (saved.customColors) Object.assign(THEME.customColors, saved.customColors);
+        }
+    } catch (_) { /* ignore */ }
+
+    // ---- Helpers ----
+    function persist() {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                appearance: THEME.appearance,
+                sidebarTheme: THEME.sidebarTheme,
+                customColors: THEME.customColors
+            }));
+        } catch (_) {}
+    }
+
+    function hexToRgb(hex) {
+        const h = (hex || '').replace('#', '');
+        if (h.length !== 6) return { r: 114, g: 103, b: 240 };
+        return {
+            r: parseInt(h.slice(0, 2), 16),
+            g: parseInt(h.slice(2, 4), 16),
+            b: parseInt(h.slice(4, 6), 16)
+        };
+    }
+
+    function contrastText(hex) {
+        const { r, g, b } = hexToRgb(hex);
+        const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        return lum > 0.6 ? '#1e293b' : '#ffffff';
+    }
+
+    function withAlpha(hex, alpha) {
+        const { r, g, b } = hexToRgb(hex);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function debounce(fn, wait) {
+        let t;
+        return function () {
+            clearTimeout(t);
+            const args = arguments;
+            t = setTimeout(() => fn.apply(this, args), wait);
+        };
+    }
+
+    // ---- Apply ----
+    function applyAppearance() {
+        const html = document.documentElement;
+        let resolved = THEME.appearance;
+
+        if (resolved === 'system') {
+            resolved = window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark' : 'light';
+        }
+        html.setAttribute('data-theme', resolved);
+        html.classList.toggle('dark',  resolved === 'dark');
+        html.classList.toggle('light', resolved === 'light');
+
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.content = resolved === 'dark' ? '#1e1e2d' : '#ffffff';
+    }
+
+    function applySidebarTheme() {
+        const html = document.documentElement;
+        html.setAttribute('data-sidebar-theme', THEME.sidebarTheme);
+
+        // Clear inline overrides from a previous custom apply.
+        [
+            '--sidebar-bg', '--sidebar-text', '--sidebar-text-muted',
+            '--sidebar-icon', '--sidebar-logo', '--sidebar-logo-muted',
+            '--sidebar-hover', '--sidebar-active', '--sidebar-border',
+            '--sidebar-shadow'
+        ].forEach(p => html.style.removeProperty(p));
+
+        if (THEME.sidebarTheme !== 'custom') return;
+
+        const p = THEME.customColors.primary   || '#7267f0';
+        const s = THEME.customColors.secondary || '#6258e0';
+        const textColor = contrastText(p);
+        const isLightText = textColor === '#ffffff';
+
+        html.style.setProperty('--sidebar-bg',
+            `linear-gradient(180deg, ${p} 0%, ${s} 100%)`);
+        html.style.setProperty('--sidebar-text', textColor);
+        html.style.setProperty('--sidebar-text-muted',
+            isLightText ? 'rgba(255,255,255,0.72)' : 'rgba(30,41,59,0.68)');
+        html.style.setProperty('--sidebar-icon', textColor);
+        html.style.setProperty('--sidebar-logo', textColor);
+        html.style.setProperty('--sidebar-logo-muted',
+            isLightText ? 'rgba(255,255,255,0.72)' : 'rgba(30,41,59,0.68)');
+        html.style.setProperty('--sidebar-hover',
+            isLightText ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.06)');
+        html.style.setProperty('--sidebar-active',
+            isLightText ? 'rgba(255,255,255,0.20)' : 'rgba(0,0,0,0.10)');
+        html.style.setProperty('--sidebar-border', 'transparent');
+        html.style.setProperty('--sidebar-shadow', `0 0 20px ${withAlpha(p, 0.30)}`);
+    }
+
+    function applyAll() {
+        applyAppearance();
+        applySidebarTheme();
+        syncModalControls();
+        updateLivePreview();
+    }
+
+    // ---- Modal sync ----
+    function syncModalControls() {
+        document.querySelectorAll('.theme-appearance-btn').forEach(btn => {
+            const isActive = btn.dataset.appearance === THEME.appearance;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+
+        document.querySelectorAll('.sidebar-theme-btn').forEach(btn => {
+            const isActive = btn.dataset.sidebarTheme === THEME.sidebarTheme;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+
+        const map = [
+            { key: 'primary',   input: 'customColorPrimary',   swatch: 'customColorPrimarySwatch',   label: 'customColorPrimaryValue' },
+            { key: 'secondary', input: 'customColorSecondary', swatch: 'customColorSecondarySwatch', label: 'customColorSecondaryValue' },
+            { key: 'accent',    input: 'customColorAccent',    swatch: 'customColorAccentSwatch',    label: 'customColorAccentValue' }
+        ];
+        map.forEach(({ key, input, swatch, label }) => {
+            const value = THEME.customColors[key] || '#000000';
+            const inputEl  = document.getElementById(input);
+            const swatchEl = document.getElementById(swatch);
+            const labelEl  = document.getElementById(label);
+            if (inputEl)  inputEl.value = value;
+            if (swatchEl) swatchEl.style.backgroundColor = value;
+            if (labelEl)  labelEl.textContent = value.toUpperCase();
+        });
+
+        const left  = document.querySelector('.sidebar-swatch-half--left');
+        const right = document.querySelector('.sidebar-swatch-half--right');
+        if (left)  left.style.backgroundColor  = THEME.customColors.primary;
+        if (right) right.style.backgroundColor = THEME.customColors.secondary;
+    }
+
+    function updateLivePreview() {
+        const sidebar = document.getElementById('themePreviewSidebar');
+        if (!sidebar) return;
+
+        if (THEME.sidebarTheme === 'custom') {
+            const p = THEME.customColors.primary;
+            const s = THEME.customColors.secondary;
+            sidebar.style.background = `linear-gradient(180deg, ${p} 0%, ${s} 100%)`;
+        } else {
+            const map = {
+                default: 'linear-gradient(180deg, #7267f0 0%, #6258e0 100%)',
+                dark:    'linear-gradient(180deg, #232933 0%, #1e2229 100%)',
+                light:   'linear-gradient(180deg, #ffffff 0%, #f5f7f9 100%)',
+                blue:    'linear-gradient(180deg, #1a56db 0%, #1e429f 100%)',
+                green:   'linear-gradient(180deg, #057a55 0%, #0a5c36 100%)'
+            };
+            sidebar.style.background = map[THEME.sidebarTheme] || map.default;
+        }
+    }
+
+    // ---- Save indicator ----
+    function showSaving() {
+        document.getElementById('themeSaveIndicator')?.classList.remove('hidden');
+    }
+    function hideSaving() {
+        document.getElementById('themeSaveIndicator')?.classList.add('hidden');
+    }
+
+    // ---- Network ----
+    async function postJSON(url, payload) {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+                'X-CSRF-TOKEN': CSRF
+            },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.success === false) {
+            throw new Error(data.message || `Request failed (${res.status})`);
+        }
+        return data;
+    }
+
+    const saveSettings = debounce(async function () {
+        showSaving();
+        try {
+            await postJSON(ROUTES.update, {
+                appearance: THEME.appearance,
+                sidebar_theme: THEME.sidebarTheme
+            });
+        } catch (err) {
+            console.error('[Theme] settings save failed:', err);
+        } finally {
+            hideSaving();
+        }
+    }, 250);
+
+    const saveColors = debounce(async function () {
+        showSaving();
+        try {
+            await postJSON(ROUTES.updateColors, {
+                colors: {
+                    primary:   THEME.customColors.primary,
+                    secondary: THEME.customColors.secondary,
+                    accent:    THEME.customColors.accent
+                }
+            });
+        } catch (err) {
+            console.error('[Theme] colors save failed:', err);
+        } finally {
+            hideSaving();
+        }
+    }, 350);
+
+    // ---- Toast ----
+    function themeToast(message, type = 'info') {
+        if (typeof window.showNotification === 'function') {
+            window.showNotification(message, type);
+            return;
+        }
+        const colors = { success: '#22c55e', error: '#ef4444', info: '#3b82f6' };
+        const div = document.createElement('div');
+        div.textContent = message;
+        div.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px;
+            padding: 12px 24px; border-radius: 8px;
+            background: ${colors[type] || colors.info};
+            color: #fff; z-index: 99999; font-size: 14px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            max-width: 400px;`;
+        document.body.appendChild(div);
+        setTimeout(() => {
+            div.style.transition = 'opacity .3s';
+            div.style.opacity = '0';
+            setTimeout(() => div.remove(), 300);
+        }, 2500);
+    }
+
+    // ---- Bind modal ----
+    function bindThemeModal() {
+        const modal = document.getElementById('themeSettingsModal');
+        if (!modal) return;
+        if (modal.dataset.themeBound === '1') return;
+        modal.dataset.themeBound = '1';
+
+        // Appearance
+        modal.querySelectorAll('.theme-appearance-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                THEME.appearance = btn.dataset.appearance;
+                persist();
+                applyAppearance();
+                syncModalControls();
+                saveSettings();
+            });
+        });
+
+        // Sidebar theme
+        modal.querySelectorAll('.sidebar-theme-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                THEME.sidebarTheme = btn.dataset.sidebarTheme;
+                persist();
+                applySidebarTheme();
+                syncModalControls();
+                updateLivePreview();
+                saveSettings();
+                if (THEME.sidebarTheme === 'custom') saveColors();
+            });
+        });
+
+        // Color inputs
+        [
+            { id: 'customColorPrimary',   key: 'primary'   },
+            { id: 'customColorSecondary', key: 'secondary' },
+            { id: 'customColorAccent',    key: 'accent'    }
+        ].forEach(({ id, key }) => {
+            const input = document.getElementById(id);
+            if (!input) return;
+            input.addEventListener('input', () => {
+                const value = input.value;
+                THEME.customColors[key] = value;
+
+                const swatch = document.getElementById(id + 'Swatch');
+                const label  = document.getElementById(id + 'Value');
+                if (swatch) swatch.style.backgroundColor = value;
+                if (label)  label.textContent = value.toUpperCase();
+
+                if (THEME.sidebarTheme === 'custom') {
+                    applySidebarTheme();
+                    updateLivePreview();
+                    syncModalControls();
+                    persist();
+                    saveColors();
+                }
+            });
+        });
+
+        // Reset colors
+        document.getElementById('resetColorsBtn')?.addEventListener('click', async (e) => {
+            e.preventDefault();
+            try {
+                const data = await postJSON(ROUTES.resetColors, {});
+                const colors = data?.data?.colors || data?.colors || {
+                    primary: '#7267f0', secondary: '#6258e0', accent: '#f59e0b'
+                };
+                THEME.customColors = {
+                    primary:   colors.primary   || '#7267f0',
+                    secondary: colors.secondary || '#6258e0',
+                    accent:    colors.accent    || '#f59e0b'
+                };
+                persist();
+                syncModalControls();
+                if (THEME.sidebarTheme === 'custom') {
+                    applySidebarTheme();
+                    updateLivePreview();
+                }
+                themeToast('Colors reset to default', 'success');
+            } catch (err) {
+                console.error('[Theme] reset colors failed:', err);
+                themeToast('Failed to reset colors', 'error');
+            }
+        });
+
+        // Reset all
+        document.getElementById('resetThemeBtn')?.addEventListener('click', async (e) => {
+            e.preventDefault();
+            if (!confirm('Reset all theme settings to default?')) return;
+            try {
+                const data = await postJSON(ROUTES.reset, {});
+                const settings = data?.data?.settings || data?.settings || {};
+                const colors   = data?.data?.colors   || data?.colors   || {};
+
+                THEME.appearance   = settings.appearance   || 'system';
+                THEME.sidebarTheme = settings.sidebar_theme || 'default';
+                THEME.customColors = {
+                    primary:   colors.primary   || '#7267f0',
+                    secondary: colors.secondary || '#6258e0',
+                    accent:    colors.accent    || '#f59e0b'
+                };
+                persist();
+                applyAll();
+                themeToast('Theme reset to default', 'success');
+            } catch (err) {
+                console.error('[Theme] reset failed:', err);
+                themeToast('Failed to reset theme', 'error');
+            }
+        });
+
+        // Close handlers
+        const close = () => {
+            modal.classList.add('hidden');
+            modal.setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+        };
+        document.getElementById('closeThemeModal')?.addEventListener('click', close);
+        document.getElementById('closeThemeModalBtn')?.addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !modal.classList.contains('hidden')) close();
+        });
+
+        // Open via gear
+        document.getElementById('themeSettingsButton')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            modal.classList.remove('hidden');
+            modal.setAttribute('aria-hidden', 'false');
+            document.body.style.overflow = 'hidden';
+            syncModalControls();
+        });
+
+        // Expose close for the global Escape handler
+        window.__closeThemeModal = close;
+    }
+
+    // ---- OS theme reactivity ----
+    window.matchMedia('(prefers-color-scheme: dark)')
+        .addEventListener('change', () => {
+            if (THEME.appearance === 'system') applyAppearance();
+        });
+
+    // ---- Public API ----
+    window.ThemeManager = {
+        get state() { return JSON.parse(JSON.stringify(THEME)); },
+        apply: applyAll,
+        setAppearance(v) { THEME.appearance = v; persist(); applyAll(); saveSettings(); },
+        setSidebarTheme(v) { THEME.sidebarTheme = v; persist(); applyAll(); saveSettings(); },
+        setCustomColor(key, value) {
+            THEME.customColors[key] = value;
+            persist();
+            applySidebarTheme();
+            syncModalControls();
+            updateLivePreview();
+            saveColors();
+        },
+        toast: themeToast
+    };
+
     // =========================================================================
     // DOM READY - MAIN INITIALIZATION
     // =========================================================================
-    
-    document.addEventListener('DOMContentLoaded', function() {
-        // ---------------------------------------------------------------------
-        // SIDEBAR TOGGLE BUTTON
-        // ---------------------------------------------------------------------
-        
+
+    document.addEventListener('DOMContentLoaded', function () {
+
+        // ---- Sidebar toggle ----
         const toggleSidebarBtn = document.getElementById('toggleSidebar');
-        
+
         if (localStorage.getItem('sidebarCollapsed') !== null && toggleSidebarBtn) {
             toggleSidebarBtn.classList.add('interacted');
         }
-        
+
         if (toggleSidebarBtn) {
-            toggleSidebarBtn.addEventListener('click', function(e) {
+            toggleSidebarBtn.addEventListener('click', function (e) {
                 e.preventDefault();
                 this.classList.add('interacted');
                 const isCollapsed = localStorage.getItem('sidebarCollapsed') !== 'true';
                 toggleSidebar(isCollapsed, true);
-                
-                if (window.navigator && window.navigator.vibrate) {
-                    window.navigator.vibrate(50);
-                }
+                if (window.navigator && window.navigator.vibrate) window.navigator.vibrate(50);
             });
-            
-            toggleSidebarBtn.addEventListener('mouseenter', function() {
+            toggleSidebarBtn.addEventListener('mouseenter', function () {
                 this.classList.add('interacted');
             });
         }
-        
-        // ---------------------------------------------------------------------
-        // THEME SETTINGS BUTTON - NOW TRIGGERS ALPINE MODAL
-        // ---------------------------------------------------------------------
-        
+
+        // ---- Gear hover animation ----
         const themeSettingsButton = document.getElementById('themeSettingsButton');
         const settingsIcon = document.getElementById('settingsIcon');
-        
+
         if (settingsIcon) {
             settingsIcon.classList.add('theme-settings-gear');
-            
             if (themeSettingsButton) {
-                themeSettingsButton.addEventListener('mouseenter', function() {
+                themeSettingsButton.addEventListener('mouseenter', function () {
                     settingsIcon.classList.add('gear-spin-fast');
                 });
-                
-                themeSettingsButton.addEventListener('mouseleave', function() {
+                themeSettingsButton.addEventListener('mouseleave', function () {
                     settingsIcon.classList.remove('gear-spin-fast');
                 });
-                
-                // This will trigger the Alpine modal if it exists
-                themeSettingsButton.addEventListener('click', function(e) {
-                    // Check if Alpine modal handler exists
-                    const alpineModal = document.querySelector('[x-data="themeModalHandler()"]');
-                    if (alpineModal && alpineModal.__x) {
-                        // Alpine will handle it via @click
-                        return;
-                    }
-                    
-                    // Fallback: open theme settings modal directly
-                    const modal = document.getElementById('themeSettingsModal');
-                    if (modal) {
-                        modal.classList.remove('hidden');
-                        document.body.style.overflow = 'hidden';
-                    }
-                });
             }
         }
-        
-        // ---------------------------------------------------------------------
-        // THEME SETTINGS MODAL - FALLBACK HANDLING
-        // ---------------------------------------------------------------------
-        
-        const themeSettingsModal = document.getElementById('themeSettingsModal');
-        const closeThemeModal = document.getElementById('closeThemeModal');
-        const closeThemeModalBtn = document.getElementById('closeThemeModalBtn');
-        
-        function closeThemeModalFunc() {
-            if (themeSettingsModal) {
-                themeSettingsModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            }
-        }
-        
-        if (closeThemeModal) closeThemeModal.addEventListener('click', closeThemeModalFunc);
-        if (closeThemeModalBtn) closeThemeModalBtn.addEventListener('click', closeThemeModalFunc);
-        
-        if (themeSettingsModal) {
-            themeSettingsModal.addEventListener('click', function(e) {
-                if (e.target === themeSettingsModal) {
-                    closeThemeModalFunc();
-                }
-            });
-        }
-        
-        // Escape key handler
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && themeSettingsModal && !themeSettingsModal.classList.contains('hidden')) {
-                closeThemeModalFunc();
-            }
-        });
-        
-        // ---------------------------------------------------------------------
-        // MOBILE MENU
-        // ---------------------------------------------------------------------
-        
+
+        // ---- Theme manager boot + bind ----
+        applyAll();
+        bindThemeModal();
+
+        // ---- Mobile menu ----
         const mobileMenuBtn = document.getElementById('mobile-menu-btn');
         const overlay = document.getElementById('overlay');
         const sidebar = document.querySelector('.sidebar');
-        
+
         if (mobileMenuBtn && overlay && sidebar) {
-            mobileMenuBtn.addEventListener('click', function() {
+            mobileMenuBtn.addEventListener('click', function () {
                 sidebar.classList.add('active');
                 overlay.classList.add('active');
                 document.body.style.overflow = 'hidden';
             });
-            
-            overlay.addEventListener('click', function() {
+            overlay.addEventListener('click', function () {
                 sidebar.classList.remove('active');
                 overlay.classList.remove('active');
                 document.body.style.overflow = '';
             });
         }
-        
-        // ---------------------------------------------------------------------
-        // USER DROPDOWN
-        // ---------------------------------------------------------------------
-        
+
+        // ---- User dropdown ----
         const userDropdown = document.getElementById('user-dropdown');
         const dropdownMenu = document.getElementById('dropdown-menu');
-        
+
         if (userDropdown && dropdownMenu) {
-            userDropdown.addEventListener('click', function(e) {
+            userDropdown.addEventListener('click', function (e) {
                 e.stopPropagation();
                 dropdownMenu.classList.toggle('show');
             });
-            
-            document.addEventListener('click', function(e) {
+            document.addEventListener('click', function (e) {
                 if (dropdownMenu.classList.contains('show') && !userDropdown.contains(e.target)) {
                     dropdownMenu.classList.remove('show');
                 }
             });
         }
-        
-        // ---------------------------------------------------------------------
-        // TABS FUNCTIONALITY
-        // ---------------------------------------------------------------------
-        
+
+        // ---- Tabs ----
         const tabs = document.querySelectorAll('[data-tab-target]');
         const tabPanes = document.querySelectorAll('.tab-pane');
-        
+
         if (tabs.length > 0 && tabPanes.length > 0) {
             function switchTab(tab) {
                 const target = tab.getAttribute('data-tab-target');
-                
                 tabs.forEach(t => {
                     t.classList.remove('active', 'border-primary');
                     t.setAttribute('aria-selected', 'false');
                 });
                 tab.classList.add('active', 'border-primary');
                 tab.setAttribute('aria-selected', 'true');
-                
+
                 tabPanes.forEach(pane => {
                     pane.classList.add('hidden');
                     pane.classList.remove('active');
@@ -221,76 +588,52 @@
                     }
                 });
             }
-            
             tabs.forEach(tab => {
                 tab.addEventListener('click', (e) => {
                     e.preventDefault();
                     switchTab(tab);
                 });
             });
-
             function checkHash() {
                 const hash = window.location.hash.substring(1);
                 if (hash) {
                     const tab = document.querySelector(`[data-tab-target="${hash}"]`);
-                    if (tab) {
-                        switchTab(tab);
-                    }
+                    if (tab) switchTab(tab);
                 }
             }
-            
             checkHash();
-            
             tabs.forEach(tab => {
                 tab.addEventListener('click', () => {
                     const target = tab.getAttribute('data-tab-target');
-                    if (target) {
-                        window.location.hash = target;
-                    }
+                    if (target) window.location.hash = target;
                 });
             });
         }
-        
-        // ---------------------------------------------------------------------
-        // FORM ELEMENTS FOCUS STYLES
-        // ---------------------------------------------------------------------
-        
+
+        // ---- Form focus styles ----
         document.querySelectorAll('input, select, textarea').forEach(element => {
-            element.addEventListener('focus', function() {
+            element.addEventListener('focus', function () {
                 this.style.boxShadow = '0 0 0 2px var(--primary)';
                 this.style.borderColor = 'var(--primary)';
             });
-            
-            element.addEventListener('blur', function() {
+            element.addEventListener('blur', function () {
                 this.style.boxShadow = '';
                 this.style.borderColor = 'var(--border-color)';
             });
         });
-        
-        // ---------------------------------------------------------------------
-        // SUCCESS MESSAGE AUTO-HIDE
-        // ---------------------------------------------------------------------
-        
+
+        // ---- Success message auto-hide ----
         const successMessage = document.querySelector('.bg-green-100');
         if (successMessage) {
             setTimeout(() => {
                 successMessage.style.transition = 'opacity 0.5s ease';
                 successMessage.style.opacity = '0';
-                setTimeout(() => {
-                    successMessage.style.display = 'none';
-                }, 500);
+                setTimeout(() => { successMessage.style.display = 'none'; }, 500);
             }, 5000);
         }
-        
-        // ---------------------------------------------------------------------
-        // CARD ANIMATIONS
-        // ---------------------------------------------------------------------
-        
-        const observerOptions = {
-            threshold: 0.1,
-            rootMargin: '0px 0px -50px 0px'
-        };
-        
+
+        // ---- Card entrance animations ----
+        const observerOptions = { threshold: 0.1, rootMargin: '0px 0px -50px 0px' };
         const observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
@@ -299,358 +642,169 @@
                 }
             });
         }, observerOptions);
-        
-        document.querySelectorAll('.card').forEach(card => {
-            observer.observe(card);
-        });
-        
-        // ---------------------------------------------------------------------
-        // SIDEBAR INTERFERENCE FIX
-        // ---------------------------------------------------------------------
-        
+        document.querySelectorAll('.card').forEach(card => observer.observe(card));
+
+        // ---- Sidebar interference fix ----
         function fixInterference() {
             const currentState = localStorage.getItem('sidebarCollapsed') === 'true';
             const sidebar = document.querySelector('.sidebar');
-            
             if (sidebar) {
                 const hasCollapsedClass = sidebar.classList.contains('collapsed');
-                if (hasCollapsedClass !== currentState) {
-                    toggleSidebar(currentState, false);
-                }
+                if (hasCollapsedClass !== currentState) toggleSidebar(currentState, false);
             }
         }
-        
         setTimeout(fixInterference, 1000);
-        
+
         const originalFetch = window.fetch;
         if (originalFetch) {
-            window.fetch = function() {
+            window.fetch = function () {
                 return originalFetch.apply(this, arguments)
                     .then(response => {
                         setTimeout(fixInterference, 100);
                         return response;
                     })
-                    .catch(error => {
-                        throw error;
-                    });
+                    .catch(error => { throw error; });
             };
         }
-        
-        // ---------------------------------------------------------------------
-        // PULSE ANIMATION REMOVAL
-        // ---------------------------------------------------------------------
-        
+
+        // ---- Pulse removal ----
         let scrollTimeout;
-        window.addEventListener('scroll', function() {
+        window.addEventListener('scroll', function () {
             if (toggleSidebarBtn && !toggleSidebarBtn.classList.contains('interacted')) {
                 clearTimeout(scrollTimeout);
-                scrollTimeout = setTimeout(function() {
+                scrollTimeout = setTimeout(function () {
                     toggleSidebarBtn.classList.add('interacted');
                 }, 500);
             }
         }, { passive: true });
-        
+
         const sidebarElement = document.querySelector('.sidebar');
         if (sidebarElement && toggleSidebarBtn) {
-            sidebarElement.addEventListener('mouseenter', function() {
+            sidebarElement.addEventListener('mouseenter', function () {
                 if (!toggleSidebarBtn.classList.contains('interacted')) {
                     toggleSidebarBtn.classList.add('interacted');
                 }
             });
         }
-        
-        setTimeout(function() {
+        setTimeout(function () {
             if (toggleSidebarBtn && !toggleSidebarBtn.classList.contains('interacted')) {
                 toggleSidebarBtn.classList.add('interacted');
             }
         }, 10000);
-        
-        // ---------------------------------------------------------------------
-        // MODAL MANAGEMENT
-        // ---------------------------------------------------------------------
-        
-        // Email Modal
-        const emailManagementBtn = document.getElementById('emailManagementBtn');
-        const emailManagementModal = document.getElementById('emailManagementModal');
-        if (emailManagementBtn && emailManagementModal) {
-            emailManagementBtn.addEventListener('click', function() {
-                emailManagementModal.classList.remove('hidden');
+
+        // ---- Modal management (unchanged) ----
+        function wireModal(btnId, modalId, closeIds) {
+            const btn = document.getElementById(btnId);
+            const modal = document.getElementById(modalId);
+            if (!btn || !modal) return;
+            const open = () => {
+                modal.classList.remove('hidden');
                 document.body.style.overflow = 'hidden';
-            });
-            
-            document.getElementById('closeEmailModal')?.addEventListener('click', function() {
-                emailManagementModal.classList.add('hidden');
+            };
+            const close = () => {
+                modal.classList.add('hidden');
                 document.body.style.overflow = 'auto';
+            };
+            btn.addEventListener('click', open);
+            closeIds.forEach(id => {
+                document.getElementById(id)?.addEventListener('click', close);
             });
-            
-            document.getElementById('cancelEmailModal')?.addEventListener('click', function() {
-                emailManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            emailManagementModal.addEventListener('click', function(e) {
-                if (e.target === emailManagementModal) {
-                    emailManagementModal.classList.add('hidden');
-                    document.body.style.overflow = 'auto';
-                }
-            });
+            modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+            window['close' + modalId.charAt(0).toUpperCase() + modalId.slice(1)] = close;
         }
-        
-        // SMS Modal
-        const smsManagementBtn = document.getElementById('smsManagementBtn');
-        const smsManagementModal = document.getElementById('smsManagementModal');
-        if (smsManagementBtn && smsManagementModal) {
-            smsManagementBtn.addEventListener('click', function() {
-                smsManagementModal.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-            });
-            
-            document.getElementById('closeSmsModal')?.addEventListener('click', function() {
-                smsManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            document.getElementById('cancelSmsModal')?.addEventListener('click', function() {
-                smsManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            smsManagementModal.addEventListener('click', function(e) {
-                if (e.target === smsManagementModal) {
-                    smsManagementModal.classList.add('hidden');
-                    document.body.style.overflow = 'auto';
-                }
-            });
-        }
-        
-        // WhatsApp Modal
-        const whatsappManagementBtn = document.getElementById('whatsappManagementBtn');
-        const whatsappManagementModal = document.getElementById('whatsappManagementModal');
-        if (whatsappManagementBtn && whatsappManagementModal) {
-            whatsappManagementBtn.addEventListener('click', function() {
-                whatsappManagementModal.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-            });
-            
-            document.getElementById('closeWhatsAppModal')?.addEventListener('click', function() {
-                whatsappManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            document.getElementById('cancelWhatsAppModal')?.addEventListener('click', function() {
-                whatsappManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            whatsappManagementModal.addEventListener('click', function(e) {
-                if (e.target === whatsappManagementModal) {
-                    whatsappManagementModal.classList.add('hidden');
-                    document.body.style.overflow = 'auto';
-                }
-            });
-        }
-        
-        // Invoice Modal
-        const invoiceManagementBtn = document.getElementById('invoiceManagementBtn');
-        const invoiceManagementModal = document.getElementById('invoiceManagementModal');
-        if (invoiceManagementBtn && invoiceManagementModal) {
-            invoiceManagementBtn.addEventListener('click', function() {
-                invoiceManagementModal.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-            });
-            
-            document.getElementById('closeInvoiceModal')?.addEventListener('click', function() {
-                invoiceManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            document.getElementById('cancelInvoiceModal')?.addEventListener('click', function() {
-                invoiceManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            invoiceManagementModal.addEventListener('click', function(e) {
-                if (e.target === invoiceManagementModal) {
-                    invoiceManagementModal.classList.add('hidden');
-                    document.body.style.overflow = 'auto';
-                }
-            });
-        }
-        
-        // Administrative Tools Modal
-        const administrativeToolsBtn = document.getElementById('administrativeToolsBtn');
-        const administrativeToolsModal = document.getElementById('administrativeToolsModal');
-        if (administrativeToolsBtn && administrativeToolsModal) {
-            administrativeToolsBtn.addEventListener('click', function() {
-                administrativeToolsModal.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-            });
-            
-            document.getElementById('closeAdminToolsModal')?.addEventListener('click', function() {
-                administrativeToolsModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            document.getElementById('cancelAdminToolsModal')?.addEventListener('click', function() {
-                administrativeToolsModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            administrativeToolsModal.addEventListener('click', function(e) {
-                if (e.target === administrativeToolsModal) {
-                    administrativeToolsModal.classList.add('hidden');
-                    document.body.style.overflow = 'auto';
-                }
-            });
-        }
-        
-        // Billing Modal
-        const billingManagementBtn = document.getElementById('billingManagementBtn');
-        const billingManagementModal = document.getElementById('billingManagementModal');
-        if (billingManagementBtn && billingManagementModal) {
-            billingManagementBtn.addEventListener('click', function() {
-                billingManagementModal.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-            });
-            
-            document.getElementById('closeBillingModal')?.addEventListener('click', function() {
-                billingManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            document.getElementById('cancelBillingModal')?.addEventListener('click', function() {
-                billingManagementModal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            });
-            
-            billingManagementModal.addEventListener('click', function(e) {
-                if (e.target === billingManagementModal) {
-                    billingManagementModal.classList.add('hidden');
-                    document.body.style.overflow = 'auto';
-                }
-            });
-        }
-        
-        // ---------------------------------------------------------------------
-        // NOTIFICATIONS
-        // ---------------------------------------------------------------------
-        
-        window.loadNotifications = function() {
+
+        wireModal('emailManagementBtn',      'emailManagementModal',      ['closeEmailModal', 'cancelEmailModal']);
+        wireModal('smsManagementBtn',        'smsManagementModal',        ['closeSmsModal', 'cancelSmsModal']);
+        wireModal('whatsappManagementBtn',   'whatsappManagementModal',   ['closeWhatsAppModal', 'cancelWhatsAppModal']);
+        wireModal('invoiceManagementBtn',    'invoiceManagementModal',    ['closeInvoiceModal', 'cancelInvoiceModal']);
+        wireModal('administrativeToolsBtn',  'administrativeToolsModal',  ['closeAdminToolsModal', 'cancelAdminToolsModal']);
+        wireModal('billingManagementBtn',    'billingManagementModal',    ['closeBillingModal', 'cancelBillingModal']);
+
+        // ---- Notifications ----
+        window.loadNotifications = function () {
             const list = document.getElementById('notificationList');
             if (!list) return;
-            
             list.innerHTML = '<div class="p-4 text-center" style="color: var(--text-secondary);"><i class="fas fa-spinner fa-spin mr-2"></i>Loading notifications...</div>';
-            
-            fetch('/notifications/ajax', {
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success && data.html) {
-                    list.innerHTML = data.html;
-                } else {
-                    list.innerHTML = '<div class="p-4 text-center" style="color: var(--text-secondary);">No notifications found</div>';
-                }
-            })
-            .catch(error => {
-                console.error('Error loading notifications:', error);
-                list.innerHTML = '<div class="p-4 text-center" style="color: var(--text-secondary);">Failed to load notifications</div>';
-            });
+            fetch('/notifications/ajax', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(r => r.json())
+                .then(data => {
+                    list.innerHTML = (data.success && data.html)
+                        ? data.html
+                        : '<div class="p-4 text-center" style="color: var(--text-secondary);">No notifications found</div>';
+                })
+                .catch(() => {
+                    list.innerHTML = '<div class="p-4 text-center" style="color: var(--text-secondary);">Failed to load notifications</div>';
+                });
         };
-        
-        window.markAllAsRead = function() {
+
+        window.markAllAsRead = function () {
             fetch('/notifications/mark-all-read', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                    'X-CSRF-TOKEN': CSRF
                 }
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     showNotification('All notifications marked as read', 'success');
-                    document.querySelectorAll('.notification-item.unread').forEach(item => {
-                        item.classList.remove('unread');
-                    });
+                    document.querySelectorAll('.notification-item.unread').forEach(i => i.classList.remove('unread'));
                     const badge = document.querySelector('.notification-dot');
                     if (badge) badge.style.display = 'none';
                 }
             })
-            .catch(error => {
-                console.error('Error marking notifications as read:', error);
-                showNotification('Failed to mark notifications as read', 'error');
-            });
+            .catch(() => showNotification('Failed to mark notifications as read', 'error'));
         };
-        
-        // ---------------------------------------------------------------------
-        // SEARCH FUNCTIONALITY
-        // ---------------------------------------------------------------------
-        
-        window.openSearchModal = function() {
+
+        // ---- Search ----
+        window.openSearchModal = function () {
             const modal = document.getElementById('searchModal');
-            if (modal) {
-                modal.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-                const input = document.getElementById('globalSearchInput');
-                if (input) {
-                    setTimeout(() => input.focus(), 100);
-                }
-            }
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+            setTimeout(() => document.getElementById('globalSearchInput')?.focus(), 100);
         };
-        
-        window.closeSearchModal = function() {
+        window.closeSearchModal = function () {
             const modal = document.getElementById('searchModal');
             if (modal) {
                 modal.classList.add('hidden');
                 document.body.style.overflow = 'auto';
             }
         };
-        
-        window.performSearch = function() {
+
+        window.performSearch = function () {
             const input = document.getElementById('globalSearchInput');
             const category = document.getElementById('searchCategory');
-            
             if (!input || !input.value.trim()) {
                 showNotification('Please enter a search term', 'warning');
                 return;
             }
-            
             const term = encodeURIComponent(input.value.trim());
             const categoryValue = category ? category.value : 'all';
-            
             let url = `/search?q=${term}`;
-            if (categoryValue !== 'all') {
-                url += `&category=${categoryValue}`;
-            }
-            
+            if (categoryValue !== 'all') url += `&category=${categoryValue}`;
             saveRecentSearch(input.value.trim());
             window.location.href = url;
         };
-        
+
         function saveRecentSearch(term) {
             let recentSearches = JSON.parse(localStorage.getItem('recentSearches') || '[]');
             recentSearches = recentSearches.filter(s => s !== term);
             recentSearches.unshift(term);
-            if (recentSearches.length > 10) {
-                recentSearches = recentSearches.slice(0, 10);
-            }
+            if (recentSearches.length > 10) recentSearches = recentSearches.slice(0, 10);
             localStorage.setItem('recentSearches', JSON.stringify(recentSearches));
             renderRecentSearches();
         }
-        
+
         function renderRecentSearches() {
             const container = document.getElementById('recentSearchesList');
             if (!container) return;
-            
             const searches = JSON.parse(localStorage.getItem('recentSearches') || '[]');
             if (searches.length === 0) {
                 container.innerHTML = '<span class="text-xs" style="color: var(--text-secondary);">No recent searches</span>';
                 return;
             }
-            
             container.innerHTML = searches.map(term => `
                 <span class="recent-search-item cursor-pointer px-3 py-1 rounded-full text-xs transition-all duration-200 hover:bg-opacity-20"
                       style="background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-secondary);"
@@ -660,306 +814,182 @@
                 </span>
             `).join('');
         }
-        
         renderRecentSearches();
-        
-        const searchInput = document.getElementById('globalSearchInput');
-        if (searchInput) {
-            searchInput.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    performSearch();
-                }
-            });
-        }
-        
-        document.getElementById('performSearch')?.addEventListener('click', performSearch);
-        document.getElementById('cancelSearch')?.addEventListener('click', closeSearchModal);
-        
-        document.getElementById('clearSearch')?.addEventListener('click', function() {
-            const input = document.getElementById('globalSearchInput');
-            if (input) {
-                input.value = '';
-                input.focus();
+
+        document.getElementById('globalSearchInput')?.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                performSearch();
             }
         });
-        
-        document.getElementById('clearRecentSearchesBtn')?.addEventListener('click', function() {
+        document.getElementById('performSearch')?.addEventListener('click', performSearch);
+        document.getElementById('cancelSearch')?.addEventListener('click', closeSearchModal);
+        document.getElementById('clearSearch')?.addEventListener('click', function () {
+            const input = document.getElementById('globalSearchInput');
+            if (input) { input.value = ''; input.focus(); }
+        });
+        document.getElementById('clearRecentSearchesBtn')?.addEventListener('click', function () {
             if (confirm('Clear all recent searches?')) {
                 localStorage.removeItem('recentSearches');
                 renderRecentSearches();
                 showNotification('Recent searches cleared', 'info');
             }
         });
-        
         document.getElementById('advancedSearchBtn')?.addEventListener('click', openSearchModal);
-        
+
         const quickSearch = document.getElementById('quickSearchInput');
         if (quickSearch) {
-            quickSearch.addEventListener('keydown', function(e) {
+            quickSearch.addEventListener('keydown', function (e) {
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     const term = encodeURIComponent(this.value.trim());
-                    if (term) {
-                        window.location.href = `/search?q=${term}`;
-                    }
+                    if (term) window.location.href = `/search?q=${term}`;
                 }
             });
-            quickSearch.addEventListener('focus', function() {
-                this.select();
-            });
+            quickSearch.addEventListener('focus', function () { this.select(); });
         }
-        
         document.getElementById('mobileSearchBtn')?.addEventListener('click', openSearchModal);
-        
+
         const searchModal = document.getElementById('searchModal');
         if (searchModal) {
-            searchModal.addEventListener('click', function(e) {
-                if (e.target === searchModal) {
-                    closeSearchModal();
-                }
+            searchModal.addEventListener('click', function (e) {
+                if (e.target === searchModal) closeSearchModal();
             });
         }
-        
-        // ---------------------------------------------------------------------
-        // EMAIL MANAGEMENT FUNCTIONS
-        // ---------------------------------------------------------------------
-        
-        window.syncAllEmails = function() {
+
+        // ---- Email management ----
+        window.syncAllEmails = function () {
             const btn = document.querySelector('.quick-action-btn .fa-sync')?.closest('.quick-action-btn');
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
-            }
-            
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...'; }
             fetch('/email-accounts/sync-all', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                }
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': CSRF }
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     showNotification('All emails synced successfully!', 'success');
                     setTimeout(() => window.location.reload(), 1500);
-                } else {
-                    showNotification(data.message || 'Failed to sync emails', 'error');
-                }
+                } else showNotification(data.message || 'Failed to sync emails', 'error');
             })
-            .catch(error => {
-                console.error('Error syncing emails:', error);
-                showNotification('An error occurred while syncing emails', 'error');
-            })
+            .catch(() => showNotification('An error occurred while syncing emails', 'error'))
             .finally(() => {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fas fa-sync text-white text-xs"></i>';
-                }
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync text-white text-xs"></i>'; }
             });
         };
-        
-        window.syncAccount = function(accountId) {
+
+        window.syncAccount = function (accountId) {
             const btn = event?.target?.closest('button');
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-            }
-            
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
             fetch(`/email-accounts/${accountId}/sync`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                }
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': CSRF }
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     showNotification('Account synced successfully!', 'success');
                     setTimeout(() => window.location.reload(), 1500);
-                } else {
-                    showNotification(data.message || 'Failed to sync account', 'error');
-                }
+                } else showNotification(data.message || 'Failed to sync account', 'error');
             })
-            .catch(error => {
-                console.error('Error syncing account:', error);
-                showNotification('An error occurred while syncing account', 'error');
-            })
+            .catch(() => showNotification('An error occurred while syncing account', 'error'))
             .finally(() => {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fas fa-sync text-xs"></i>';
-                }
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync text-xs"></i>'; }
             });
         };
-        
-        window.setPrimaryAccount = function(accountId) {
+
+        window.setPrimaryAccount = function (accountId) {
             if (!confirm('Set this as your primary email account?')) return;
-            
             fetch(`/email-accounts/${accountId}/set-primary`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                }
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': CSRF }
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     showNotification('Primary account set successfully!', 'success');
                     setTimeout(() => window.location.reload(), 1500);
-                } else {
-                    showNotification(data.message || 'Failed to set primary account', 'error');
-                }
+                } else showNotification(data.message || 'Failed to set primary account', 'error');
             })
-            .catch(error => {
-                console.error('Error setting primary account:', error);
-                showNotification('An error occurred while setting primary account', 'error');
-            });
+            .catch(() => showNotification('An error occurred while setting primary account', 'error'));
         };
-        
-        window.deleteAccount = function(accountId, email) {
+
+        window.deleteAccount = function (accountId, email) {
             if (!confirm(`Delete email account "${email}"? This action cannot be undone.`)) return;
-            
             fetch(`/email-accounts/${accountId}`, {
                 method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                }
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': CSRF }
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
                 if (data.success) {
                     showNotification('Account deleted successfully!', 'success');
                     setTimeout(() => window.location.reload(), 1500);
-                } else {
-                    showNotification(data.message || 'Failed to delete account', 'error');
-                }
+                } else showNotification(data.message || 'Failed to delete account', 'error');
             })
-            .catch(error => {
-                console.error('Error deleting account:', error);
-                showNotification('An error occurred while deleting account', 'error');
-            });
+            .catch(() => showNotification('An error occurred while deleting account', 'error'));
         };
-        
-        // ---------------------------------------------------------------------
-        // SMS MANAGEMENT FUNCTIONS
-        // ---------------------------------------------------------------------
-        
-        window.openSmsCompose = function() {
-            window.location.href = '/sms/compose';
-        };
-        
-        window.testSmsConnection = function() {
+
+        // ---- SMS management ----
+        window.openSmsCompose = function () { window.location.href = '/sms/compose'; };
+        window.testSmsConnection = function () {
             const btn = event?.target?.closest('button');
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...';
-            }
-            
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...'; }
             fetch('/sms/test-connection', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                }
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': CSRF }
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
-                if (data.success) {
-                    showNotification('SMS connection test successful!', 'success');
-                } else {
-                    showNotification(data.message || 'SMS connection test failed', 'error');
-                }
+                if (data.success) showNotification('SMS connection test successful!', 'success');
+                else showNotification(data.message || 'SMS connection test failed', 'error');
             })
-            .catch(error => {
-                console.error('Error testing SMS connection:', error);
-                showNotification('An error occurred while testing SMS connection', 'error');
-            })
+            .catch(() => showNotification('An error occurred while testing SMS connection', 'error'))
             .finally(() => {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fas fa-wifi text-white text-xs"></i>';
-                }
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-wifi text-white text-xs"></i>'; }
             });
         };
-        
-        window.refreshSmsStatus = function() {
-            window.location.reload();
-        };
-        
-        // ---------------------------------------------------------------------
-        // WHATSAPP MANAGEMENT FUNCTIONS
-        // ---------------------------------------------------------------------
-        
-        window.openWhatsAppCompose = function() {
-            window.location.href = '/admin/whatsapp/compose';
-        };
-        
-        window.testWhatsAppConnection = function() {
+        window.refreshSmsStatus = function () { window.location.reload(); };
+
+        // ---- WhatsApp management ----
+        window.openWhatsAppCompose = function () { window.location.href = '/admin/whatsapp/compose'; };
+        window.testWhatsAppConnection = function () {
             const btn = event?.target?.closest('button');
-            if (btn) {
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...';
-            }
-            
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...'; }
             fetch('/admin/whatsapp/test-connection', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                }
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': CSRF }
             })
-            .then(response => response.json())
+            .then(r => r.json())
             .then(data => {
-                if (data.success) {
-                    showNotification('WhatsApp connection test successful!', 'success');
-                } else {
-                    showNotification(data.message || 'WhatsApp connection test failed', 'error');
-                }
+                if (data.success) showNotification('WhatsApp connection test successful!', 'success');
+                else showNotification(data.message || 'WhatsApp connection test failed', 'error');
             })
-            .catch(error => {
-                console.error('Error testing WhatsApp connection:', error);
-                showNotification('An error occurred while testing WhatsApp connection', 'error');
-            })
+            .catch(() => showNotification('An error occurred while testing WhatsApp connection', 'error'))
             .finally(() => {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fas fa-wifi text-white text-xs"></i>';
-                }
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-wifi text-white text-xs"></i>'; }
             });
         };
-        
-        window.refreshWhatsAppStatus = function() {
-            window.location.reload();
-        };
-        
-        // ---------------------------------------------------------------------
-        // NOTIFICATION HELPER
-        // ---------------------------------------------------------------------
-        
-        window.showNotification = function(message, type = 'info') {
+        window.refreshWhatsAppStatus = function () { window.location.reload(); };
+
+        // ---- Notification helper ----
+        window.showNotification = function (message, type = 'info') {
             const colors = {
                 success: '#22c55e',
-                error: '#ef4444',
+                error:   '#ef4444',
                 warning: '#f59e0b',
-                info: '#3b82f6'
+                info:    '#3b82f6'
             };
-            
             const div = document.createElement('div');
             div.textContent = message;
             div.style.cssText = `
-                position: fixed; bottom: 20px; right: 20px; 
-                padding: 12px 24px; border-radius: 8px; 
-                background: ${colors[type] || colors.info}; 
+                position: fixed; bottom: 20px; right: 20px;
+                padding: 12px 24px; border-radius: 8px;
+                background: ${colors[type] || colors.info};
                 color: white; z-index: 99999;
                 font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
                 animation: slideIn 0.3s ease;
-                max-width: 400px;
-            `;
+                max-width: 400px;`;
             document.body.appendChild(div);
             setTimeout(() => {
                 div.style.opacity = '0';
@@ -967,14 +997,11 @@
                 setTimeout(() => div.remove(), 300);
             }, 3000);
         };
-        
-        // ---------------------------------------------------------------------
-        // SCROLL TO TOP
-        // ---------------------------------------------------------------------
-        
+
+        // ---- Scroll to top ----
         const scrollToTopBtn = document.getElementById('scrollToTop');
         if (scrollToTopBtn) {
-            window.addEventListener('scroll', function() {
+            window.addEventListener('scroll', function () {
                 if (window.scrollY > 400) {
                     scrollToTopBtn.style.opacity = '1';
                     scrollToTopBtn.style.pointerEvents = 'auto';
@@ -983,110 +1010,73 @@
                     scrollToTopBtn.style.pointerEvents = 'none';
                 }
             });
-            
-            scrollToTopBtn.addEventListener('click', function() {
+            scrollToTopBtn.addEventListener('click', function () {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             });
         }
-        
-        // ---------------------------------------------------------------------
-        // KEYBOARD SHORTCUTS
-        // ---------------------------------------------------------------------
-        
-        document.addEventListener('keydown', function(e) {
-            // Ctrl+Shift+T - Open theme settings
+
+        // ---- Keyboard shortcuts ----
+        document.addEventListener('keydown', function (e) {
+            // Ctrl+Shift+T → open theme settings
             if (e.ctrlKey && e.shiftKey && e.key === 'T') {
                 e.preventDefault();
-                const btn = document.getElementById('themeSettingsButton');
-                if (btn) btn.click();
+                document.getElementById('themeSettingsButton')?.click();
             }
-            
-            // / or Ctrl+K - Open search
-            if ((e.key === '/' || (e.ctrlKey && e.key === 'k')) && 
+            // / or Ctrl+K → open search
+            if ((e.key === '/' || (e.ctrlKey && e.key === 'k')) &&
                 !e.target.closest('input') && !e.target.closest('textarea') && !e.target.closest('select')) {
                 e.preventDefault();
                 openSearchModal();
             }
-            
-            // Escape - Close modals
+            // Escape → close modals
             if (e.key === 'Escape') {
                 closeSearchModal();
-                closeThemeModalFunc();
+                if (typeof window.__closeThemeModal === 'function') window.__closeThemeModal();
             }
         });
-        
-        // ---------------------------------------------------------------------
-        // CLOSE MODAL HELPERS
-        // ---------------------------------------------------------------------
-        
-        window.closeEmailModal = function() {
-            const modal = document.getElementById('emailManagementModal');
-            if (modal) {
-                modal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            }
+
+        // ---- Global close helpers ----
+        window.closeEmailModal = function () {
+            const m = document.getElementById('emailManagementModal');
+            if (m) { m.classList.add('hidden'); document.body.style.overflow = 'auto'; }
         };
-        
-        window.closeSmsModal = function() {
-            const modal = document.getElementById('smsManagementModal');
-            if (modal) {
-                modal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            }
+        window.closeSmsModal = function () {
+            const m = document.getElementById('smsManagementModal');
+            if (m) { m.classList.add('hidden'); document.body.style.overflow = 'auto'; }
         };
-        
-        window.closeWhatsAppModal = function() {
-            const modal = document.getElementById('whatsappManagementModal');
-            if (modal) {
-                modal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            }
+        window.closeWhatsAppModal = function () {
+            const m = document.getElementById('whatsappManagementModal');
+            if (m) { m.classList.add('hidden'); document.body.style.overflow = 'auto'; }
         };
-        
-        window.closeInvoiceModal = function() {
-            const modal = document.getElementById('invoiceManagementModal');
-            if (modal) {
-                modal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            }
+        window.closeInvoiceModal = function () {
+            const m = document.getElementById('invoiceManagementModal');
+            if (m) { m.classList.add('hidden'); document.body.style.overflow = 'auto'; }
         };
-        
-        window.closeAdminToolsModal = function() {
-            const modal = document.getElementById('administrativeToolsModal');
-            if (modal) {
-                modal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            }
+        window.closeAdminToolsModal = function () {
+            const m = document.getElementById('administrativeToolsModal');
+            if (m) { m.classList.add('hidden'); document.body.style.overflow = 'auto'; }
         };
-        
-        window.closeBillingModal = function() {
-            const modal = document.getElementById('billingManagementModal');
-            if (modal) {
-                modal.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            }
+        window.closeBillingModal = function () {
+            const m = document.getElementById('billingManagementModal');
+            if (m) { m.classList.add('hidden'); document.body.style.overflow = 'auto'; }
         };
     });
-    
+
     // =========================================================================
-    // WINDOW LOAD - FINAL CHECKS
+    // WINDOW LOAD — FINAL CHECKS
     // =========================================================================
-    
-    window.addEventListener('load', function() {
-        setTimeout(function() {
+
+    window.addEventListener('load', function () {
+        setTimeout(function () {
             const savedState = localStorage.getItem('sidebarCollapsed') === 'true';
             const sidebar = document.querySelector('.sidebar');
-            
             if (sidebar) {
                 const hasCollapsedClass = sidebar.classList.contains('collapsed');
-                if (hasCollapsedClass !== savedState) {
-                    toggleSidebar(savedState, false);
-                }
+                if (hasCollapsedClass !== savedState) toggleSidebar(savedState, false);
             }
-            
             document.documentElement.classList.remove('sidebar-loading');
             document.documentElement.classList.add('sidebar-initialized');
-            
+
             const toggleBtn = document.getElementById('toggleSidebar');
             if (toggleBtn && !toggleBtn.classList.contains('interacted')) {
                 if (localStorage.getItem('sidebarCollapsed') !== null) {
@@ -1095,527 +1085,5 @@
             }
         }, 10);
     });
-    
-    // =========================================================================
-    // ALPINE.JS THEME HANDLER - COMPLETE THEME MANAGEMENT
-    // =========================================================================
-    
-    function initAlpineThemeHandler() {
-        if (typeof Alpine === 'undefined') {
-            setTimeout(initAlpineThemeHandler, 100);
-            return;
-        }
-
-        Alpine.data('themeModalHandler', () => ({
-            // Theme state
-            appearance: '{{ $appearance ?? "system" }}',
-            sidebarTheme: '{{ $sidebarTheme ?? "default" }}',
-            density: '{{ $currentDensity ?? "comfortable" }}',
-            headerStyle: '{{ $currentHeader ?? "default" }}',
-            customColors: {{ isset($customColors) ? json_encode($customColors) : '{}' }},
-            
-            // UI state
-            isSaving: false,
-            isModalOpen: false,
-            
-            // Initialize
-            init() {
-                // Load saved settings from localStorage
-                this.loadFromLocalStorage();
-                
-                // Apply initial theme
-                this.applyTheme();
-                
-                // Listen for system theme changes
-                this.systemThemeListener = window.matchMedia('(prefers-color-scheme: dark)');
-                this.systemThemeListener.addEventListener('change', () => {
-                    if (this.appearance === 'system') {
-                        this.applyAppearance();
-                    }
-                });
-                
-                // Listen for theme color updates from color picker
-                document.addEventListener('theme-colors-updated', (e) => {
-                    if (e.detail?.colors) {
-                        this.customColors = e.detail.colors;
-                        this.sidebarTheme = 'custom';
-                        this.saveTheme();
-                    }
-                });
-            },
-            
-            // Load from localStorage
-            loadFromLocalStorage() {
-                const savedAppearance = localStorage.getItem('appearance');
-                if (savedAppearance) this.appearance = savedAppearance;
-                
-                const savedSidebarTheme = localStorage.getItem('sidebarTheme');
-                if (savedSidebarTheme) this.sidebarTheme = savedSidebarTheme;
-                
-                const savedDensity = localStorage.getItem('density');
-                if (savedDensity) this.density = savedDensity;
-                
-                const savedHeaderStyle = localStorage.getItem('headerStyle');
-                if (savedHeaderStyle) this.headerStyle = savedHeaderStyle;
-            },
-            
-            // Apply theme to page
-            applyTheme() {
-                this.applyAppearance();
-                this.applySidebarTheme();
-                this.applyDensity();
-                this.applyHeaderStyle();
-                this.updateLivePreview();
-            },
-            
-            // Apply appearance
-            applyAppearance() {
-                const body = document.body;
-                const html = document.documentElement;
-                
-                let theme = this.appearance;
-                if (theme === 'system') {
-                    theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-                }
-                
-                body.setAttribute('data-theme', theme);
-                
-                if (theme === 'dark') {
-                    html.classList.add('dark');
-                    html.classList.remove('light');
-                } else {
-                    html.classList.add('light');
-                    html.classList.remove('dark');
-                }
-                
-                // Update meta theme-color
-                const metaThemeColor = document.querySelector('meta[name="theme-color"]');
-                if (metaThemeColor) {
-                    metaThemeColor.content = theme === 'dark' ? '#1e1e2d' : '#ffffff';
-                }
-            },
-            
-            // Apply sidebar theme
-            applySidebarTheme() {
-                const sidebar = document.getElementById('sidebar');
-                if (!sidebar) return;
-                
-                sidebar.setAttribute('data-sidebar-theme', this.sidebarTheme);
-                
-                // If custom theme, apply inline styles
-                if (this.sidebarTheme === 'custom' && this.customColors && Object.keys(this.customColors).length > 0) {
-                    const colors = this.customColors;
-                    const bgStart = colors.sidebar_bg_start || '#7267f0';
-                    const bgEnd = colors.sidebar_bg_end || '#6258e0';
-                    const text = colors.sidebar_text || '#ffffff';
-                    const activeBg = colors.sidebar_active_bg || 'rgba(255, 255, 255, 0.2)';
-                    const hoverBg = colors.sidebar_hover_bg || 'rgba(255, 255, 255, 0.12)';
-                    const border = colors.sidebar_border || 'transparent';
-                    const shadow = colors.sidebar_shadow || '0 0 20px rgba(114, 103, 240, 0.3)';
-                    
-                    sidebar.style.background = `linear-gradient(180deg, ${bgStart} 0%, ${bgEnd} 100%) !important`;
-                    sidebar.style.setProperty('--sidebar-text', text);
-                    sidebar.style.setProperty('--sidebar-active-bg', activeBg);
-                    sidebar.style.setProperty('--sidebar-hover-bg', hoverBg);
-                    sidebar.style.setProperty('--sidebar-border', border);
-                    sidebar.style.setProperty('--sidebar-shadow', shadow);
-                } else {
-                    // Remove inline styles for predefined themes
-                    sidebar.style.background = '';
-                    sidebar.style.removeProperty('--sidebar-text');
-                    sidebar.style.removeProperty('--sidebar-active-bg');
-                    sidebar.style.removeProperty('--sidebar-hover-bg');
-                    sidebar.style.removeProperty('--sidebar-border');
-                    sidebar.style.removeProperty('--sidebar-shadow');
-                }
-            },
-            
-            // Apply density
-            applyDensity() {
-                const body = document.body;
-                const sidebar = document.getElementById('sidebar');
-                
-                body.setAttribute('data-density', this.density);
-                if (sidebar) {
-                    sidebar.setAttribute('data-density', this.density);
-                }
-                
-                // Apply density CSS variables
-                const root = document.documentElement;
-                const densityStyles = {
-                    compact: {
-                        '--sidebar-padding': '0.5rem',
-                        '--nav-item-spacing': '0.25rem',
-                        '--font-size-base': '0.875rem',
-                        '--card-padding': '1rem'
-                    },
-                    comfortable: {
-                        '--sidebar-padding': '1rem',
-                        '--nav-item-spacing': '0.5rem',
-                        '--font-size-base': '1rem',
-                        '--card-padding': '1.5rem'
-                    },
-                    spacious: {
-                        '--sidebar-padding': '1.5rem',
-                        '--nav-item-spacing': '0.75rem',
-                        '--font-size-base': '1.125rem',
-                        '--card-padding': '2rem'
-                    }
-                };
-                
-                const styles = densityStyles[this.density] || densityStyles.comfortable;
-                Object.entries(styles).forEach(([key, value]) => {
-                    root.style.setProperty(key, value);
-                });
-            },
-            
-            // Apply header style
-            applyHeaderStyle() {
-                const header = document.querySelector('.header');
-                if (!header) return;
-                
-                header.classList.remove('glass', 'solid');
-                if (this.headerStyle !== 'default') {
-                    header.classList.add(this.headerStyle);
-                }
-            },
-            
-            // Update live preview
-            updateLivePreview() {
-                const preview = document.querySelector('.theme-modal-modern .w-16.h-16');
-                if (!preview) return;
-                
-                if (this.sidebarTheme === 'custom' && this.customColors) {
-                    const bgStart = this.customColors.sidebar_bg_start || '#7267f0';
-                    const bgEnd = this.customColors.sidebar_bg_end || '#6258e0';
-                    preview.style.background = `linear-gradient(180deg, ${bgStart} 0%, ${bgEnd} 100%)`;
-                } else {
-                    const themeColors = {
-                        'default': 'linear-gradient(135deg, #7267f0, #6258e0)',
-                        'dark': 'linear-gradient(135deg, #1a1a2e, #16213e)',
-                        'light': 'linear-gradient(135deg, #ffffff, #f0f0f0)',
-                        'blue': 'linear-gradient(135deg, #1e3a5f, #1a56db)',
-                        'green': 'linear-gradient(135deg, #065f46, #059669)'
-                    };
-                    preview.style.background = themeColors[this.sidebarTheme] || 'var(--primary)';
-                }
-            },
-            
-            // Update appearance
-            async updateAppearance(value) {
-                this.appearance = value;
-                this.applyAppearance();
-                await this.saveTheme();
-            },
-            
-            // Update sidebar theme
-            async updateSidebarTheme(value) {
-                this.sidebarTheme = value;
-                this.applySidebarTheme();
-                this.updateLivePreview();
-                await this.saveTheme();
-            },
-            
-            // Update density
-            async updateDensity(value) {
-                this.density = value;
-                this.applyDensity();
-                await this.saveTheme();
-            },
-            
-            // Update header style
-            async updateHeaderStyle(value) {
-                this.headerStyle = value;
-                this.applyHeaderStyle();
-                await this.saveTheme();
-            },
-            
-            // Save theme to server
-            async saveTheme() {
-                if (this.isSaving) return;
-                this.isSaving = true;
-                
-                try {
-                    const response = await fetch('/theme/update', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                        },
-                        body: JSON.stringify({
-                            appearance: this.appearance,
-                            sidebar_theme: this.sidebarTheme,
-                            density: this.density,
-                            header_style: this.headerStyle,
-                            custom_colors: this.sidebarTheme === 'custom' ? this.customColors : {}
-                        })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        // Save to localStorage
-                        localStorage.setItem('appearance', this.appearance);
-                        localStorage.setItem('sidebarTheme', this.sidebarTheme);
-                        localStorage.setItem('density', this.density);
-                        localStorage.setItem('headerStyle', this.headerStyle);
-                        
-                        // Update custom CSS if provided
-                        if (data.css) {
-                            this.updateThemeCss(data.css);
-                        }
-                        
-                        this.showNotification('Theme updated successfully!', 'success');
-                        
-                        // Dispatch event for other components
-                        document.dispatchEvent(new CustomEvent('theme-updated', {
-                            detail: {
-                                settings: {
-                                    appearance: this.appearance,
-                                    sidebar_theme: this.sidebarTheme,
-                                    density: this.density,
-                                    header_style: this.headerStyle,
-                                    custom_colors: this.customColors
-                                }
-                            }
-                        }));
-                    } else {
-                        this.showNotification(data.message || 'Failed to update theme', 'error');
-                    }
-                } catch (error) {
-                    console.error('Error saving theme:', error);
-                    this.showNotification('An error occurred while saving theme', 'error');
-                } finally {
-                    this.isSaving = false;
-                }
-            },
-            
-            // Update theme CSS
-            updateThemeCss(css) {
-                document.querySelectorAll('#custom-theme-css').forEach(el => el.remove());
-                
-                const style = document.createElement('style');
-                style.id = 'custom-theme-css';
-                style.textContent = css;
-                document.head.appendChild(style);
-            },
-            
-            // Reset theme
-            async resetTheme() {
-                if (!confirm('Reset all theme settings to default?')) return;
-                
-                try {
-                    const response = await fetch('/theme/reset', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || ''
-                        }
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        this.appearance = data.settings?.appearance || 'system';
-                        this.sidebarTheme = data.settings?.sidebar_theme || 'default';
-                        this.density = data.settings?.density || 'comfortable';
-                        this.headerStyle = data.settings?.header_style || 'default';
-                        this.customColors = data.colors || {};
-                        
-                        // Apply reset
-                        this.applyTheme();
-                        if (data.css) {
-                            this.updateThemeCss(data.css);
-                        }
-                        
-                        // Clear localStorage
-                        localStorage.removeItem('appearance');
-                        localStorage.removeItem('sidebarTheme');
-                        localStorage.removeItem('density');
-                        localStorage.removeItem('headerStyle');
-                        
-                        this.showNotification('Theme reset to default', 'success');
-                        
-                        // Reload after a moment
-                        setTimeout(() => window.location.reload(), 500);
-                    } else {
-                        this.showNotification(data.message || 'Failed to reset theme', 'error');
-                    }
-                } catch (error) {
-                    console.error('Error resetting theme:', error);
-                    this.showNotification('An error occurred while resetting theme', 'error');
-                }
-            },
-            
-            // Open modal
-            openModal() {
-                this.isModalOpen = true;
-                document.getElementById('themeSettingsModal')?.classList.remove('hidden');
-                document.body.style.overflow = 'hidden';
-            },
-            
-            // Close modal
-            closeModal() {
-                this.isModalOpen = false;
-                document.getElementById('themeSettingsModal')?.classList.add('hidden');
-                document.body.style.overflow = 'auto';
-            },
-            
-            // Show notification
-            showNotification(message, type = 'info') {
-                if (window.showToast) {
-                    window.showToast(message, type);
-                    return;
-                }
-                
-                const colors = {
-                    success: '#22c55e',
-                    error: '#ef4444',
-                    info: '#3b82f6'
-                };
-                
-                const div = document.createElement('div');
-                div.textContent = message;
-                div.style.cssText = `
-                    position: fixed; bottom: 20px; right: 20px; 
-                    padding: 12px 24px; border-radius: 8px; 
-                    background: ${colors[type] || colors.info}; 
-                    color: white; z-index: 99999;
-                    font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-                    animation: slideIn 0.3s ease;
-                    max-width: 400px;
-                `;
-                document.body.appendChild(div);
-                setTimeout(() => {
-                    div.style.opacity = '0';
-                    div.style.transition = 'opacity 0.3s ease';
-                    setTimeout(() => div.remove(), 300);
-                }, 3000);
-            }
-        }));
-    }
-
-    // Initialize Alpine theme handler
-    initAlpineThemeHandler();
-    
-    // =========================================================================
-    // ADDITIONAL CSS FOR THEME MODAL
-    // =========================================================================
-    
-    const themeModalStyles = document.createElement('style');
-    themeModalStyles.textContent = `
-        /* Theme Modal Additional Styles */
-        .theme-settings-gear {
-            animation: spin-slow 3s linear infinite;
-            transition: all 0.3s ease;
-            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
-        }
-        
-        .theme-settings-gear:hover {
-            animation-duration: 1s;
-            transform: scale(1.1);
-            filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
-        }
-        
-        .gear-spin-fast {
-            animation: spin-fast 1s linear infinite !important;
-        }
-        
-        @keyframes spin-slow {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-        }
-        
-        @keyframes spin-fast {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-        }
-        
-        @keyframes modalFadeIn {
-            from {
-                opacity: 0;
-                transform: scale(0.9) translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: scale(1) translateY(0);
-            }
-        }
-        
-        @keyframes slideIn {
-            from { transform: translateY(20px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-        
-        .theme-modal-modern {
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 20px;
-            box-shadow: 0 25px 80px rgba(0,0,0,0.35);
-            animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-            max-height: 90vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-        
-        @keyframes modalSlideUp {
-            from { 
-                opacity: 0;
-                transform: translateY(30px) scale(0.96);
-            }
-            to { 
-                opacity: 1;
-                transform: translateY(0) scale(1);
-            }
-        }
-        
-        .appearance-option.active,
-        .sidebar-theme-option.active,
-        .density-option.active,
-        .header-option.active {
-            border-color: var(--primary) !important;
-            box-shadow: 0 0 0 2px var(--primary), 0 4px 12px rgba(var(--primary-rgb), 0.15);
-        }
-        
-        .appearance-option:hover,
-        .sidebar-theme-option:hover,
-        .density-option:hover,
-        .header-option:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-        }
-        
-        @media (max-width: 640px) {
-            .theme-modal-modern {
-                max-width: 100%;
-                margin: 0.5rem;
-                border-radius: 16px;
-                max-height: 95vh;
-            }
-            
-            .theme-modal-modern .grid-cols-3 {
-                grid-template-columns: repeat(3, 1fr);
-                gap: 0.5rem;
-            }
-            
-            .theme-modal-modern .grid-cols-5 {
-                grid-template-columns: repeat(5, 1fr);
-                gap: 0.25rem;
-            }
-            
-            .theme-modal-modern .grid-cols-2 {
-                grid-template-columns: 1fr;
-                gap: 1rem;
-            }
-        }
-        
-        @media (prefers-color-scheme: dark) {
-            .theme-modal-modern {
-                border-color: rgba(255, 255, 255, 0.08);
-            }
-        }
-    `;
-    document.head.appendChild(themeModalStyles);
 })();
 </script>

@@ -37,6 +37,9 @@ class Property extends Model
         'digital_address',
         'zone',
         'section',
+        // ✅ NEW: broader geographic location (above zone/section)
+        'region',
+        'area',
         // ✅ NEW: coordinate + city columns
         'latitude',
         'longitude',
@@ -125,6 +128,10 @@ class Property extends Model
         'photo_gallery',
         // ✅ NEW
         'has_coordinates',
+        // ✅ NEW: region/area helpers
+        'full_location',
+        'has_region',
+        'has_area',
     ];
 
 
@@ -197,6 +204,81 @@ class Property extends Model
     public function getHasCoordinatesAttribute(): bool
     {
         return $this->latitude !== null && $this->longitude !== null;
+    }
+
+    // ============================================================
+    // ✅ NEW: Region / Area mutators + accessors
+    // ============================================================
+
+    /**
+     * Normalise region on set. Empty strings / whitespace → null.
+     * Title-cases the value so "greater accra" and "Greater Accra"
+     * don't create two distinct filter values.
+     */
+    public function setRegionAttribute($value): void
+    {
+        if ($value === '' || $value === null) {
+            $this->attributes['region'] = null;
+            return;
+        }
+
+        $trimmed = trim((string) $value);
+        $this->attributes['region'] = $trimmed === '' ? null : Str::title($trimmed);
+    }
+
+    /**
+     * Normalise area on set. Empty strings / whitespace → null.
+     * Preserves the caller's casing (areas are free-text and may
+     * legitimately be mixed-case, e.g. "East Legon", "Tema Community 5").
+     */
+    public function setAreaAttribute($value): void
+    {
+        if ($value === '' || $value === null) {
+            $this->attributes['area'] = null;
+            return;
+        }
+
+        $trimmed = trim((string) $value);
+        $this->attributes['area'] = $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * ✅ NEW: Boolean — true when region is set.
+     */
+    public function getHasRegionAttribute(): bool
+    {
+        return !empty($this->attributes['region']);
+    }
+
+    /**
+     * ✅ NEW: Boolean — true when area is set.
+     */
+    public function getHasAreaAttribute(): bool
+    {
+        return !empty($this->attributes['area']);
+    }
+
+    /**
+     * ✅ NEW: One-line location summary, ordered top-down:
+     *
+     *   Area, Zone, Section, Block X, Street Name, Region
+     *
+     * Region is placed last because in reading order it acts as the
+     * "where in the country" anchor. Anything missing is skipped so
+     * partially-filled addresses still render cleanly.
+     */
+    public function getFullLocationAttribute(): string
+    {
+        return collect([
+            $this->attributes['area']         ?? null,
+            $this->zone                        ?? null,
+            $this->section                     ?? null,
+            !empty($this->block_number) ? 'Block ' . $this->block_number : null,
+            $this->street_name                 ?? null,
+            $this->attributes['region']        ?? null,
+        ])
+            ->filter(fn ($v) => $v !== null && $v !== '')
+            ->implode(', ');
     }
 
      // ============================================================
@@ -300,6 +382,9 @@ class Property extends Model
         'digital_address' => 'nullable|string|max:255',
         'zone' => 'nullable|string|max:100',
         'section' => 'nullable|string|max:100',
+        // ✅ NEW: region + area validation
+        'region' => 'nullable|string|max:100',
+        'area'   => 'nullable|string|max:150',
         // ✅ NEW: coordinate validation
         'latitude' => 'nullable|numeric|between:-90,90',
         'longitude' => 'nullable|numeric|between:-180,180',
@@ -360,6 +445,21 @@ class Property extends Model
             // ⭐ FIX: Ensure construction_documents is set as array
             if (!isset($property->construction_documents) || $property->construction_documents === null) {
                 $property->construction_documents = [];
+            }
+
+            // ✅ NEW: Inherit region/area from the registration plan when the
+            // caller didn't supply them. Mirrors the existing zone/section
+            // inheritance just below.
+            if ($property->registration_plan_id) {
+                $plan = $property->registrationPlan;
+                if ($plan) {
+                    if (empty($property->region) && !empty($plan->region)) {
+                        $property->region = $plan->region;
+                    }
+                    if (empty($property->area) && !empty($plan->area)) {
+                        $property->area = $plan->area;
+                    }
+                }
             }
 
             // Generate property name if not provided and registration plan exists
@@ -478,6 +578,9 @@ class Property extends Model
                 'has_plans' => $property->has_plans,
                 'construction_documents_count' => $property->getConstructionDocumentCount(),
                 'has_coordinates' => $property->has_coordinates,
+                // ✅ NEW: region/area in the creation log
+                'region' => $property->region,
+                'area'   => $property->area,
             ]);
         });
 
@@ -553,6 +656,21 @@ class Property extends Model
                     'old_lng' => $property->getOriginal('longitude'),
                     'new_lat' => $property->latitude,
                     'new_lng' => $property->longitude,
+                ]);
+            }
+
+            // ✅ NEW: Log region/area changes
+            if ($property->isDirty('region')) {
+                Log::info("Property {$property->id} region changed", [
+                    'old' => $property->getOriginal('region'),
+                    'new' => $property->region,
+                ]);
+            }
+
+            if ($property->isDirty('area')) {
+                Log::info("Property {$property->id} area changed", [
+                    'old' => $property->getOriginal('area'),
+                    'new' => $property->area,
                 ]);
             }
 
@@ -666,6 +784,9 @@ class Property extends Model
                 'is_global_sequence' => $property->is_global_sequence,
                 'registration_pattern' => $property->registration_pattern,
                 'status' => $property->status,
+                // ✅ NEW: region/area in the deletion log
+                'region' => $property->region,
+                'area'   => $property->area,
             ]);
         });
 
@@ -1552,6 +1673,58 @@ public function linkedFamilyUsers()
     }
 
     /**
+     * ✅ NEW: Scope for properties in a given region (exact match)
+     */
+    public function scopeInRegion($query, string $region)
+    {
+        return $query->where('region', $region);
+    }
+
+    /**
+     * ✅ NEW: Scope for properties in a given area (partial match)
+     */
+    public function scopeInArea($query, string $area)
+    {
+        return $query->where('area', 'like', "%{$area}%");
+    }
+
+    /**
+     * ✅ NEW: Scope for properties with a region set
+     */
+    public function scopeHasRegion($query)
+    {
+        return $query->whereNotNull('region')->where('region', '!=', '');
+    }
+
+    /**
+     * ✅ NEW: Scope for properties without a region
+     */
+    public function scopeMissingRegion($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNull('region')->orWhere('region', '');
+        });
+    }
+
+    /**
+     * ✅ NEW: Scope for properties with an area set
+     */
+    public function scopeHasArea($query)
+    {
+        return $query->whereNotNull('area')->where('area', '!=', '');
+    }
+
+    /**
+     * ✅ NEW: Scope for properties without an area
+     */
+    public function scopeMissingArea($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNull('area')->orWhere('area', '');
+        });
+    }
+
+    /**
      * Scope for site allocations in global sequences
      */
     public function scopeGlobalSequence($query)
@@ -1715,7 +1888,7 @@ public function linkedFamilyUsers()
      */
     public function scopeWithoutTenants($query)
     {
-        return $query->whereDoesntHave('tenants');
+        return $query->doesntHave('tenants');
     }
 
     /**
@@ -1739,7 +1912,7 @@ public function linkedFamilyUsers()
      */
     public function scopeWithoutPhotos($query)
     {
-        return $query->whereDoesntHave('photos');
+        return $query->doesntHave('photos');
     }
 
     /**
@@ -1783,7 +1956,7 @@ public function linkedFamilyUsers()
      */
     public function scopeRentedWithoutTenants($query)
     {
-        return $query->where('is_rented', true)->whereDoesntHave('tenants');
+        return $query->where('is_rented', true)->doesntHave('tenants');
     }
 
     /**
@@ -1914,10 +2087,18 @@ public function linkedFamilyUsers()
 
     /**
      * Get full address attribute
+     *
+     * ✅ UPDATED: includes region + area at the front so the address
+     * renders as "Area, Zone, Section, Block, Street, House, ... Region"
+     * — same ordering as `full_location`.
      */
     public function getFullAddressAttribute(): string
     {
         $address = [];
+
+        // ✅ NEW: region + area first
+        if (!empty($this->attributes['region'])) $address[] = "Region: {$this->attributes['region']}";
+        if (!empty($this->attributes['area']))   $address[] = $this->attributes['area'];
 
         if ($this->property_name) $address[] = $this->property_name;
         if ($this->registration_pattern) $address[] = "Pattern: {$this->registration_pattern}";
@@ -1933,10 +2114,16 @@ public function linkedFamilyUsers()
 
     /**
      * Get physical address attribute (without digital address)
+     *
+     * ✅ UPDATED: includes region + area at the front.
      */
     public function getPhysicalAddressAttribute(): string
     {
         $address = [];
+
+        // ✅ NEW: region + area first
+        if (!empty($this->attributes['region'])) $address[] = "Region: {$this->attributes['region']}";
+        if (!empty($this->attributes['area']))   $address[] = $this->attributes['area'];
 
         if ($this->property_name) $address[] = $this->property_name;
         if ($this->registration_pattern) $address[] = "Pattern: {$this->registration_pattern}";
@@ -3359,6 +3546,22 @@ public function linkedFamilyUsers()
     }
 
     /**
+     * ✅ NEW: Get property count by region
+     */
+    public static function getPropertyCountByRegion($region): int
+    {
+        return self::where('region', $region)->count();
+    }
+
+    /**
+     * ✅ NEW: Get property count by area
+     */
+    public static function getPropertyCountByArea($area): int
+    {
+        return self::where('area', 'like', "%{$area}%")->count();
+    }
+
+    /**
      * Update registration plan progress and next available name
      */
     public function updateRegistrationPlanProgress(): void
@@ -3812,6 +4015,11 @@ public function linkedFamilyUsers()
             // ✅ NEW: Coordinate coverage
             'properties_with_coordinates' => self::hasCoordinates()->count(),
             'properties_missing_coordinates' => self::missingCoordinates()->count(),
+            // ✅ NEW: Region/area coverage
+            'properties_with_region' => self::hasRegion()->count(),
+            'properties_missing_region' => self::missingRegion()->count(),
+            'properties_with_area' => self::hasArea()->count(),
+            'properties_missing_area' => self::missingArea()->count(),
             // ✅ NEW: Photo statistics
             'properties_with_photos' => self::withPhotos()->count(),
             'properties_without_photos' => self::withoutPhotos()->count(),
@@ -3831,6 +4039,8 @@ public function linkedFamilyUsers()
 
     /**
      * Get site allocations by multiple criteria
+     *
+     * ✅ UPDATED: now accepts `region`, `area`, `has_region`, `has_area`
      */
     public static function search($criteria)
     {
@@ -3858,6 +4068,31 @@ public function linkedFamilyUsers()
 
         if (isset($criteria['registration_plan_id'])) {
             $query->byRegistrationPlan($criteria['registration_plan_id']);
+        }
+
+        // ✅ NEW: region/area filtering
+        if (isset($criteria['region'])) {
+            $query->inRegion($criteria['region']);
+        }
+
+        if (isset($criteria['area'])) {
+            $query->inArea($criteria['area']);
+        }
+
+        if (isset($criteria['has_region'])) {
+            if ($criteria['has_region'] === '1') {
+                $query->hasRegion();
+            } elseif ($criteria['has_region'] === '0') {
+                $query->missingRegion();
+            }
+        }
+
+        if (isset($criteria['has_area'])) {
+            if ($criteria['has_area'] === '1') {
+                $query->hasArea();
+            } elseif ($criteria['has_area'] === '0') {
+                $query->missingArea();
+            }
         }
 
         // Property type filtering
@@ -3987,6 +4222,8 @@ public function linkedFamilyUsers()
 
     /**
      * Get site allocation summary for landlord
+     *
+     * ✅ UPDATED: region/area included in the summary payload
      */
     public function getSiteAllocationSummary(): array
     {
@@ -3995,6 +4232,7 @@ public function linkedFamilyUsers()
             'registration_pattern' => $this->registration_pattern,
             'owner' => $this->landlord ? $this->landlord->name : 'Not assigned',
             'location' => $this->physical_address,
+            'full_location' => $this->full_location,
             'status' => $this->status,
             'status_badge' => $this->site_status_badge,
             'registration_date' => $this->registration_date?->format('M d, Y'),
@@ -4006,6 +4244,11 @@ public function linkedFamilyUsers()
             'latitude' => $this->latitude,
             'longitude' => $this->longitude,
             'city' => $this->city,
+            // ✅ NEW: region/area
+            'region' => $this->attributes['region'] ?? null,
+            'area'   => $this->attributes['area'] ?? null,
+            'has_region' => $this->has_region,
+            'has_area'   => $this->has_area,
             'total_tenants' => $this->tenants_count,
             'active_tenants' => $this->active_tenants_count,
             'zone' => $this->zone,
@@ -4191,6 +4434,23 @@ public function linkedFamilyUsers()
             $errors[] = 'Section does not match the selected registration plan';
         }
 
+        // ✅ NEW: Validate region/area against the plan if the plan carries them
+        // (registration_plans.region / registration_plans.area are optional
+        //  columns — validate only when present).
+        if (!empty($this->attributes['region'])
+            && !empty($plan->region)
+            && $this->attributes['region'] !== $plan->region
+        ) {
+            $errors[] = 'Region does not match the selected registration plan';
+        }
+
+        if (!empty($this->attributes['area'])
+            && !empty($plan->area)
+            && $this->attributes['area'] !== $plan->area
+        ) {
+            $errors[] = 'Area does not match the selected registration plan';
+        }
+
         return $errors;
     }
 
@@ -4204,6 +4464,10 @@ public function linkedFamilyUsers()
             'pattern' => $this->registration_pattern,
             'zone' => $this->zone,
             'section' => $this->section,
+            // ✅ NEW: region/area
+            'region' => $this->attributes['region'] ?? null,
+            'area'   => $this->attributes['area'] ?? null,
+            'full_location' => $this->full_location,
             'registration_date' => $this->registration_date?->format('F j, Y'),
             'registered_by' => $this->registeredBy ? $this->registeredBy->name : 'System',
             'property_type' => $this->display_property_type,
@@ -4301,6 +4565,8 @@ public function linkedFamilyUsers()
 
     /**
      * Update location from registration plan
+     *
+     * ✅ UPDATED: also refreshes region/area when the plan carries them.
      */
     public function updateLocationFromPlan(): bool
     {
@@ -4315,6 +4581,14 @@ public function linkedFamilyUsers()
 
         $this->zone = $plan->zone;
         $this->section = $plan->section;
+
+        // ✅ NEW: inherit region/area from the plan when available
+        if (!empty($plan->region)) {
+            $this->region = $plan->region;
+        }
+        if (!empty($plan->area)) {
+            $this->area = $plan->area;
+        }
 
         return $this->save();
     }
@@ -4338,6 +4612,11 @@ public function linkedFamilyUsers()
             // ✅ NEW: coordinate counts
             'with_coordinates' => $query->clone()->hasCoordinates()->count(),
             'without_coordinates' => $query->clone()->missingCoordinates()->count(),
+            // ✅ NEW: region/area counts
+            'with_region' => $query->clone()->hasRegion()->count(),
+            'without_region' => $query->clone()->missingRegion()->count(),
+            'with_area' => $query->clone()->hasArea()->count(),
+            'without_area' => $query->clone()->missingArea()->count(),
             'due_for_inspection' => $query->clone()->dueForInspection()->count(),
             'global_sequence' => $query->clone()->globalSequence()->count(),
             'rented' => $query->clone()->rented()->count(),
@@ -4418,6 +4697,32 @@ public function linkedFamilyUsers()
             ->groupBy('zone')
             ->get()
             ->pluck('count', 'zone')
+            ->toArray();
+    }
+
+    /**
+     * ✅ NEW: Get properties grouped by region
+     */
+    public static function getPropertiesByRegion(): array
+    {
+        return self::select('region', \DB::raw('count(*) as count'))
+            ->whereNotNull('region')
+            ->groupBy('region')
+            ->get()
+            ->pluck('count', 'region')
+            ->toArray();
+    }
+
+    /**
+     * ✅ NEW: Get properties grouped by area
+     */
+    public static function getPropertiesByArea(): array
+    {
+        return self::select('area', \DB::raw('count(*) as count'))
+            ->whereNotNull('area')
+            ->groupBy('area')
+            ->get()
+            ->pluck('count', 'area')
             ->toArray();
     }
 
@@ -4621,6 +4926,8 @@ public function linkedFamilyUsers()
         $propertiesWithTenants = $query->clone()->withTenants()->count();
         // ✅ NEW: Coordinate coverage metrics
         $propertiesWithCoordinates = $query->clone()->hasCoordinates()->count();
+        // ✅ NEW: Region coverage metrics
+        $propertiesWithRegion = $query->clone()->hasRegion()->count();
         // ✅ NEW: Photo-related metrics
         $propertiesWithPhotos = $query->clone()->withPhotos()->count();
 
@@ -4628,6 +4935,7 @@ public function linkedFamilyUsers()
             'total_properties_registered' => $totalProperties,
             'properties_with_digital_address' => $propertiesWithDigitalAddress,
             'properties_with_coordinates' => $propertiesWithCoordinates,
+            'properties_with_region' => $propertiesWithRegion,
             'active_properties' => $activeProperties,
             'under_construction' => $underConstruction,
             'recent_properties' => $recentProperties,
@@ -4637,6 +4945,7 @@ public function linkedFamilyUsers()
             'properties_with_photos' => $propertiesWithPhotos,
             'digital_address_completion_rate' => $totalProperties > 0 ? round(($propertiesWithDigitalAddress / $totalProperties) * 100, 2) : 0,
             'coordinate_completion_rate' => $totalProperties > 0 ? round(($propertiesWithCoordinates / $totalProperties) * 100, 2) : 0,
+            'region_capture_rate' => $totalProperties > 0 ? round(($propertiesWithRegion / $totalProperties) * 100, 2) : 0,
             'photo_upload_rate' => $totalProperties > 0 ? round(($propertiesWithPhotos / $totalProperties) * 100, 2) : 0,
             'property_type_distribution' => self::getPropertyTypeStatisticsByLandlord($agentId),
         ];
@@ -4656,6 +4965,9 @@ public function linkedFamilyUsers()
                     'statistics' => [
                         'has_digital_address' => $property->has_digital_address,
                         'has_coordinates' => $property->has_coordinates,
+                        // ✅ NEW: region/area flags
+                        'has_region' => $property->has_region,
+                        'has_area' => $property->has_area,
                         'is_active' => $property->isActive(),
                         'is_under_construction' => $property->is_under_construction,
                         'is_rented' => $property->is_rented,
@@ -4777,6 +5089,7 @@ public function linkedFamilyUsers()
             'registration_pattern' => $this->registration_pattern,
             'full_address' => $this->full_address,
             'physical_address' => $this->physical_address,
+            'full_location' => $this->full_location,
             'has_digital_address' => $this->has_digital_address,
             'digital_address' => $this->digital_address,
             // ✅ NEW: coordinates
@@ -4784,6 +5097,11 @@ public function linkedFamilyUsers()
             'latitude' => $this->latitude,
             'longitude' => $this->longitude,
             'city' => $this->city,
+            // ✅ NEW: region/area
+            'region' => $this->attributes['region'] ?? null,
+            'area'   => $this->attributes['area'] ?? null,
+            'has_region' => $this->has_region,
+            'has_area'   => $this->has_area,
             'status' => $this->status,
             'status_badge' => $this->site_status_badge,
             'registration_date' => $this->registration_date?->format('Y-m-d'),
@@ -5371,6 +5689,33 @@ public function linkedFamilyUsers()
               });
         });
     }
+
+    /**
+ * Properties the given user can access — either as owner or as an
+ * approved linked family member.
+ *
+ * A linked member is a user in the `property_family_links` table with:
+ *   - linked_user_id = the user's id
+ *   - status         = 'approved'
+ *
+ * The two are combined with OR so the query returns a single list of
+ * distinct properties.
+ */
+public function scopeAccessibleBy($query, User $user)
+{
+    return $query->where(function ($q) use ($user) {
+        // 1. Properties the user owns
+        $q->where('landlord_id', $user->id);
+
+        // 2. Properties where the user is an approved family-link member
+        $q->orWhereIn('id', function ($sub) use ($user) {
+            $sub->select('property_id')
+                ->from('property_family_links')
+                ->where('linked_user_id', $user->id)
+                ->where('status', \App\Models\PropertyFamilyLink::STATUS_APPROVED);
+        });
+    });
+}
 
     /**
      * Get the display status for dropdown (helper method)

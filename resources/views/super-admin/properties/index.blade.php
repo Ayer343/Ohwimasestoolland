@@ -2,6 +2,17 @@
 
 @section('title', 'Properties Management')
 
+@php
+    // ✅ NEW: Region list — prefer controller-provided, fall back to config.
+    if (!isset($regions) || !is_array($regions)) {
+        $regions = config('ghana.regions', [
+            'Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern',
+            'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah',
+            'Upper East', 'Upper West', 'Volta', 'Western', 'Western North',
+        ]);
+    }
+@endphp
+
 @section('content')
 <div class="grid grid-cols-1 gap-6 mb-6">
     <!-- Header Card -->
@@ -151,6 +162,10 @@
                     $property->construction_status === 'completed' ||
                     $property->construction_status === null);
         })->count();
+
+        // ✅ NEW: regional coverage stats
+        $withRegionCount    = $allProperties->filter(fn($p) => !empty($p->region))->count();
+        $withoutRegionCount = $allProperties->count() - $withRegionCount;
     @endphp
 
     <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
@@ -246,6 +261,12 @@
                     <p class="text-2xl font-bold" style="color: var(--text-primary);">
                         {{ \App\Models\Property::hasDigitalAddress()->count() }}
                     </p>
+                    {{-- ✅ NEW: regional coverage sub-stat --}}
+                    @if($withRegionCount > 0)
+                    <p class="text-xs" style="color: var(--text-secondary);">
+                        <i class="fas fa-globe-africa mr-1"></i> {{ $withRegionCount }} with region
+                    </p>
+                    @endif
                 </div>
             </div>
         </div>
@@ -287,7 +308,9 @@
         </div>
     </div>
 
-    <!-- SIMPLIFIED FILTERS CARD -->
+    <!-- ============================================ -->
+    <!-- FILTERS CARD (with region/area)              -->
+    <!-- ============================================ -->
     <div class="card p-6">
         <form method="GET" action="{{ route('properties.index') }}" id="filterForm">
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -323,6 +346,38 @@
                     </select>
                 </div>
             </div>
+
+            {{-- ✅ NEW: Region + Area filter row --}}
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4">
+                <div>
+                    <select name="region" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                        <option value="">All Regions</option>
+                        @foreach($regions as $regionOption)
+                            <option value="{{ $regionOption }}" {{ request('region') == $regionOption ? 'selected' : '' }}>
+                                {{ $regionOption }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <div>
+                    <input type="text" name="area" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);" 
+                           placeholder="Filter by area / neighbourhood..." value="{{ request('area') }}">
+                </div>
+                <div>
+                    <select name="has_region" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                        <option value="">Region Coverage: All</option>
+                        <option value="1" {{ request('has_region') === '1' ? 'selected' : '' }}>Has Region</option>
+                        <option value="0" {{ request('has_region') === '0' ? 'selected' : '' }}>Missing Region</option>
+                    </select>
+                </div>
+                <div>
+                    <select name="has_coordinates" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                        <option value="">Coordinates: All</option>
+                        <option value="1" {{ request('has_coordinates') === '1' ? 'selected' : '' }}>Has Coordinates</option>
+                        <option value="0" {{ request('has_coordinates') === '0' ? 'selected' : '' }}>Missing Coordinates</option>
+                    </select>
+                </div>
+            </div>
             
             <!-- Filter Buttons Row -->
             <div class="mt-4 flex space-x-2">
@@ -345,7 +400,8 @@
             </p>
         </div>
 
-        @if(request()->hasAny(['street_name', 'status', 'has_digital_address', 'landlord_id']))
+        {{-- ✅ NEW: active filter chips include region/area --}}
+        @if(request()->hasAny(['street_name', 'status', 'has_digital_address', 'landlord_id', 'region', 'area', 'has_region', 'has_coordinates']))
         <div class="mb-4 flex items-center flex-wrap gap-2">
             <span class="text-sm mr-2" style="color: var(--text-secondary);">Active filters:</span>
             @if(request('street_name'))
@@ -366,6 +422,30 @@
             @if(request('landlord_id'))
             <span class="px-2 py-1 rounded-full text-xs" style="background-color: rgba(var(--primary-rgb), 0.2); color: var(--primary);">
                 Landlord ID: {{ request('landlord_id') }}
+            </span>
+            @endif
+            {{-- ✅ NEW: region chip --}}
+            @if(request('region'))
+            <span class="px-2 py-1 rounded-full text-xs" style="background-color: rgba(var(--info-rgb), 0.2); color: var(--info);">
+                <i class="fas fa-globe-africa mr-1"></i> Region: {{ request('region') }}
+            </span>
+            @endif
+            {{-- ✅ NEW: area chip --}}
+            @if(request('area'))
+            <span class="px-2 py-1 rounded-full text-xs" style="background-color: rgba(var(--info-rgb), 0.2); color: var(--info);">
+                <i class="fas fa-map-pin mr-1"></i> Area: {{ request('area') }}
+            </span>
+            @endif
+            {{-- ✅ NEW: has_region chip --}}
+            @if(request('has_region') !== null && request('has_region') !== '')
+            <span class="px-2 py-1 rounded-full text-xs" style="background-color: rgba(var(--info-rgb), 0.2); color: var(--info);">
+                Region: {{ request('has_region') === '1' ? 'Has Region' : 'Missing Region' }}
+            </span>
+            @endif
+            {{-- ✅ NEW: has_coordinates chip --}}
+            @if(request('has_coordinates') !== null && request('has_coordinates') !== '')
+            <span class="px-2 py-1 rounded-full text-xs" style="background-color: rgba(var(--success-rgb), 0.2); color: var(--success);">
+                Coordinates: {{ request('has_coordinates') === '1' ? 'Has Coordinates' : 'Missing Coordinates' }}
             </span>
             @endif
         </div>
@@ -474,6 +554,10 @@
                             'unknown' => ['bg' => 'secondary', 'icon' => 'fa-question-circle']
                         ];
                         $statusConfig = $statusColors[$displayStatus] ?? $statusColors['unknown'];
+
+                        // ✅ NEW: has_region / has_area flags for the row
+                        $hasRegion = !empty($property->region);
+                        $hasArea   = !empty($property->area);
                     @endphp
                     <tr class="border-b transition-colors" style="border-color: var(--border-color);">
                         <td class="p-3">
@@ -513,6 +597,25 @@
                             </div>
                         </td>
                         <td class="p-3">
+                            {{-- ✅ NEW: Region + Area line --}}
+                            @if($hasRegion || $hasArea)
+                                <p class="text-xs mb-1" style="color: var(--text-secondary);">
+                                    <i class="fas fa-globe-africa mr-1" style="color: var(--info);"></i>
+                                    @if($hasArea)
+                                        <span class="font-medium" style="color: var(--text-primary);">{{ $property->area }}</span>
+                                        @if($hasRegion)
+                                            <span style="color: var(--text-secondary);">, </span>
+                                        @endif
+                                    @endif
+                                    @if($hasRegion)
+                                        <span>{{ $property->region }}</span>
+                                    @endif
+                                    @if(!$hasRegion && !$hasArea)
+                                        <span style="color: var(--warning);">Region not specified</span>
+                                    @endif
+                                </p>
+                            @endif
+
                             @if($property->zone && $property->section)
                                 <p class="font-medium" style="color: var(--text-primary);">
                                     <i class="fas fa-map-marker-alt mr-1 text-red-500"></i>

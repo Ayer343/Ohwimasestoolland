@@ -12,6 +12,9 @@ use App\Listeners\LogUserActivity;
 use App\Listeners\SendWelcomeNotification;
 use App\Listeners\CleanupUserData;
 
+// ── Security personnel (Head-of-Security submission workflow) ──────
+use App\Listeners\NotifyAdminsOfSecuritySubmission;
+
 // ── Property family links — two-stage approval workflow ────────────
 use App\Events\PropertyFamilyLinkProposed;
 use App\Events\PropertyFamilyLinkAwaitingLandlordConfirmation;
@@ -42,10 +45,27 @@ class EventServiceProvider extends ServiceProvider
 
         /* ============================================================
            USER LIFECYCLE
+           ============================================================
+           Fired by UserRepository::createUser() / updateUser() /
+           softDeleteUser(). These are broad, cross-cutting listeners
+           that apply to every user type.
+
+           Listener ordering matters:
+             • NotifyAdminsOfSecuritySubmission runs BEFORE
+               SendWelcomeNotification so admins are notified of a
+               pending security submission on the same request cycle.
+
+             • SendWelcomeNotification itself MUST skip users whose
+               metadata indicates `awaiting_approval = true` (security
+               personnel pending admin approval) — otherwise a user
+               who cannot log in yet receives a "welcome" email with
+               no actionable link. That guard lives inside the
+               listener, not here.
            ============================================================ */
 
         UserCreated::class => [
             LogUserActivity::class,
+            NotifyAdminsOfSecuritySubmission::class,
             SendWelcomeNotification::class,
         ],
 
@@ -57,6 +77,31 @@ class EventServiceProvider extends ServiceProvider
             LogUserActivity::class,
             CleanupUserData::class,
         ],
+
+        /* ============================================================
+           SECURITY PERSONNEL — HEAD-OF-SECURITY SUBMISSION FLOW
+           ============================================================
+           The Head of Security submits a *pending* personnel record
+           via `SecurityPersonnelAssignmentController::store()`.
+           Notification is dispatched through the UserCreated listener
+           chain above, not via a dedicated event, because the same
+           submission also produces an audit entry and may fire
+           SendWelcomeNotification (guarded to skip pending users).
+
+           Approval / rejection notifications are dispatched directly
+           from `UserManagementController::approvePersonnel()` and
+           `rejectPersonnel()` — they are NOT driven by an event in
+           this provider. This is intentional: the decision belongs
+           to the admin action, and no other code path should
+           masquerade as an approval.
+
+           If you later add a domain event like
+           `SecurityPersonnelApproved` / `SecurityPersonnelRejected`,
+           register the corresponding listener here and remove the
+           direct call from the controller.
+           ============================================================ */
+
+        // (no additional event → listener mappings required — see above)
 
         /* ============================================================
            PROPERTY FAMILY LINKS — TWO-STAGE APPROVAL

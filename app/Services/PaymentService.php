@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
 
@@ -172,10 +173,14 @@ class PaymentService
 
             DB::beginTransaction();
 
-            $payment = Payment::create([
+            // ✅ Ad campaign payments have no property_id. The DB schema
+            //    must allow NULL on payments.property_id (see migration
+            //    2026_10_18_000001_make_payments_property_id_nullable).
+            //    We also pass ad_campaign_id (nullable FK) for reconciliation.
+            $attributes = [
                 'transaction_id' => $this->generateTransactionId($provider),
                 'landlord_id' => $user->id,
-                'property_id' => $paymentData['property_id'],
+                'property_id' => $paymentData['property_id'] ?? null,
                 'payment_provider' => $provider,
                 'amount' => $paymentData['amount'],
                 'currency' => $paymentData['currency'] ?? $settings->currency_code,
@@ -187,7 +192,16 @@ class PaymentService
                 'metadata' => $this->buildPaymentMetadata($paymentData, $user),
                 'created_by' => $user->id,
                 'updated_by' => $user->id,
-            ]);
+            ];
+
+            // ✅ Only set ad_campaign_id if the column exists. This makes
+            //    the code forward-compatible if the migration hasn't run
+            //    yet on a particular environment.
+            if (Schema::hasColumn('payments', 'ad_campaign_id')) {
+                $attributes['ad_campaign_id'] = $paymentData['ad_campaign_id'] ?? null;
+            }
+
+            $payment = Payment::create($attributes);
 
             $providerResult = $this->processWithProvider($paymentData, $payment);
 
@@ -207,6 +221,8 @@ class PaymentService
                 'provider' => $provider,
                 'amount' => $paymentData['amount'],
                 'landlord_id' => $user->id,
+                'property_id' => $paymentData['property_id'] ?? null,
+                'ad_campaign_id' => $paymentData['ad_campaign_id'] ?? null,
             ]);
 
             $response = [
@@ -285,7 +301,12 @@ class PaymentService
                 ];
             }
 
-            $phoneNumber = $this->formatPhoneNumber($paymentData['phone_number']);
+            $phoneNumber = $this->formatPhoneNumber($paymentData['phone_number'] ?? '');
+
+            $callbackUrl = $this->buildProviderCallbackUrl(
+                'expresspay',
+                $paymentData
+            );
 
             $apiRequest = [
                 'merchant_id' => $merchantId,
@@ -294,7 +315,7 @@ class PaymentService
                 'customer_mobile_number' => $phoneNumber,
                 'transaction_id' => $payment->transaction_id,
                 'description' => $paymentData['description'] ?? 'Property dues payment',
-                'callback_url' => route('landlord.payments.callback', ['provider' => 'expresspay']),
+                'callback_url' => $callbackUrl,
                 'return_url' => route('landlord.payments.confirmation', ['transactionId' => $payment->transaction_id]),
             ];
 
@@ -374,7 +395,9 @@ class PaymentService
                 ];
             }
 
-            $phoneNumber = $this->formatPhoneNumber($paymentData['phone_number']);
+            $phoneNumber = $this->formatPhoneNumber($paymentData['phone_number'] ?? '');
+
+            $callbackUrl = $this->buildProviderCallbackUrl('hubtel', $paymentData);
 
             $apiRequest = [
                 'amount' => (string) $paymentData['amount'],
@@ -382,7 +405,7 @@ class PaymentService
                 'customer_phone' => $phoneNumber,
                 'transaction_id' => $payment->transaction_id,
                 'description' => $paymentData['description'] ?? 'Property dues payment',
-                'callback_url' => route('landlord.payments.callback', ['provider' => 'hubtel']),
+                'callback_url' => $callbackUrl,
             ];
 
             $accessToken = $this->getHubtelAccessToken($clientId, $clientSecret, $baseUrl);
@@ -456,24 +479,34 @@ class PaymentService
         }
 
         try {
+            // ✅ Use the callback URL passed by the caller if it's an ad
+            //    payment — otherwise fall back to the standard landlord
+            //    payment callback.
+            $callbackUrl = $this->buildProviderCallbackUrl('paystack', $paymentData);
+
             $requestData = [
                 'email' => $paymentData['email'],
-                'amount' => $paymentData['amount'] * 100,
+                'amount' => (int) round($paymentData['amount'] * 100), // kobo/pesewas
                 'reference' => $payment->transaction_reference,
                 'currency' => $paymentData['currency'] ?? 'GHS',
-                'callback_url' => route('landlord.payments.callback', ['provider' => 'paystack']),
+                'callback_url' => $callbackUrl,
                 'metadata' => [
                     'transaction_id' => $payment->transaction_id,
-                    'property_id' => $paymentData['property_id'],
+                    'property_id' => $paymentData['property_id'] ?? null,
+                    'ad_campaign_id' => $paymentData['ad_campaign_id'] ?? null,
                     'landlord_id' => $payment->landlord_id,
                     'payment_type' => $paymentData['metadata']['payment_type'] ?? 'single',
                     'invoice_ids' => $paymentData['metadata']['invoices'] ?? [],
+                    'invoice_number' => $paymentData['metadata']['invoice_number'] ?? null,
                     'selected_months' => $paymentData['metadata']['selected_months'] ?? null,
+                    'is_ad_payment' => $paymentData['metadata']['is_ad_payment'] ?? false,
                     'custom_fields' => [
                         [
                             'display_name' => 'Property',
                             'variable_name' => 'property',
-                            'value' => $paymentData['metadata']['property_name'] ?? 'Unknown',
+                            'value' => $paymentData['metadata']['property_name']
+                                ?? $paymentData['metadata']['unit_label']
+                                ?? 'Unknown',
                         ],
                     ],
                 ],
@@ -487,7 +520,7 @@ class PaymentService
             if ($response->successful()) {
                 $responseData = $response->json();
 
-                if ($responseData['status']) {
+                if ($responseData['status'] ?? false) {
                     $payment->update([
                         'transaction_reference' => $responseData['data']['reference'],
                         'metadata' => array_merge(
@@ -510,6 +543,11 @@ class PaymentService
             }
 
             $errorMessage = $response->json()['message'] ?? 'Paystack payment initialization failed';
+
+            Log::warning('❌ Paystack payment init returned non-success', [
+                'payment_id' => $payment->id,
+                'response' => $response->json(),
+            ]);
 
             return [
                 'success' => false,
@@ -544,9 +582,8 @@ class PaymentService
                 ];
             }
 
-            $phoneNumber = $this->formatPhoneNumber($paymentData['phone_number']);
+            $phoneNumber = $this->formatPhoneNumber($paymentData['phone_number'] ?? '');
 
-            // Guard against missing landlord relationship
             $landlordEmail = $paymentData['email']
                 ?? optional($payment->landlord)->email
                 ?? null;
@@ -560,6 +597,8 @@ class PaymentService
                 ];
             }
 
+            $callbackUrl = $this->buildProviderCallbackUrl('flutterwave', $paymentData);
+
             $apiRequest = [
                 'tx_ref' => $payment->transaction_id,
                 'amount' => (string) $paymentData['amount'],
@@ -569,12 +608,14 @@ class PaymentService
                 'fullname' => $landlordName,
                 'title' => 'Property Dues Payment',
                 'description' => $paymentData['description'] ?? 'Property dues payment',
-                'redirect_url' => route('landlord.payments.callback', ['provider' => 'flutterwave']),
+                'redirect_url' => $callbackUrl,
                 'meta' => [
                     'transaction_id' => $payment->transaction_id,
-                    'property_id' => $paymentData['property_id'],
+                    'property_id' => $paymentData['property_id'] ?? null,
+                    'ad_campaign_id' => $paymentData['ad_campaign_id'] ?? null,
                     'landlord_id' => $payment->landlord_id,
                     'payment_type' => $paymentData['metadata']['payment_type'] ?? 'single',
+                    'is_ad_payment' => $paymentData['metadata']['is_ad_payment'] ?? false,
                     'selected_months' => $paymentData['metadata']['selected_months'] ?? null,
                 ],
             ];
@@ -678,13 +719,6 @@ class PaymentService
         }
     }
 
-    /**
-     * Verify a payment with a 6-digit code from the user.
-     *
-     * In non-production environments this is a development shortcut that accepts
-     * any validly-formatted code. In production it should call the provider's
-     * verification endpoint before marking the payment completed.
-     */
     public function verifyPayment($transactionId, $verificationCode, $provider = null): array
     {
         try {
@@ -761,9 +795,6 @@ class PaymentService
         }
     }
 
-    /**
-     * ✅ NEW: Resend verification (SMS or email) for a pending payment.
-     */
     public function resendVerification(Payment $payment): array
     {
         try {
@@ -783,7 +814,6 @@ class PaymentService
 
             $provider = $payment->payment_provider;
 
-            // Only mobile-money providers need a verification prompt
             if (!in_array($provider, ['expresspay', 'hubtel', 'flutterwave'], true)) {
                 return [
                     'success' => false,
@@ -825,10 +855,6 @@ class PaymentService
         }
     }
 
-    /**
-     * ✅ NEW: Test connection to a payment provider's API.
-     * Used by the admin Test Connection button.
-     */
     public function testProviderConnection(string $provider): array
     {
         $validProviders = ['expresspay', 'hubtel', 'paystack', 'flutterwave'];
@@ -908,7 +934,6 @@ class PaymentService
 
             $status = $this->determineStatusFromCallback($provider, $callbackData);
 
-            // Idempotency: don't re-process if already at the target status
             if ($payment->status === $status) {
                 return [
                     'success' => true,
@@ -1125,6 +1150,24 @@ class PaymentService
         return substr($digits, 0, 3) . '****' . substr($digits, -3);
     }
 
+    /**
+     * ✅ Build the correct callback URL for a provider, based on the
+     *    payment type. Ad payments go to the ad callback route;
+     *    property payments go to the landlord payment callback.
+     */
+    protected function buildProviderCallbackUrl(string $provider, array $paymentData): string
+    {
+        $metadata = $paymentData['metadata'] ?? [];
+
+        // Ad campaign payments: use the ad callback route.
+        if (!empty($metadata['is_ad_payment']) && !empty($metadata['callback_url'])) {
+            return $metadata['callback_url'];
+        }
+
+        // Landlord payment callback (default).
+        return route('landlord.payments.callback', ['provider' => $provider]);
+    }
+
     protected function getExpressPayAccessToken(string $clientId, string $clientSecret, string $baseUrl): ?string
     {
         $cacheKey = 'expresspay_access_token';
@@ -1182,8 +1225,8 @@ class PaymentService
     }
 
     /**
-     * ✅ UPDATED: build metadata that mirrors what the controller expects,
-     * including selected_months for bulk payments.
+     * ✅ UPDATED: include ad campaign context in metadata so the payment
+     *    record is self-describing and reconcilable.
      */
     protected function buildPaymentMetadata(array $paymentData, User $user): array
     {
@@ -1201,17 +1244,41 @@ class PaymentService
             'customer_phone' => $paymentData['phone_number'] ?? null,
             'customer_email' => $paymentData['email'] ?? null,
             'customer_name' => $user->name,
-            'property_id' => $paymentData['property_id'],
-            'property_name' => $incomingMetadata['property_name'] ?? 'Unknown',
+            'property_id' => $paymentData['property_id'] ?? null,
+            'property_name' => $incomingMetadata['property_name']
+                ?? $incomingMetadata['unit_label']
+                ?? 'Unknown',
+            'ad_campaign_id' => $paymentData['ad_campaign_id'] ?? null,
+            'invoice_number' => $incomingMetadata['invoice_number'] ?? null,
+            'campaign_uuid' => $incomingMetadata['campaign_uuid'] ?? null,
+            'plan_name' => $incomingMetadata['plan_name'] ?? null,
+            'unit_label' => $incomingMetadata['unit_label'] ?? null,
+            'formatted_amount' => $incomingMetadata['formatted_amount'] ?? null,
+            'is_ad_payment' => $incomingMetadata['is_ad_payment'] ?? false,
             'created_at' => now()->toISOString(),
             'requires_verification' => in_array($paymentData['payment_provider'], ['expresspay', 'hubtel', 'flutterwave']),
         ];
     }
 
+    /**
+     * ✅ UPDATED: skip ad payments — those invoices are handled by
+     *    AdCampaignService::markInvoicePaid(), not this method.
+     */
     protected function updateInvoiceStatuses(Payment $payment): void
     {
         try {
             $metadata = $payment->metadata ?? [];
+
+            // Ad payments are reconciled via AdCampaignService. Don't touch
+            // the rent-invoice table for these.
+            if (!empty($metadata['is_ad_payment'])) {
+                Log::info('Skipping invoice update for ad payment', [
+                    'payment_id' => $payment->id,
+                    'ad_campaign_id' => $metadata['ad_campaign_id'] ?? null,
+                ]);
+                return;
+            }
+
             $invoiceIds = $metadata['invoices'] ?? [];
 
             if (!empty($invoiceIds)) {
@@ -1359,10 +1426,6 @@ class PaymentService
         return $missing;
     }
 
-    /**
-     * Record that a verification was resent. Uses a notes field if present,
-     * otherwise appends to metadata.
-     */
     protected function recordVerificationResent(Payment $payment): void
     {
         $metadata = $payment->metadata ?? [];
@@ -1373,7 +1436,6 @@ class PaymentService
             'requested_by' => auth()->id(),
         ];
 
-        // Keep the last 10 resends only
         if (count($metadata['verification_resends']) > 10) {
             $metadata['verification_resends'] = array_slice($metadata['verification_resends'], -10);
         }
@@ -1385,22 +1447,8 @@ class PaymentService
     //  PROVIDER VERIFICATION (PRODUCTION PATHS)
     // ================================================================
 
-    /**
-     * Verify a code directly with the payment provider.
-     * Stubbed here — replace with each provider's actual verification call.
-     */
     protected function verifyWithProvider(string $provider, Payment $payment, string $verificationCode): array
     {
-        // Providers that require real verification:
-        //   - ExpressPay: POST /api/v1/payments/verify
-        //   - Hubtel: GET /payments/{ref}/status
-        //   - Flutterwave: GET /transactions/{id}/verify
-        //
-        // For now, this returns true to keep the flow working in production
-        // until a real verification endpoint is wired up.
-        //
-        // TODO: implement per-provider verification.
-
         Log::warning('Provider verification not yet implemented; falling back to local acceptance', [
             'provider' => $provider,
             'payment_id' => $payment->id,

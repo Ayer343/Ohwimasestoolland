@@ -163,27 +163,7 @@ class Kernel extends ConsoleKernel
         ->onOneServer();
 
         // ==================== RECURRING BILLING — PRIMARY SUPER ADMIN ====================
-        //
-        // ⚠️ IMPORTANT: The command name MUST match the artisan signature
-        // declared in your RunRecurringBilling command class. If your command
-        // signature is `billing:run-recurring`, update the entries below to
-        // use that name. If you prefer to keep `billing:generate-monthly-invoices`,
-        // rename the command's $signature property instead.
-        //
-        // The command should:
-        //   - Query every active DeveloperSetting whose next_billing_date <= today
-        //   - Call DeveloperBillingService::generateRecurringInvoice($settings)
-        //   - Advance next_billing_date by the cycle interval
-        //   - Schedule InvoiceReminder rows for the newly generated invoice
-        //
-        // It MUST be idempotent — running it twice in the same day must not
-        // create duplicate invoices for the same (developer, agreement, billing_month).
-        // The dedupe check lives inside generateRecurringInvoice().
 
-        /**
-         * Primary run — 1st of each month at 02:00.
-         * Generates the recurring invoice for the primary-SA agreement.
-         */
         $schedule->command('billing:generate-monthly-invoices')
             ->monthlyOn(1, '02:00')
             ->name('generate-monthly-billing-invoices')
@@ -191,12 +171,6 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping()
             ->appendOutputTo(storage_path('logs/billing-invoices.log'));
 
-        /**
-         * Emergency safety net — daily at 01:00.
-         * If the 1st-of-month run failed for any reason (queue down, DB deadlock,
-         * server offline), this catches up. The service-level dedupe makes it
-         * safe to run every day.
-         */
         $schedule->command('billing:generate-monthly-invoices --force')
             ->dailyAt('01:00')
             ->name('emergency-billing-invoices')
@@ -204,10 +178,6 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping()
             ->appendOutputTo(storage_path('logs/billing-invoices-emergency.log'));
 
-        /**
-         * Dry-run — daily at 12:00 for monitoring / dashboards.
-         * Must not write anything. Purely observational.
-         */
         $schedule->command('billing:generate-monthly-invoices --dry-run')
             ->dailyAt('12:00')
             ->name('billing-invoices-dry-run')
@@ -215,11 +185,6 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping()
             ->appendOutputTo(storage_path('logs/billing-invoices-dry-run.log'));
 
-        /**
-         * Weekly health check — every Monday at 08:30.
-         * Compares generated invoices vs. active primary agreements. Alerts if
-         * fewer invoices exist than expected.
-         */
         $schedule->call(function () {
             try {
                 $currentMonth = Carbon::now()->format('Y-m');
@@ -258,16 +223,6 @@ class Kernel extends ConsoleKernel
         ->onOneServer();
 
         // ==================== INVOICE REMINDER DISPATCH ====================
-        //
-        // ⚠️ THIS IS THE MISSING LINK.
-        //
-        // scheduleInvoiceReminders() (in both billing controllers) creates
-        // InvoiceReminder rows with status='pending' and scheduled_for=<date>.
-        // Nothing dispatches them until we run the dispatcher below.
-        //
-        // We dispatch hourly so reminders fire close to their scheduled time
-        // without overwhelming the queue. The job itself is idempotent —
-        // it skips reminders that are no longer 'pending'.
 
         $schedule->call(function () {
             try {
@@ -315,12 +270,6 @@ class Kernel extends ConsoleKernel
         ->withoutOverlapping()
         ->appendOutputTo(storage_path('logs/invoice-reminders-dispatch.log'));
 
-        /**
-         * Daily cleanup — mark stuck reminders as failed.
-         * A reminder that has been 'pending' past its due date by more than
-         * a week is likely orphaned (invoice deleted, super admin deactivated,
-         * etc.). Log and mark as failed so it stops cluttering the queue.
-         */
         $schedule->call(function () {
             try {
                 if (!\Illuminate\Support\Facades\Schema::hasTable('invoice_reminders')) {
@@ -2287,6 +2236,62 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping()
             ->appendOutputTo(storage_path('logs/account-archival.log'));
 
+        // ──────────────────────────────────────────────────────────────
+        // Auto-archive tenants who have not been assigned to any
+        // property unit for 30+ days.
+        //
+        // Runs daily at 02:15 — offset from the 02:00 landlord archival
+        // sweep so the two jobs don't contend for DB locks.
+        //
+        // Eligibility (mirrors the admin Users index badge logic):
+        //   • type = TENANT
+        //   • not already archived/trashed
+        //   • created_at ≤ now() - 30 days
+        //   • has NO PropertyUnit with tenant_status = 'approved'
+        //
+        // Metadata written by this command is byte-compatible with
+        // UserManagementController::archiveUser(), so the standard
+        // restore flow (admin/users/archived) works unchanged.
+        // ──────────────────────────────────────────────────────────────
+        $schedule->command('tenants:archive-unassigned --days=30')
+            ->dailyAt('02:15')
+            ->name('archive-unassigned-tenants')
+            ->onOneServer()
+            ->withoutOverlapping()
+            ->appendOutputTo(storage_path('logs/tenants-archive.log'));
+
+        // ──────────────────────────────────────────────────────────────
+        // ✅ NEW: Auto-archive orphaned family members.
+        //
+        // A family member becomes "orphaned" when their last approved
+        // property-family-link is revoked (or otherwise terminated) and
+        // they own no properties of their own.
+        //
+        // The revoke path (`PropertyFamilyLinkService::revoke()`) fires
+        // `FamilyLinkOrphanArchivalService::considerArchival()` inline,
+        // so the common case is handled in real time. This scheduled
+        // sweep is a SAFETY NET for:
+        //
+        //   • Historical rows that became orphaned before the inline
+        //     hook existed.
+        //   • Direct DB edits that bypass the service layer.
+        //   • Any race where the inline hook failed (it swallows
+        //     exceptions to avoid breaking the revoke transaction).
+        //
+        // Runs daily at 02:45 — offset from the 02:00 landlord sweep
+        // and the 02:15 tenant sweep so all three archival jobs run
+        // sequentially without DB lock contention.
+        //
+        // The command is idempotent — running it twice on the same day
+        // produces no additional archives.
+        // ──────────────────────────────────────────────────────────────
+        $schedule->command('family-links:archive-orphans')
+            ->dailyAt('02:45')
+            ->name('archive-orphaned-family-members')
+            ->onOneServer()
+            ->withoutOverlapping()
+            ->appendOutputTo(storage_path('logs/family-links-archive.log'));
+
         $schedule->call(function () {
             try {
                 $settings = SystemSetting::getSettings();
@@ -2474,6 +2479,60 @@ class Kernel extends ConsoleKernel
         ->at('07:00')
         ->name('weekly-archival-summary')
         ->onOneServer();
+
+        // ──────────────────────────────────────────────────────────────
+        // ✅ NEW: Weekly family-link orphan backlog report.
+        //
+        // Logs the current count of family members who are eligible
+        // for orphan archival but have not yet been archived by the
+        // nightly sweep. If this number climbs between runs, the
+        // nightly command is failing or running too infrequently for
+        // your link-churn volume.
+        //
+        // Read-only — does not archive anything. Runs Monday at 07:15
+        // (offset from the 07:00 weekly archival summary).
+        // ──────────────────────────────────────────────────────────────
+        $schedule->call(function () {
+            try {
+                $eligibleCount = User::query()
+                    ->whereNull('deleted_at')
+                    ->whereNotIn('type', [
+                        User::TYPE_SUPER_ADMIN,
+                        User::TYPE_ADMIN,
+                        User::TYPE_DEVELOPER,
+                    ])
+                    ->where(function ($q) {
+                        $q->whereHas('roles', fn ($r) => $r->where('slug', 'linked_family'))
+                          ->orWhereHas('familyLinks');
+                    })
+                    ->whereDoesntHave('ownedProperties')
+                    ->whereDoesntHave('approvedFamilyLinks')
+                    ->count();
+
+                Log::info("👨‍👩‍👧 Weekly family-link orphan backlog report", [
+                    'eligible_for_archival' => $eligibleCount,
+                    'note' => $eligibleCount > 0
+                        ? 'Nightly sweep has not yet archived these users.'
+                        : 'Backlog is clean.',
+                    'report_time' => now()->setTimezone('UTC')->toISOString(),
+                ]);
+
+                if ($eligibleCount > 50) {
+                    Log::warning("⚠️ Large family-link orphan backlog detected", [
+                        'eligible_for_archival' => $eligibleCount,
+                        'action' => 'Check family-links:archive-orphans command logs.',
+                    ]);
+                }
+            } catch (\Exception $e) {
+                Log::error("Failed to generate family-link orphan backlog report: " . $e->getMessage());
+            }
+        })
+        ->weekly()
+        ->mondays()
+        ->at('07:15')
+        ->name('weekly-family-link-orphan-report')
+        ->onOneServer()
+        ->withoutOverlapping();
 
         $schedule->call(function () {
             try {

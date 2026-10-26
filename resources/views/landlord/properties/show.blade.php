@@ -2,9 +2,20 @@
     $layout = 'layouts.landlord';
     $isLandlord = auth()->user()->isLandlord();
     $user = auth()->user();
-    
+
     // Get all tenants with proper relationship loading
     $allTenants = isset($allTenants) ? $allTenants : $property->getAllTenants();
+
+    // ────────────────────────────────────────────────────────────
+    // Ownership flag — distinguishes an owned property from one
+    // the current user is merely linked to as an approved family
+    // member. Drives which action buttons are shown below.
+    //
+    // `$property->is_owned` is set by the controller; falling back
+    // to a direct comparison keeps this working if the blade is
+    // rendered from a different path (e.g. admin impersonation).
+    // ────────────────────────────────────────────────────────────
+    $isOwned = $property->is_owned ?? ((int) $property->landlord_id === (int) $user->id);
 @endphp
 
 @extends($layout)
@@ -19,48 +30,67 @@
             <div>
                 <h2 class="text-xl font-semibold" style="color: var(--text-primary);">{{ $property->property_name }}</h2>
                 <p class="text-sm mt-1" style="color: var(--text-secondary);">
-                    <i class="fas fa-house-user mr-1"></i>My Property
+                    @if($isOwned)
+                        <i class="fas fa-house-user mr-1"></i>My Property
+                    @else
+                        <i class="fas fa-user-friends mr-1"></i>Linked Property Access
+                    @endif
                 </p>
                 <p class="text-xs mt-1" style="color: var(--text-secondary);">
                     {{ $property->house_number }} {{ $property->street_name }}
                     @if($property->block_number) • Block {{ $property->block_number }} @endif
                     @if($property->zone) • {{ $property->zone }} @endif
                 </p>
-                
+
                 <!-- Property Type Badge -->
-                <div class="flex items-center mt-2">
+                <div class="flex items-center flex-wrap gap-1 mt-2">
                     @if($property->propertyType)
-                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold" 
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold"
                               style="background-color: {{ $property->propertyType->color }}20; color: {{ $property->propertyType->color }}; border: 1px solid {{ $property->propertyType->color }}30;">
                             <i class="{{ $property->propertyType->icon }} mr-1"></i>
                             {{ $property->propertyType->name }}
                         </span>
                     @endif
-                    
+
                     @if($property->custom_property_type)
-                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ml-2" 
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold"
                               style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
                             <i class="fas fa-tag mr-1"></i>
                             {{ $property->custom_property_type }}
                         </span>
                     @endif
-                    
-                    <!-- Rented Status Badge - Now using getAllTenants count -->
+
+                    <!-- Rented Status Badge -->
                     @if($allTenants->count() > 0)
-                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ml-2" 
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold"
                               style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 1px solid rgba(var(--success-rgb), 0.3);">
                             <i class="fas fa-users mr-1"></i>
                             Rented ({{ $allTenants->count() }} tenant(s))
                         </span>
                     @else
-                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ml-2" 
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold"
                               style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning); border: 1px solid rgba(var(--warning-rgb), 0.3);">
                             <i class="fas fa-home mr-1"></i>
                             Vacant
                         </span>
                     @endif
+
+                    {{-- Ownership indicator --}}
+                    @if($isOwned)
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold"
+                              style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border: 1px solid rgba(var(--primary-rgb), 0.3);">
+                            <i class="fas fa-user-tie mr-1"></i>
+                            You own this
+                        </span>
+                    @else
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold"
+                              style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
+                            <i class="fas fa-user-friends mr-1"></i>
+                            Linked access
+                        </span>
+                    @endif
                 </div>
-                
+
                 <!-- Field Agent Info -->
                 @if($property->registeredBy)
                 <p class="text-xs mt-1" style="color: var(--text-secondary);">
@@ -86,7 +116,7 @@
             <i class="fas fa-images mr-2"></i>Property Photos
             <span class="text-xs font-normal ml-2" style="color: var(--text-secondary);">({{ $property->photos->count() }} photo(s))</span>
         </h3>
-        
+
         <!-- Photo Gallery Grid -->
         <div class="photo-gallery">
             <!-- Primary Photo Highlight -->
@@ -94,13 +124,13 @@
                 $primaryPhoto = $property->photos->where('is_primary', true)->first();
                 $otherPhotos = $property->photos->where('is_primary', false);
             @endphp
-            
+
             @if($primaryPhoto)
             <div class="primary-photo-container mb-6">
                 <div class="relative rounded-xl overflow-hidden shadow-lg" style="background-color: var(--bg-secondary);">
-                    <img id="primaryPhotoImg" 
-                         src="{{ Storage::url($primaryPhoto->photo_path) }}" 
-                         alt="Primary property photo" 
+                    <img id="primaryPhotoImg"
+                         src="{{ Storage::url($primaryPhoto->photo_path) }}"
+                         alt="Primary property photo"
                          class="w-full h-96 object-cover cursor-pointer"
                          onclick="openPhotoModal('{{ Storage::url($primaryPhoto->photo_path) }}', 'Primary Photo')">
                     <div class="absolute bottom-4 left-4 bg-black bg-opacity-60 text-white px-3 py-1 rounded-lg text-sm">
@@ -114,7 +144,7 @@
                 </div>
             </div>
             @endif
-            
+
             <!-- Thumbnail Gallery -->
             @if($otherPhotos->count() > 0)
             <div class="thumbnail-gallery">
@@ -126,8 +156,8 @@
                     <div class="thumbnail-item relative rounded-lg overflow-hidden cursor-pointer group"
                          style="border: 2px solid var(--border-color); background-color: var(--bg-secondary);"
                          onclick="openPhotoModal('{{ Storage::url($photo->photo_path) }}', 'Property Photo')">
-                        <img src="{{ Storage::url($photo->photo_path) }}" 
-                             alt="Property photo" 
+                        <img src="{{ Storage::url($photo->photo_path) }}"
+                             alt="Property photo"
                              class="w-full h-32 object-cover transition-transform duration-300 group-hover:scale-105">
                         <div class="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-300 flex items-center justify-center">
                             <i class="fas fa-search-plus text-white text-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"></i>
@@ -138,7 +168,7 @@
             </div>
             @endif
         </div>
-        
+
         <!-- Download All Photos Button -->
         @if($property->photos->count() > 1)
         <div class="mt-4 text-right">
@@ -155,7 +185,7 @@
             <i class="fas fa-images mr-2"></i>Property Photos
         </h3>
         <div class="text-center py-12">
-            <div class="w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-4" 
+            <div class="w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-4"
                  style="background-color: rgba(var(--info-rgb), 0.1);">
                 <i class="fas fa-camera text-4xl" style="color: var(--text-secondary);"></i>
             </div>
@@ -166,8 +196,9 @@
     @endif
 
     <!-- ====================================================== -->
-    <!-- PHOTO MANAGEMENT SECTION FOR LANDLORD                  -->
+    <!-- PHOTO MANAGEMENT SECTION FOR LANDLORD — OWNER ONLY      -->
     <!-- ====================================================== -->
+    @if($isOwned)
     <div class="card p-6">
         <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
             <i class="fas fa-camera mr-2"></i>Manage Property Photos
@@ -175,17 +206,17 @@
                 (Max 10 photos • {{ $property->photos->count() }} uploaded)
             </span>
         </h3>
-        
+
         <!-- Upload New Photos -->
-        <form action="{{ route('landlord.properties.upload-photos', $property->id) }}" 
-              method="POST" 
-              enctype="multipart/form-data" 
+        <form action="{{ route('landlord.properties.upload-photos', $property->id) }}"
+              method="POST"
+              enctype="multipart/form-data"
               class="space-y-4"
               id="photoUploadForm">
             @csrf
             @method('POST')
-            
-            <div class="border-2 border-dashed rounded-lg p-6 text-center transition-all duration-300" 
+
+            <div class="border-2 border-dashed rounded-lg p-6 text-center transition-all duration-300"
                  style="border-color: var(--border-color); background-color: var(--bg-secondary);"
                  id="dropZone">
                 <div class="space-y-2">
@@ -201,35 +232,35 @@
                             $currentCount = $property->photos->count();
                             $remaining = 10 - $currentCount;
                         @endphp
-                        {{ $currentCount }} / 10 photos used • 
+                        {{ $currentCount }} / 10 photos used •
                         <span style="color: {{ $remaining > 0 ? 'var(--success)' : 'var(--danger)' }};">
                             {{ $remaining > 0 ? $remaining . ' slots available' : 'Maximum reached' }}
                         </span>
                     </p>
                 </div>
-                <input type="file" 
-                       name="photos[]" 
-                       id="photoInput" 
-                       accept="image/*" 
-                       multiple 
+                <input type="file"
+                       name="photos[]"
+                       id="photoInput"
+                       accept="image/*"
+                       multiple
                        class="hidden"
                        {{ $property->photos->count() >= 10 ? 'disabled' : '' }}>
             </div>
-            
+
             <!-- Preview Container -->
             <div id="photoPreviewContainer" class="grid grid-cols-2 md:grid-cols-4 gap-3 hidden">
             </div>
-            
+
             <!-- Upload Button -->
             <div class="flex justify-end">
-                <button type="submit" 
+                <button type="submit"
                         id="uploadBtn"
                         class="px-6 py-2 rounded-lg font-semibold transition-all duration-300 flex items-center"
-                        style="background-color: {{ $property->photos->count() >= 10 ? 'var(--text-secondary)' : 'var(--primary)' }}; 
-                               color: white; 
+                        style="background-color: {{ $property->photos->count() >= 10 ? 'var(--text-secondary)' : 'var(--primary)' }};
+                               color: white;
                                cursor: {{ $property->photos->count() >= 10 ? 'not-allowed' : 'pointer' }};"
                         {{ $property->photos->count() >= 10 ? 'disabled' : '' }}>
-                    <i class="fas fa-upload mr-2"></i> 
+                    <i class="fas fa-upload mr-2"></i>
                     {{ $property->photos->count() >= 10 ? 'Maximum Photos Reached' : 'Upload Photos' }}
                 </button>
             </div>
@@ -244,16 +275,16 @@
                     (Click on a photo to view full size)
                 </span>
             </h4>
-            
+
             <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
                 @foreach($property->photos as $photo)
-                <div class="relative group rounded-lg overflow-hidden cursor-pointer" 
+                <div class="relative group rounded-lg overflow-hidden cursor-pointer"
                      style="border: 2px solid {{ $photo->is_primary ? 'var(--primary)' : 'var(--border-color)' }};"
                      onclick="openPhotoModal('{{ Storage::url($photo->photo_path) }}', '{{ $photo->is_primary ? 'Primary' : 'Property' }} Photo')">
-                    <img src="{{ Storage::url($photo->photo_path) }}" 
-                         alt="Property photo" 
+                    <img src="{{ Storage::url($photo->photo_path) }}"
+                         alt="Property photo"
                          class="w-full h-32 object-cover transition-transform duration-300 group-hover:scale-105">
-                    
+
                     <!-- Photo Overlay with Actions -->
                     <div class="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-60 transition-all duration-300 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100">
                         <!-- Primary Badge -->
@@ -262,39 +293,39 @@
                             <i class="fas fa-star mr-1"></i>Primary
                         </div>
                         @endif
-                        
+
                         <div class="flex flex-col items-center space-y-2">
                             <!-- View Button -->
-                            <button onclick="event.stopPropagation(); openPhotoModal('{{ Storage::url($photo->photo_path) }}', '{{ $photo->is_primary ? 'Primary' : 'Property' }} Photo')" 
+                            <button onclick="event.stopPropagation(); openPhotoModal('{{ Storage::url($photo->photo_path) }}', '{{ $photo->is_primary ? 'Primary' : 'Property' }} Photo')"
                                     class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition-colors flex items-center">
                                 <i class="fas fa-eye mr-1"></i> View
                             </button>
-                            
+
                             <div class="flex space-x-2">
                                 <!-- Set as Primary Button (if not primary) -->
                                 @if(!$photo->is_primary)
-                                <form action="{{ route('landlord.properties.set-primary-photo', [$property->id, $photo->id]) }}" 
-                                      method="POST" 
+                                <form action="{{ route('landlord.properties.set-primary-photo', [$property->id, $photo->id]) }}"
+                                      method="POST"
                                       class="inline"
                                       onclick="event.stopPropagation();">
                                     @csrf
                                     @method('PUT')
-                                    <button type="submit" 
+                                    <button type="submit"
                                             class="px-2 py-1.5 rounded-lg bg-yellow-600 text-white text-xs font-semibold hover:bg-yellow-700 transition-colors flex items-center"
                                             title="Set as primary photo">
                                         <i class="fas fa-star mr-1"></i> Primary
                                     </button>
                                 </form>
                                 @endif
-                                
+
                                 <!-- Delete Button -->
-                                <form action="{{ route('landlord.properties.delete-photo', [$property->id, $photo->id]) }}" 
-                                      method="POST" 
+                                <form action="{{ route('landlord.properties.delete-photo', [$property->id, $photo->id]) }}"
+                                      method="POST"
                                       class="inline"
                                       onclick="event.stopPropagation();">
                                     @csrf
                                     @method('DELETE')
-                                    <button type="submit" 
+                                    <button type="submit"
                                             class="px-2 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors flex items-center"
                                             onclick="return confirm('Are you sure you want to delete this photo?')">
                                         <i class="fas fa-trash mr-1"></i> Delete
@@ -303,7 +334,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <!-- Photo Info Badge (always visible) -->
                     <div class="absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 text-white text-xs px-2 py-1 flex justify-between items-center">
                         <span class="truncate">
@@ -319,7 +350,7 @@
                 </div>
                 @endforeach
             </div>
-            
+
             <!-- Photo Management Tips -->
             <div class="mt-4 p-3 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.2);">
                 <div class="flex items-start space-x-2">
@@ -339,6 +370,22 @@
         </div>
         @endif
     </div>
+    @else
+    {{-- Read-only hint for linked family members --}}
+    <div class="card p-6">
+        <div class="flex items-start space-x-3">
+            <i class="fas fa-eye mt-0.5" style="color: var(--info);"></i>
+            <div>
+                <h4 class="text-sm font-medium mb-1" style="color: var(--text-primary);">
+                    Photo viewing only
+                </h4>
+                <p class="text-xs" style="color: var(--text-secondary);">
+                    You have read-only access to this property's photos. Photo management is available to the property owner.
+                </p>
+            </div>
+        </div>
+    </div>
+    @endif
     <!-- ====================================================== -->
     <!-- END PHOTO MANAGEMENT SECTION                           -->
     <!-- ====================================================== -->
@@ -350,20 +397,20 @@
             <button onclick="closePhotoModal()" class="absolute -top-12 right-0 text-white hover:text-gray-300 text-3xl transition-colors">
                 <i class="fas fa-times"></i>
             </button>
-            
+
             <!-- Download Button -->
             <button onclick="downloadCurrentPhoto()" class="absolute -top-12 right-12 text-white hover:text-gray-300 text-2xl transition-colors">
                 <i class="fas fa-download"></i>
             </button>
-            
+
             <!-- Modal Image -->
             <img id="modalImage" src="" alt="Property photo" class="w-full h-auto max-h-[85vh] object-contain rounded-lg shadow-2xl">
-            
+
             <!-- Caption -->
             <div id="modalCaption" class="absolute bottom-4 left-0 right-0 text-center text-white text-sm bg-black bg-opacity-50 py-2 rounded-lg mx-auto w-64">
                 Loading...
             </div>
-            
+
             <!-- Navigation Buttons (if multiple photos) -->
             <div class="photo-nav-buttons">
                 <button onclick="previousPhoto()" class="nav-btn prev-btn">
@@ -385,7 +432,7 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-home mr-2"></i>Property Information
                 </h3>
-                
+
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <!-- Basic Information -->
                     <div class="space-y-4">
@@ -396,7 +443,7 @@
                                 <i class="fas fa-user-tie mr-1"></i>Belongs to {{ $property->landlord->name }}
                             </p>
                         </div>
-                        
+
                         <!-- Property Type Information -->
                         <div class="property-field">
                             <label class="field-label">Property Type</label>
@@ -417,7 +464,7 @@
                                 <p class="field-value" style="color: var(--warning);">No property type assigned</p>
                             @endif
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Registration Pattern</label>
                             <p class="field-value font-mono bg-gray-100 px-2 py-1 rounded inline-block" style="background-color: var(--bg-secondary);">
@@ -425,13 +472,13 @@
                             </p>
                             <p class="field-subtext">Auto-generated identification pattern</p>
                         </div>
-                        
+
                         <!-- Rented Status -->
                         <div class="property-field">
                             <label class="field-label">Rented Status</label>
                             <div class="flex items-center">
                                 @if($allTenants->count() > 0)
-                                    <span class="px-3 py-1 rounded-full text-xs font-semibold" 
+                                    <span class="px-3 py-1 rounded-full text-xs font-semibold"
                                           style="background-color: rgba(var(--success-rgb), 0.2); color: var(--success);">
                                         <i class="fas fa-check-circle mr-1"></i>
                                         Rented ({{ $allTenants->count() }} tenant(s))
@@ -441,7 +488,7 @@
                                         Occupied
                                     </span>
                                 @else
-                                    <span class="px-3 py-1 rounded-full text-xs font-semibold" 
+                                    <span class="px-3 py-1 rounded-full text-xs font-semibold"
                                           style="background-color: rgba(var(--warning-rgb), 0.2); color: var(--warning);">
                                         <i class="fas fa-home mr-1"></i>
                                         Vacant
@@ -461,34 +508,34 @@
                             </p>
                         </div>
                     </div>
-                    
+
                     <!-- Location Information -->
                     <div class="space-y-4">
                         <div class="property-field">
                             <label class="field-label">House Number</label>
                             <p class="field-value">{{ $property->house_number ?? 'N/A' }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Street Name</label>
                             <p class="field-value">{{ $property->street_name }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Zone</label>
                             <p class="field-value">{{ $property->zone ?? 'N/A' }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Section</label>
                             <p class="field-value">{{ $property->section ?? 'N/A' }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Block Number</label>
                             <p class="field-value">{{ $property->block_number ?? 'N/A' }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Registration Date</label>
                             <p class="field-value">{{ $property->registration_date->format('M d, Y') }}</p>
@@ -496,7 +543,7 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- Status and Digital Address Row -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
                     <div class="property-field">
@@ -518,7 +565,7 @@
                         </div>
                         <p class="field-subtext mt-1">Current status of this property</p>
                     </div>
-                    
+
                     <div class="property-field">
                         <label class="field-label">Digital Address</label>
                         @if($property->digital_address)
@@ -529,9 +576,22 @@
                                         <i class="fas fa-check-circle mr-1"></i> Verified digital address
                                     </p>
                                 </div>
-                                <button onclick="copyDigitalAddress()" class="px-3 py-1 rounded-full text-xs font-semibold" style="background-color: rgba(var(--success-rgb), 0.2); color: var(--success); border: none; cursor: pointer;">
-                                    <i class="fas fa-copy mr-1"></i> Copy
-                                </button>
+                                <div class="flex items-center space-x-1">
+                                    <button onclick="copyDigitalAddress()" class="px-3 py-1 rounded-full text-xs font-semibold" style="background-color: rgba(var(--success-rgb), 0.2); color: var(--success); border: none; cursor: pointer;">
+                                        <i class="fas fa-copy mr-1"></i> Copy
+                                    </button>
+
+                                    {{-- ✅ NEW: owner-only edit button --}}
+                                    @if($isOwned)
+                                    <button type="button"
+                                            onclick="openEditDigitalAddressModal()"
+                                            class="px-3 py-1 rounded-full text-xs font-semibold"
+                                            style="background-color: rgba(var(--warning-rgb), 0.2); color: var(--warning); border: none; cursor: pointer;"
+                                            title="Edit digital address">
+                                        <i class="fas fa-pen mr-1"></i> Edit
+                                    </button>
+                                    @endif
+                                </div>
                             </div>
                         @else
                             <div class="flex items-center justify-between p-3 rounded-lg mt-1" style="background-color: rgba(var(--warning-rgb), 0.1); border: 1px solid rgba(var(--warning-rgb), 0.3);">
@@ -541,9 +601,22 @@
                                         <i class="fas fa-exclamation-triangle mr-1"></i> No digital address assigned
                                     </p>
                                 </div>
-                                <span class="px-3 py-1 rounded-full text-xs font-semibold" style="background-color: rgba(var(--warning-rgb), 0.2); color: var(--warning);">
-                                    Missing
-                                </span>
+                                <div class="flex items-center space-x-1">
+                                    <span class="px-3 py-1 rounded-full text-xs font-semibold" style="background-color: rgba(var(--warning-rgb), 0.2); color: var(--warning);">
+                                        Missing
+                                    </span>
+
+                                    {{-- ✅ NEW: owner-only add button when no address exists --}}
+                                    @if($isOwned)
+                                    <button type="button"
+                                            onclick="openEditDigitalAddressModal()"
+                                            class="px-3 py-1 rounded-full text-xs font-semibold"
+                                            style="background-color: rgba(var(--primary-rgb), 0.2); color: var(--primary); border: none; cursor: pointer;"
+                                            title="Add digital address">
+                                        <i class="fas fa-plus mr-1"></i> Add
+                                    </button>
+                                    @endif
+                                </div>
                             </div>
                         @endif
                     </div>
@@ -575,13 +648,12 @@
                         </span>
                     @endif
                 </h3>
-                
+
                 @if($allTenants->count() > 0)
                     <!-- Tenants List -->
                     <div class="space-y-4">
                         @foreach($allTenants as $tenant)
                         @php
-                            // Check if tenant is assigned to a unit
                             $assignedUnit = \App\Models\PropertyUnit::where('tenant_id', $tenant->id)
                                 ->where('property_id', $property->id)
                                 ->with(['property', 'approvedBy', 'requestedBy'])
@@ -590,14 +662,13 @@
                             $unitStatus = $assignedUnit ? $assignedUnit->tenant_status : null;
                             $unitNumber = $assignedUnit ? $assignedUnit->unit_number : null;
                             $unitName = $assignedUnit ? $assignedUnit->unit_name : null;
-                            
-                            // Determine tenant assignment status
+
                             $assignmentStatus = 'pending';
                             $statusBadgeClass = 'badge-warning';
                             $statusIcon = 'fa-clock';
                             $statusText = 'Pending Assignment';
                             $statusDescription = 'Tenant has not been assigned to any unit yet';
-                            
+
                             if ($isAssigned) {
                                 switch ($unitStatus) {
                                     case 'pending_approval':
@@ -636,21 +707,18 @@
                                         $statusDescription = 'Tenant is assigned to a unit';
                                 }
                             }
-                            
-                            // Get approval details if available
+
                             $approvedByName = $assignedUnit && $assignedUnit->approvedBy ? $assignedUnit->approvedBy->name : null;
                             $approvedAt = $assignedUnit && $assignedUnit->tenant_approved_at ? \Carbon\Carbon::parse($assignedUnit->tenant_approved_at)->format('M d, Y h:i A') : null;
                             $requestedByName = $assignedUnit && $assignedUnit->requestedBy ? $assignedUnit->requestedBy->name : null;
                             $requestedAt = $assignedUnit && $assignedUnit->tenant_requested_at ? \Carbon\Carbon::parse($assignedUnit->tenant_requested_at)->format('M d, Y h:i A') : null;
-                            
-                            // Get move-in date
+
                             $moveInDate = $assignedUnit && $assignedUnit->tenant_move_in_date ? \Carbon\Carbon::parse($assignedUnit->tenant_move_in_date)->format('M d, Y') : null;
-                            
-                            // Get tenant details from JSON
+
                             $tenantDetails = null;
                             $preferredMoveIn = null;
                             $preferredRent = null;
-                            
+
                             if ($assignedUnit && $assignedUnit->tenant_details) {
                                 if (is_array($assignedUnit->tenant_details)) {
                                     $tenantDetails = $assignedUnit->tenant_details;
@@ -660,18 +728,15 @@
                                 $preferredMoveIn = $tenantDetails && isset($tenantDetails['preferred_move_in']) ? $tenantDetails['preferred_move_in'] : null;
                                 $preferredRent = $tenantDetails && isset($tenantDetails['preferred_rent']) ? $tenantDetails['preferred_rent'] : null;
                             }
-                            
-                            // Check if this is a primary tenant
+
                             $isPrimary = $assignedUnit && ($assignedUnit->is_primary_tenant ?? false);
-                            
-                            // Check if tenant has direct property assignment (pivot)
                             $hasDirectAssignment = $property->tenants->contains($tenant->id);
                         @endphp
                         <div class="tenant-card p-4 rounded-lg" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                             <div class="flex flex-col md:flex-row justify-between items-start gap-4">
                                 <div class="flex items-start space-x-4 w-full md:w-auto">
                                     <!-- Tenant Avatar -->
-                                    <div class="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0" 
+                                    <div class="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0"
                                          style="background-color: rgba(var(--info-rgb), 0.1);">
                                         @if($tenant->gender === 'male')
                                             <i class="fas fa-male text-lg" style="color: var(--info);"></i>
@@ -681,7 +746,7 @@
                                             <i class="fas fa-user text-lg" style="color: var(--info);"></i>
                                         @endif
                                     </div>
-                                    
+
                                     <!-- Tenant Details -->
                                     <div class="flex-1 min-w-0">
                                         <div class="flex items-center flex-wrap gap-2">
@@ -689,35 +754,32 @@
                                                 {{ $tenant->name }}
                                             </h4>
                                             @if($tenant->gender)
-                                                <span class="px-2 py-1 rounded-full text-xs font-semibold" 
+                                                <span class="px-2 py-1 rounded-full text-xs font-semibold"
                                                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
                                                     {{ ucfirst($tenant->gender) }}
                                                 </span>
                                             @endif
-                                            
-                                            <!-- Primary Tenant Badge -->
+
                                             @if($isPrimary)
-                                            <span class="px-2 py-1 rounded-full text-xs font-semibold" 
+                                            <span class="px-2 py-1 rounded-full text-xs font-semibold"
                                                   style="background-color: rgba(var(--primary-rgb), 0.15); color: var(--primary); border: 1px solid rgba(var(--primary-rgb), 0.3);">
                                                 <i class="fas fa-crown mr-1"></i> Primary
                                             </span>
                                             @endif
-                                            
-                                            <!-- Assignment Status Badge -->
+
                                             <span class="px-2 py-1 rounded-full text-xs font-semibold flex items-center {{ $statusBadgeClass }}">
                                                 <i class="fas {{ $statusIcon }} mr-1"></i>
                                                 {{ $statusText }}
                                             </span>
-                                            
-                                            <!-- Direct Assignment Badge -->
+
                                             @if($hasDirectAssignment)
-                                            <span class="px-2 py-1 rounded-full text-xs font-semibold" 
+                                            <span class="px-2 py-1 rounded-full text-xs font-semibold"
                                                   style="background-color: rgba(var(--info-rgb), 0.15); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
                                                 <i class="fas fa-link mr-1"></i> Direct
                                             </span>
                                             @endif
                                         </div>
-                                        
+
                                         <!-- Contact Information -->
                                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
                                             <div class="flex items-center space-x-2">
@@ -727,7 +789,7 @@
                                                     <i class="fas fa-check-circle text-xs" style="color: var(--success);" title="Phone verified"></i>
                                                 @endif
                                             </div>
-                                            
+
                                             @if($tenant->email)
                                             <div class="flex items-center space-x-2">
                                                 <i class="fas fa-envelope text-sm" style="color: var(--text-secondary);"></i>
@@ -738,7 +800,7 @@
                                             </div>
                                             @endif
                                         </div>
-                                        
+
                                         <!-- Status Description -->
                                         <div class="mt-2 text-xs" style="color: var(--text-secondary);">
                                             <i class="fas fa-info-circle mr-1"></i>
@@ -750,7 +812,7 @@
                                                 @endif
                                             @endif
                                         </div>
-                                        
+
                                         <!-- Unit Assignment Information -->
                                         @if($isAssigned && $assignedUnit)
                                         <div class="mt-3 p-3 rounded-lg" style="background-color: rgba(var(--primary-rgb), 0.05); border: 1px solid rgba(var(--primary-rgb), 0.2);">
@@ -765,7 +827,7 @@
                                                         @endif
                                                     </span>
                                                 </div>
-                                                
+
                                                 <div class="flex items-center">
                                                     <i class="fas fa-tag mr-2" style="color: var(--text-secondary);"></i>
                                                     <span class="text-sm font-medium" style="color: var(--text-secondary);">Status:</span>
@@ -773,7 +835,7 @@
                                                         {{ $statusText }}
                                                     </span>
                                                 </div>
-                                                
+
                                                 @if($moveInDate)
                                                 <div class="flex items-center">
                                                     <i class="fas fa-calendar-check mr-2" style="color: var(--success);"></i>
@@ -783,7 +845,7 @@
                                                     </span>
                                                 </div>
                                                 @endif
-                                                
+
                                                 @if($assignedUnit->monthly_rent)
                                                 <div class="flex items-center">
                                                     <i class="fas fa-money-bill-wave mr-2" style="color: var(--success);"></i>
@@ -793,7 +855,7 @@
                                                     </span>
                                                 </div>
                                                 @endif
-                                                
+
                                                 @if($assignedUnit->security_deposit)
                                                 <div class="flex items-center">
                                                     <i class="fas fa-shield-alt mr-2" style="color: var(--info);"></i>
@@ -803,7 +865,7 @@
                                                     </span>
                                                 </div>
                                                 @endif
-                                                
+
                                                 @if($assignedUnit->unit_type)
                                                 <div class="flex items-center">
                                                     <i class="fas fa-building mr-2" style="color: var(--text-secondary);"></i>
@@ -813,7 +875,7 @@
                                                     </span>
                                                 </div>
                                                 @endif
-                                                
+
                                                 @if($assignedUnit->bedrooms)
                                                 <div class="flex items-center">
                                                     <i class="fas fa-bed mr-2" style="color: var(--text-secondary);"></i>
@@ -823,7 +885,7 @@
                                                     </span>
                                                 </div>
                                                 @endif
-                                                
+
                                                 @if($assignedUnit->bathrooms)
                                                 <div class="flex items-center">
                                                     <i class="fas fa-bath mr-2" style="color: var(--text-secondary);"></i>
@@ -834,7 +896,7 @@
                                                 </div>
                                                 @endif
                                             </div>
-                                            
+
                                             <!-- Approval/Action Timeline -->
                                             <div class="mt-3 pt-3 border-t" style="border-color: rgba(var(--primary-rgb), 0.2);">
                                                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
@@ -846,7 +908,7 @@
                                                         <span class="ml-1" style="color: var(--text-secondary);">on {{ $requestedAt }}</span>
                                                     </div>
                                                     @endif
-                                                    
+
                                                     @if($approvedByName && $approvedAt)
                                                     <div class="flex items-center">
                                                         <i class="fas fa-check-circle mr-1" style="color: var(--success);"></i>
@@ -855,7 +917,7 @@
                                                         <span class="ml-1" style="color: var(--text-secondary);">on {{ $approvedAt }}</span>
                                                     </div>
                                                     @endif
-                                                    
+
                                                     @if($preferredMoveIn)
                                                     <div class="flex items-center">
                                                         <i class="fas fa-calendar-alt mr-1" style="color: var(--warning);"></i>
@@ -863,7 +925,7 @@
                                                         <span class="ml-1" style="color: var(--text-primary);">{{ \Carbon\Carbon::parse($preferredMoveIn)->format('M d, Y') }}</span>
                                                     </div>
                                                     @endif
-                                                    
+
                                                     @if($preferredRent)
                                                     <div class="flex items-center">
                                                         <i class="fas fa-hand-holding-usd mr-1" style="color: var(--warning);"></i>
@@ -873,8 +935,7 @@
                                                     @endif
                                                 </div>
                                             </div>
-                                            
-                                            <!-- Approval Notes -->
+
                                             @if($assignedUnit->tenant_approval_notes)
                                             <div class="mt-2 p-2 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05);">
                                                 <div class="flex items-start">
@@ -886,8 +947,7 @@
                                                 </div>
                                             </div>
                                             @endif
-                                            
-                                            <!-- Additional Unit Notes -->
+
                                             @if($assignedUnit->notes)
                                             <div class="mt-2 text-xs" style="color: var(--text-secondary);">
                                                 <i class="fas fa-sticky-note mr-1"></i>
@@ -896,7 +956,6 @@
                                             @endif
                                         </div>
                                         @else
-                                        <!-- No Unit Assigned -->
                                         <div class="mt-3 p-3 rounded-lg" style="background-color: rgba(var(--warning-rgb), 0.05); border: 1px solid rgba(var(--warning-rgb), 0.2);">
                                             <div class="flex items-center flex-wrap gap-2">
                                                 <i class="fas fa-exclamation-triangle" style="color: var(--warning);"></i>
@@ -909,49 +968,48 @@
                                             </div>
                                         </div>
                                         @endif
-                                        
+
                                         <!-- Tenant Registration & Status -->
                                         <div class="flex items-center flex-wrap gap-2 mt-3">
                                             <div class="flex items-center space-x-1">
                                                 @if($tenant->email_verified_at)
-                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold" 
+                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold"
                                                           style="background-color: rgba(var(--success-rgb), 0.2); color: var(--success);">
                                                         <i class="fas fa-check-circle mr-1"></i> Registered
                                                     </span>
                                                 @else
-                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold" 
+                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold"
                                                           style="background-color: rgba(var(--warning-rgb), 0.2); color: var(--warning);">
                                                         <i class="fas fa-clock mr-1"></i> Pending Registration
                                                     </span>
                                                 @endif
                                             </div>
-                                            
+
                                             <div class="flex items-center space-x-1">
                                                 @if($tenant->status === 'active')
-                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold" 
+                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold"
                                                           style="background-color: rgba(var(--success-rgb), 0.2); color: var(--success);">
                                                         <i class="fas fa-circle mr-1 text-xs"></i> Active
                                                     </span>
                                                 @else
-                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold" 
+                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold"
                                                           style="background-color: rgba(var(--warning-rgb), 0.2); color: var(--warning);">
                                                         <i class="fas fa-circle mr-1 text-xs"></i> {{ ucfirst($tenant->status) }}
                                                     </span>
                                                 @endif
                                             </div>
-                                            
+
                                             @if($tenant->created_at)
                                             <div class="flex items-center space-x-1">
-                                                <span class="px-2 py-1 rounded-full text-xs" 
+                                                <span class="px-2 py-1 rounded-full text-xs"
                                                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--text-secondary);">
-                                                    <i class="fas fa-calendar-plus mr-1"></i> 
+                                                    <i class="fas fa-calendar-plus mr-1"></i>
                                                     {{ $tenant->created_at->format('M d, Y') }}
                                                 </span>
                                             </div>
                                             @endif
                                         </div>
-                                        
-                                        <!-- Pivot Information -->
+
                                         @if($tenant->pivot)
                                         <div class="mt-3 text-xs" style="color: var(--text-secondary);">
                                             <p>
@@ -965,29 +1023,27 @@
                                         @endif
                                     </div>
                                 </div>
-                                
+
                                 <!-- Action Buttons for Landlord -->
                                 <div class="flex flex-wrap gap-2 md:flex-col md:min-w-[120px]">
-                                    <!-- Contact Tenant -->
-                                    <a href="tel:{{ $tenant->phone }}" 
+                                    <a href="tel:{{ $tenant->phone }}"
                                        class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center w-full"
                                        style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);"
                                        title="Call tenant">
                                         <i class="fas fa-phone mr-1"></i> Call
                                     </a>
-                                    
+
                                     @if($tenant->email)
-                                    <a href="mailto:{{ $tenant->email }}" 
+                                    <a href="mailto:{{ $tenant->email }}"
                                        class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center w-full"
                                        style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border: 1px solid rgba(var(--primary-rgb), 0.3);"
                                        title="Email tenant">
                                         <i class="fas fa-envelope mr-1"></i> Email
                                     </a>
                                     @endif
-                                    
+
                                     @if($isAssigned && $unitStatus === 'approved')
-                                    <!-- View Unit Details -->
-                                    <a href="{{ route('property-units.show', $assignedUnit->id) }}" 
+                                    <a href="{{ route('property-units.show', $assignedUnit->id) }}"
                                        class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center w-full"
                                        style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
                                         <i class="fas fa-door-open mr-1"></i> View Unit
@@ -998,7 +1054,7 @@
                         </div>
                         @endforeach
                     </div>
-                    
+
                     <!-- Tenant Summary -->
                     <div class="mt-6 grid grid-cols-1 md:grid-cols-4 gap-4">
                         <div class="text-center p-4 rounded-lg" style="background-color: rgba(var(--success-rgb), 0.1);">
@@ -1007,21 +1063,21 @@
                             </div>
                             <p class="text-sm mt-1" style="color: var(--text-secondary);">Registered Tenants</p>
                         </div>
-                        
+
                         <div class="text-center p-4 rounded-lg" style="background-color: rgba(var(--warning-rgb), 0.1);">
                             <div class="text-xl font-bold" style="color: var(--warning);">
                                 {{ $allTenants->where('email_verified_at', null)->count() }}
                             </div>
                             <p class="text-sm mt-1" style="color: var(--text-secondary);">Pending Tenants</p>
                         </div>
-                        
+
                         <div class="text-center p-4 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.1);">
                             <div class="text-xl font-bold" style="color: var(--info);">
                                 {{ $allTenants->where('status', 'active')->count() }}
                             </div>
                             <p class="text-sm mt-1" style="color: var(--text-secondary);">Active Tenants</p>
                         </div>
-                        
+
                         <div class="text-center p-4 rounded-lg" style="background-color: rgba(var(--primary-rgb), 0.1);">
                             <div class="text-xl font-bold" style="color: var(--primary);">
                                 {{ $property->units()->where('tenant_status', 'approved')->count() }}
@@ -1029,15 +1085,14 @@
                             <p class="text-sm mt-1" style="color: var(--text-secondary);">Occupied Units</p>
                         </div>
                     </div>
-                    
+
                 @else
                     <!-- No Tenants -->
                     <div class="text-center py-8">
                         <i class="fas fa-users text-4xl mb-4" style="color: var(--text-secondary);"></i>
                         <h4 class="text-lg font-semibold mb-2" style="color: var(--text-secondary);">No Tenants Assigned</h4>
                         <p class="mb-4" style="color: var(--text-secondary);">This property is currently vacant. Contact field agents to add tenants.</p>
-                        
-                        <!-- Contact Field Agent -->
+
                         @if($property->registeredBy)
                         <div class="mt-6 p-4 rounded-lg" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                             <label class="field-label mb-2">Registered by Field Agent:</label>
@@ -1047,13 +1102,13 @@
                                     <span class="font-semibold" style="color: var(--text-primary);">{{ $property->registeredBy->name }}</span>
                                 </div>
                                 <div class="flex space-x-2">
-                                    <a href="tel:{{ $property->registeredBy->phone }}" 
+                                    <a href="tel:{{ $property->registeredBy->phone }}"
                                        class="px-3 py-1 rounded-lg text-xs font-semibold transition-colors"
                                        style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
                                         <i class="fas fa-phone mr-1"></i> Call
                                     </a>
                                     @if($property->registeredBy->email)
-                                    <a href="mailto:{{ $property->registeredBy->email }}" 
+                                    <a href="mailto:{{ $property->registeredBy->email }}"
                                        class="px-3 py-1 rounded-lg text-xs font-semibold transition-colors"
                                        style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border: 1px solid rgba(var(--primary-rgb), 0.3);">
                                         <i class="fas fa-envelope mr-1"></i> Email
@@ -1079,23 +1134,23 @@
                         ({{ $property->units()->count() }} unit(s))
                     </span>
                 </h3>
-                
+
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div class="p-4 rounded-lg text-center" style="background-color: rgba(var(--info-rgb), 0.1); border: 1px solid rgba(var(--info-rgb), 0.2);">
                         <div class="text-2xl font-bold" style="color: var(--info);">{{ $property->units()->count() }}</div>
                         <p class="text-xs" style="color: var(--text-secondary);">Total Units</p>
                     </div>
-                    
+
                     <div class="p-4 rounded-lg text-center" style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.2);">
                         <div class="text-2xl font-bold" style="color: var(--success);">{{ $property->units()->where('tenant_status', 'approved')->count() }}</div>
                         <p class="text-xs" style="color: var(--text-secondary);">Occupied</p>
                     </div>
-                    
+
                     <div class="p-4 rounded-lg text-center" style="background-color: rgba(var(--warning-rgb), 0.1); border: 1px solid rgba(var(--warning-rgb), 0.2);">
                         <div class="text-2xl font-bold" style="color: var(--warning);">{{ $property->units()->where('tenant_status', 'pending_approval')->count() }}</div>
                         <p class="text-xs" style="color: var(--text-secondary);">Pending Approval</p>
                     </div>
-                    
+
                     <div class="p-4 rounded-lg text-center" style="background-color: rgba(var(--danger-rgb), 0.1); border: 1px solid rgba(var(--danger-rgb), 0.2);">
                         <div class="text-2xl font-bold" style="color: var(--danger);">{{ $property->units()->where('tenant_status', 'vacated')->count() }}</div>
                         <p class="text-xs" style="color: var(--text-secondary);">Vacated</p>
@@ -1110,42 +1165,42 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-map-marked-alt mr-2"></i>Registration Plan Details
                 </h3>
-                
+
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="space-y-4">
                         <div class="property-field">
                             <label class="field-label">Plan Reference</label>
                             <p class="field-value">#{{ $property->registrationPlan->id }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Zone</label>
                             <p class="field-value">{{ $property->registrationPlan->zone }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Section</label>
                             <p class="field-value">{{ $property->registrationPlan->section ?? 'No Section' }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Starting Point</label>
                             <p class="field-value">{{ $property->registrationPlan->starting_point }}</p>
                         </div>
                     </div>
-                    
+
                     <div class="space-y-4">
                         <div class="property-field">
                             <label class="field-label">Naming Pattern</label>
                             <p class="field-value font-mono">{{ $property->registrationPlan->naming_pattern }}</p>
                             <p class="field-subtext">Used to generate registration patterns</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Sequence Type</label>
                             <p class="field-value capitalize">{{ str_replace('_', ' ', $property->registrationPlan->sequence_type) }}</p>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Plan Status</label>
                             @php
@@ -1161,7 +1216,7 @@
                                 {{ ucfirst(str_replace('_', ' ', $property->registrationPlan->status)) }}
                             </span>
                         </div>
-                        
+
                         <div class="property-field">
                             <label class="field-label">Registration Progress</label>
                             <div class="space-y-2">
@@ -1187,14 +1242,14 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-clipboard-check mr-2"></i>Inspection History
                 </h3>
-                
+
                 <div class="space-y-4">
                     <div class="property-field">
                         <label class="field-label">Last Inspection Date</label>
                         @if($property->last_inspection_date)
                             <p class="field-value">{{ $property->last_inspection_date->format('M d, Y') }}</p>
                             <p class="field-subtext">{{ $property->last_inspection_date->diffForHumans() }}</p>
-                            
+
                             @if($property->isInspectionOverdue())
                             <div class="mt-2 p-2 rounded" style="background-color: rgba(var(--warning-rgb), 0.1);">
                                 <p class="text-sm" style="color: var(--warning);">
@@ -1210,12 +1265,12 @@
                 </div>
             </div>
 
-            <!-- Payment Information (Landlord Specific) -->
+            <!-- Payment Information (Owner Only) -->
             <div class="card p-6">
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-credit-card mr-2"></i>Payment Information
                 </h3>
-                
+
                 <div class="space-y-4">
                     <div class="property-field">
                         <label class="field-label">Payment Status</label>
@@ -1227,11 +1282,14 @@
                                 </span>
                             </div>
                             <p class="field-subtext mt-1">This property is active and can receive payments</p>
+
+                            @if($isOwned)
                             <div class="mt-4">
                                 <a href="{{ route('landlord.payments.create', $property->id) }}" class="btn-primary flex items-center justify-center">
                                     <i class="fas fa-money-bill-wave mr-2"></i> Make a Payment
                                 </a>
                             </div>
+                            @endif
                         @else
                             <div class="flex items-center mt-1">
                                 <span class="px-3 py-2 rounded-full text-sm font-semibold" style="background-color: rgba(var(--warning-rgb), 0.2); color: var(--warning);">
@@ -1242,15 +1300,23 @@
                             <p class="field-subtext mt-1">Property must be active to make payments</p>
                         @endif
                     </div>
-                    
-                    <!-- View Payment History -->
+
+                    @if($isOwned)
                     <div class="mt-4">
                         <a href="{{ route('landlord.payments.history') }}?property_id={{ $property->id }}" class="btn-secondary flex items-center justify-center">
                             <i class="fas fa-history mr-2"></i> View Payment History
                         </a>
                     </div>
-                    
-                    <!-- Tenant Rent Status -->
+                    @else
+                    <div class="mt-4 p-3 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.2);">
+                        <div class="flex items-start space-x-2">
+                            <i class="fas fa-info-circle mt-0.5" style="color: var(--info);"></i>
+                            <p class="text-xs" style="color: var(--text-secondary);">
+                                Payment actions are available to the property owner. As a linked family member, you have view-only access to payment status.
+                            </p>
+                        </div>
+                    </div>
+                    @endif                    <!-- Tenant Rent Status -->
                     @if($allTenants->count() > 0)
                     <div class="mt-6 border-t pt-4" style="border-color: var(--border-color);">
                         <label class="field-label">Tenant Payment Status</label>
@@ -1281,44 +1347,52 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-bolt mr-2"></i>Quick Actions
                 </h3>
-                
+
                 <div class="space-y-3">
                     <!-- View on Google Maps -->
                     @if($property->street_name)
-                        <a href="https://maps.google.com/?q={{ urlencode($property->street_name . ' ' . $property->house_number . ' ' . $property->zone) }}" 
+                        <a href="https://maps.google.com/?q={{ urlencode($property->street_name . ' ' . $property->house_number . ' ' . $property->zone) }}"
                            target="_blank" class="action-button btn-secondary">
                             <i class="fas fa-map-marker-alt mr-2"></i> View on Google Maps
                         </a>
                     @endif
-                    
+
                     <!-- Copy Digital Address -->
                     @if($property->digital_address)
                         <button onclick="copyDigitalAddress()" class="action-button btn-secondary w-full">
                             <i class="fas fa-copy mr-2"></i> Copy Digital Address
                         </button>
                     @endif
-                    
+
+                    {{-- ✅ NEW: owner-only quick action to edit / add digital address --}}
+                    @if($isOwned)
+                    <button type="button" onclick="openEditDigitalAddressModal()" class="action-button btn-secondary w-full">
+                        <i class="fas fa-pen mr-2"></i>
+                        {{ $property->digital_address ? 'Edit Digital Address' : 'Add Digital Address' }}
+                    </button>
+                    @endif
+
                     <!-- Contact Field Agent (if exists) -->
                     @if($property->registeredBy)
                         <a href="tel:{{ $property->registeredBy->phone }}" class="action-button btn-secondary">
                             <i class="fas fa-phone mr-2"></i> Contact Field Agent
                         </a>
                     @endif
-                    
+
                     <!-- View Invoices -->
                     <a href="{{ route('landlord.invoices') }}?property_id={{ $property->id }}" class="action-button btn-secondary">
                         <i class="fas fa-file-invoice mr-2"></i> View Invoices
                     </a>
-                    
-                    <!-- Make Payment (if active) -->
-                    @if($property->status === 'active')
+
+                    <!-- Make Payment (owner only, when active) -->
+                    @if($isOwned && $property->status === 'active')
                         <a href="{{ route('landlord.payments.create', $property->id) }}" class="action-button btn-primary">
                             <i class="fas fa-credit-card mr-2"></i> Make Payment
                         </a>
                     @endif
-                    
-                    <!-- Contact Tenants -->
-                    @if($allTenants->count() > 0)
+
+                    <!-- Contact Tenants (owner only) -->
+                    @if($isOwned && $allTenants->count() > 0)
                         <button onclick="showTenantContacts()" class="action-button btn-secondary">
                             <i class="fas fa-users mr-2"></i> Contact Tenants
                         </button>
@@ -1332,7 +1406,7 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-users mr-2"></i>Tenants Overview
                 </h3>
-                
+
                 <div class="space-y-4">
                     <!-- Occupancy Rate -->
                     <div class="text-center p-4 rounded-lg" style="background-color: rgba(var(--success-rgb), 0.1);">
@@ -1351,7 +1425,7 @@
                             {{ round($occupancy) }}% occupancy
                         </p>
                     </div>
-                    
+
                     <!-- Tenant Status Breakdown -->
                     <div class="space-y-3">
                         <div class="flex justify-between items-center">
@@ -1362,7 +1436,7 @@
                                 {{ $allTenants->where('email_verified_at', '!==', null)->count() }}
                             </span>
                         </div>
-                        
+
                         <div class="flex justify-between items-center">
                             <span class="text-sm" style="color: var(--text-secondary);">
                                 <i class="fas fa-clock mr-2" style="color: var(--warning);"></i>Pending
@@ -1371,7 +1445,7 @@
                                 {{ $allTenants->where('email_verified_at', null)->count() }}
                             </span>
                         </div>
-                        
+
                         <div class="flex justify-between items-center">
                             <span class="text-sm" style="color: var(--text-secondary);">
                                 <i class="fas fa-circle mr-2" style="color: var(--success);"></i>Active
@@ -1380,7 +1454,7 @@
                                 {{ $allTenants->where('status', 'active')->count() }}
                             </span>
                         </div>
-                        
+
                         <div class="flex justify-between items-center">
                             <span class="text-sm" style="color: var(--text-secondary);">
                                 <i class="fas fa-door-open mr-2" style="color: var(--primary);"></i>Occupied Units
@@ -1390,7 +1464,7 @@
                             </span>
                         </div>
                     </div>
-                    
+
                     <!-- Quick Contact -->
                     <div class="border-t pt-4 mt-4" style="border-color: var(--border-color);">
                         <label class="field-label mb-2">Quick Contact</label>
@@ -1426,39 +1500,38 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-tags mr-2"></i>Property Type Details
                 </h3>
-                
+
                 <div class="space-y-4">
                     @if($property->propertyType)
                         <div class="text-center">
-                            <div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3" 
+                            <div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3"
                                  style="background-color: {{ $property->propertyType->color }}20; border: 2px solid {{ $property->propertyType->color }}30;">
                                 <i class="{{ $property->propertyType->icon }} text-2xl" style="color: {{ $property->propertyType->color }};"></i>
                             </div>
                             <h4 class="font-semibold text-lg" style="color: var(--text-primary);">{{ $property->propertyType->name }}</h4>
-                            
+
                             @if($property->propertyType->is_custom)
-                                <span class="inline-block px-2 py-1 rounded-full text-xs font-semibold mt-1" 
+                                <span class="inline-block px-2 py-1 rounded-full text-xs font-semibold mt-1"
                                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
                                     <i class="fas fa-pencil-alt mr-1"></i> Custom Type
                                 </span>
                             @endif
                         </div>
-                        
+
                         @if($property->custom_property_type)
                         <div class="p-3 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.1); border: 1px solid rgba(var(--info-rgb), 0.3);">
                             <label class="field-label mb-2">Custom Property Type</label>
                             <p class="font-semibold text-center" style="color: var(--info);">{{ $property->custom_property_type }}</p>
                         </div>
                         @endif
-                        
+
                         @if($property->propertyType->description)
                         <div class="p-3 rounded-lg" style="background-color: var(--bg-secondary);">
                             <label class="field-label mb-2">Description</label>
                             <p class="text-sm" style="color: var(--text-primary); line-height: 1.5;">{{ $property->propertyType->description }}</p>
                         </div>
                         @endif
-                        
-                        <!-- Property Type Stats -->
+
                         @if($property->propertyType->max_capacity)
                         <div class="p-3 rounded-lg" style="background-color: rgba(var(--primary-rgb), 0.1); border: 1px solid rgba(var(--primary-rgb), 0.3);">
                             <label class="field-label mb-2">Capacity</label>
@@ -1492,12 +1565,17 @@
                 </div>
             </div>
 
-            <!-- Property Owner Information (Landlord's own info) -->
+            <!-- Owner / Linked-Access Information Card -->
             <div class="card p-6">
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
-                    <i class="fas fa-user-tie mr-2"></i>My Information
+                    <i class="fas fa-user-tie mr-2"></i>
+                    @if($isOwned)
+                        My Information
+                    @else
+                        Owner Information
+                    @endif
                 </h3>
-                
+
                 <div class="space-y-4">
                     <div class="text-center">
                         <div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3" style="background-color: rgba(var(--primary-rgb), 0.1);">
@@ -1507,8 +1585,16 @@
                         <p class="text-sm" style="color: var(--text-secondary);">
                             <i class="fas fa-house-user mr-1"></i>Property Owner
                         </p>
+
+                        @if(!$isOwned)
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs mt-2"
+                                  style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
+                                <i class="fas fa-user-friends mr-1"></i>
+                                You have linked family access
+                            </span>
+                        @endif
                     </div>
-                    
+
                     <div class="space-y-3">
                         <div class="flex items-center justify-between p-2">
                             <span class="text-sm" style="color: var(--text-secondary);">
@@ -1518,7 +1604,7 @@
                                 {{ $property->landlord->phone }}
                             </span>
                         </div>
-                        
+
                         <div class="flex items-center justify-between p-2">
                             <span class="text-sm" style="color: var(--text-secondary);">
                                 <i class="fas fa-envelope mr-2"></i>Email
@@ -1528,8 +1614,9 @@
                             </span>
                         </div>
                     </div>
-                    
-                    <!-- Property Count with Occupancy -->
+
+                    {{-- Owner property count — only meaningful for owners --}}
+                    @if($isOwned)
                     <div class="border-t pt-4 mt-4" style="border-color: var(--border-color);">
                         <div class="text-center">
                             <p class="text-sm" style="color: var(--text-secondary);">My Properties</p>
@@ -1537,7 +1624,9 @@
                                 {{ $property->landlord->properties_count ?? $property->landlord->properties->count() }}
                             </p>
                             @php
-                                $totalTenants = $property->landlord->properties->sum(function($prop) {
+                                // N+1 note: getAllTenants() is called per property — consider caching
+                                // or a dedicated count query if this becomes hot.
+                                $totalTenants = $property->landlord->properties->sum(function ($prop) {
                                     return $prop->getAllTenants()->count();
                                 });
                             @endphp
@@ -1547,6 +1636,7 @@
                             </p>
                         </div>
                     </div>
+                    @endif
                 </div>
             </div>
 
@@ -1555,21 +1645,20 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-info-circle mr-2"></i>Property Metadata
                 </h3>
-                
+
                 <div class="space-y-3">
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Property ID</span>
                         <span class="font-mono text-sm px-2 py-1 rounded" style="background-color: var(--bg-secondary); color: var(--text-primary);">#{{ $property->id }}</span>
                     </div>
-                    
+
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Registration Pattern</span>
                         <span class="font-mono text-xs px-2 py-1 rounded" style="background-color: var(--bg-secondary); color: var(--text-primary);">
                             {{ $property->registration_pattern ?? 'N/A' }}
                         </span>
                     </div>
-                    
-                    <!-- Property Type in Metadata -->
+
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Property Type</span>
                         <span class="text-sm font-semibold" style="color: var(--text-primary);">
@@ -1580,8 +1669,7 @@
                             @endif
                         </span>
                     </div>
-                    
-                    <!-- Tenants Count -->
+
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Current Tenants</span>
                         <div class="text-right">
@@ -1593,8 +1681,7 @@
                             </div>
                         </div>
                     </div>
-                    
-                    <!-- Units Count -->
+
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Total Units</span>
                         <div class="text-right">
@@ -1606,7 +1693,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Created</span>
                         <div class="text-right">
@@ -1614,7 +1701,7 @@
                             <div class="text-xs" style="color: var(--text-secondary);">{{ $property->created_at->diffForHumans() }}</div>
                         </div>
                     </div>
-                    
+
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Last Updated</span>
                         <div class="text-right">
@@ -1622,14 +1709,14 @@
                             <div class="text-xs" style="color: var(--text-secondary);">{{ $property->updated_at->diffForHumans() }}</div>
                         </div>
                     </div>
-                    
+
                     @if($property->created_by && $property->creator)
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Created By</span>
                         <span class="text-sm font-semibold" style="color: var(--text-primary);">{{ $property->creator->name }}</span>
                     </div>
                     @endif
-                    
+
                     @if($property->registered_by && $property->registeredBy)
                     <div class="flex justify-between items-center p-2">
                         <span class="text-sm" style="color: var(--text-secondary);">Registered By</span>
@@ -1644,7 +1731,7 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-chart-bar mr-2"></i>Property Overview
                 </h3>
-                
+
                 <div class="space-y-4">
                     <!-- Property Status -->
                     <div class="text-center p-4 rounded-lg" style="background-color: rgba(var(--{{ $property->status === 'active' ? 'success' : 'secondary' }}-rgb), 0.1);">
@@ -1659,14 +1746,14 @@
                             {{ $property->status }} Property
                         </p>
                     </div>
-                    
+
                     <!-- Stats Grid -->
                     <div class="grid grid-cols-2 gap-2">
                         <div class="text-center p-3 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.1);">
                             <div class="text-lg font-bold" style="color: var(--info);">{{ $property->registration_date->format('Y') }}</div>
                             <p class="text-xs" style="color: var(--info);">Registered</p>
                         </div>
-                        
+
                         <div class="text-center p-3 rounded-lg" style="background-color: rgba(var(--purple-rgb, 128, 90, 213), 0.1);">
                             <div class="text-lg font-bold" style="color: var(--purple, #805AD5);">
                                 {{ $allTenants->count() }}
@@ -1676,8 +1763,8 @@
                     </div>
 
                     <!-- Occupancy Status -->
-                    <div class="text-center p-3 rounded-lg border" 
-                         style="border-color: {{ $allTenants->count() > 0 ? 'rgba(var(--success-rgb), 0.3)' : 'rgba(var(--warning-rgb), 0.3)' }}; 
+                    <div class="text-center p-3 rounded-lg border"
+                         style="border-color: {{ $allTenants->count() > 0 ? 'rgba(var(--success-rgb), 0.3)' : 'rgba(var(--warning-rgb), 0.3)' }};
                                 background-color: {{ $allTenants->count() > 0 ? 'rgba(var(--success-rgb), 0.1)' : 'rgba(var(--warning-rgb), 0.1)' }};">
                         <div class="text-sm font-semibold" style="color: {{ $allTenants->count() > 0 ? 'var(--success)' : 'var(--warning)' }};">
                             <i class="fas fa-{{ $allTenants->count() > 0 ? 'home' : 'home' }} mr-1"></i>
@@ -1720,9 +1807,15 @@
                     @endif
 
                     <!-- Ownership Badge -->
-                    <div class="text-center p-3 rounded-lg border" style="border-color: rgba(var(--primary-rgb), 0.3); background-color: rgba(var(--primary-rgb), 0.1);">
-                        <div class="text-sm font-semibold" style="color: var(--primary);">
-                            <i class="fas fa-house-user mr-1"></i>My Property
+                    <div class="text-center p-3 rounded-lg border"
+                         style="border-color: rgba(var(--{{ $isOwned ? 'primary' : 'info' }}-rgb), 0.3);
+                                background-color: rgba(var(--{{ $isOwned ? 'primary' : 'info' }}-rgb), 0.1);">
+                        <div class="text-sm font-semibold" style="color: var(--{{ $isOwned ? 'primary' : 'info' }});">
+                            @if($isOwned)
+                                <i class="fas fa-house-user mr-1"></i>My Property
+                            @else
+                                <i class="fas fa-user-friends mr-1"></i>Linked Property
+                            @endif
                         </div>
                     </div>
                 </div>
@@ -1732,7 +1825,7 @@
 </div>
 
 <!-- Tenant Contacts Modal -->
-@if($allTenants->count() > 0)
+@if($isOwned && $allTenants->count() > 0)
 <div id="tenantContactsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
     <div class="bg-white rounded-lg p-6 w-full max-w-md" style="background-color: var(--bg-card); max-height: 80vh; overflow-y: auto;">
         <div class="flex justify-between items-center mb-4">
@@ -1743,12 +1836,12 @@
                 <i class="fas fa-times"></i>
             </button>
         </div>
-        
+
         <div class="space-y-4">
             @foreach($allTenants as $tenant)
             <div class="p-4 rounded-lg" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
                 <div class="flex items-center space-x-3 mb-3">
-                    <div class="w-10 h-10 rounded-full flex items-center justify-center" 
+                    <div class="w-10 h-10 rounded-full flex items-center justify-center"
                          style="background-color: rgba(var(--info-rgb), 0.1);">
                         @if($tenant->gender === 'male')
                             <i class="fas fa-male" style="color: var(--info);"></i>
@@ -1769,26 +1862,26 @@
                         </p>
                     </div>
                 </div>
-                
+
                 <div class="space-y-2">
                     <div class="flex items-center justify-between">
                         <span class="text-sm" style="color: var(--text-secondary);">Phone</span>
                         <div class="flex space-x-2">
                             <span class="text-sm font-semibold" style="color: var(--text-primary);">{{ $tenant->phone }}</span>
-                            <a href="tel:{{ $tenant->phone }}" 
+                            <a href="tel:{{ $tenant->phone }}"
                                class="px-2 py-1 rounded text-xs"
                                style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
                                 <i class="fas fa-phone"></i>
                             </a>
                         </div>
                     </div>
-                    
+
                     @if($tenant->email)
                     <div class="flex items-center justify-between">
                         <span class="text-sm" style="color: var(--text-secondary);">Email</span>
                         <div class="flex space-x-2">
                             <span class="text-sm font-semibold" style="color: var(--text-primary);">{{ $tenant->email }}</span>
-                            <a href="mailto:{{ $tenant->email }}" 
+                            <a href="mailto:{{ $tenant->email }}"
                                class="px-2 py-1 rounded text-xs"
                                style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
                                 <i class="fas fa-envelope"></i>
@@ -1796,7 +1889,7 @@
                         </div>
                     </div>
                     @endif
-                    
+
                     @if($tenant->pivot && $tenant->pivot->notes)
                     <div class="mt-2 pt-2 border-t" style="border-color: var(--border-color);">
                         <p class="text-xs" style="color: var(--text-secondary);">
@@ -1808,9 +1901,9 @@
             </div>
             @endforeach
         </div>
-        
+
         <div class="mt-6 text-center">
-            <button onclick="hideTenantContactsModal()" 
+            <button onclick="hideTenantContactsModal()"
                     class="px-4 py-2 rounded-lg font-medium transition-colors"
                     style="background-color: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color);">
                 Close
@@ -1818,6 +1911,322 @@
         </div>
     </div>
 </div>
+@endif
+
+{{-- ✅ NEW: EDIT DIGITAL ADDRESS MODAL (OWNER ONLY) — themed to match blade --}}
+@if($isOwned)
+<div id="editDigitalAddressModal" class="da-modal-backdrop">
+    <div class="da-modal-card">
+        {{-- Header --}}
+        <div class="da-modal-header">
+            <h3 class="da-modal-title">
+                <i class="fas fa-map-marker-alt" style="color: var(--warning);"></i>
+                <span id="editDigitalAddressTitle">Edit Digital Address</span>
+            </h3>
+            <button type="button" id="closeEditDigitalAddressModal" class="da-modal-close" aria-label="Close">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+
+        {{-- Body --}}
+        <form id="editDigitalAddressForm"
+              action="{{ route('landlord.properties.update-digital-address', $property->id) }}"
+              method="POST"
+              class="da-modal-form">
+            @csrf
+            @method('PUT')
+
+            {{-- Info banner — same tint pattern as blade alert boxes --}}
+            <div class="da-info-banner">
+                <i class="fas fa-info-circle mr-1" style="color: var(--info);"></i>
+                <span>
+                    Changing the digital address will attempt to re-geocode the property's
+                    map coordinates automatically. If geocoding fails, the address still
+                    saves and the previous coordinates are kept.
+                </span>
+            </div>
+
+            {{-- Field --}}
+            <div class="property-field" style="margin-bottom: 1rem;">
+                <label for="edit_digital_address" class="field-label">
+                    Digital Address <span style="color: var(--danger);">*</span>
+                </label>
+                <input type="text"
+                       id="edit_digital_address"
+                       name="digital_address"
+                       value="{{ $property->digital_address }}"
+                       required
+                       maxlength="255"
+                       placeholder="e.g. GA-123-4567"
+                       class="da-input">
+                <p class="field-subtext">
+                    GhanaPost GPS or any digital address format. Used for map positioning.
+                </p>
+                <span class="error-message" id="editDigitalAddressError"
+                      style="color: var(--danger); font-size: 0.75rem; margin-top: 0.25rem; display: block;"></span>
+            </div>
+
+            {{-- Footer --}}
+            <div class="da-modal-footer">
+                <button type="button" id="cancelEditDigitalAddressBtn" class="da-btn da-btn-secondary">
+                    Cancel
+                </button>
+                <button type="submit" id="submitEditDigitalAddressBtn" class="da-btn da-btn-primary">
+                    <i class="fas fa-save"></i> Save Address
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{{-- ✅ EDIT DIGITAL ADDRESS MODAL STYLES — scoped to #editDigitalAddressModal --}}
+<style>
+    /* Backdrop */
+    #editDigitalAddressModal.da-modal-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.55);
+        z-index: 9999;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        backdrop-filter: blur(2px);
+    }
+
+    /* Card */
+    #editDigitalAddressModal .da-modal-card {
+        background: var(--bg-card);
+        color: var(--text-primary);
+        border: 1px solid var(--border-color);
+        border-radius: 0.75rem;
+        width: 100%;
+        max-width: 500px;
+        max-height: 92vh;
+        overflow-y: auto;
+        position: relative;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
+        animation: daFadeIn 0.2s ease-out;
+    }
+
+    @keyframes daFadeIn {
+        from { opacity: 0; transform: scale(0.97); }
+        to   { opacity: 1; transform: scale(1); }
+    }
+
+    /* Header */
+    #editDigitalAddressModal .da-modal-header {
+        padding: 1.25rem;
+        border-bottom: 1px solid var(--border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        position: sticky;
+        top: 0;
+        background: var(--bg-card);
+        z-index: 2;
+        border-top-left-radius: 0.75rem;
+        border-top-right-radius: 0.75rem;
+    }
+
+    #editDigitalAddressModal .da-modal-title {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    #editDigitalAddressModal .da-modal-close {
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        cursor: pointer;
+        padding: 0.5rem;
+        min-width: 44px;
+        min-height: 44px;
+        border-radius: 0.5rem;
+        transition: background-color 0.15s ease, color 0.15s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+    }
+
+    #editDigitalAddressModal .da-modal-close:hover {
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+    }
+
+    /* Body */
+    #editDigitalAddressModal .da-modal-form {
+        padding: 1.5rem;
+    }
+
+    /* Info banner — matches the alert tint pattern used elsewhere */
+    #editDigitalAddressModal .da-info-banner {
+        padding: 0.9rem 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+        font-size: 0.85rem;
+        line-height: 1.5;
+        background: rgba(var(--info-rgb), 0.1);
+        border: 1px solid rgba(var(--info-rgb), 0.3);
+        color: var(--text-primary);
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    /* Input */
+    #editDigitalAddressModal .da-input {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 0.5rem;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        font-size: 0.95rem;
+        min-height: 44px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        font-family: inherit;
+    }
+
+    #editDigitalAddressModal .da-input::placeholder {
+        color: var(--text-secondary);
+        opacity: 0.7;
+    }
+
+    #editDigitalAddressModal .da-input:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
+    }
+
+    #editDigitalAddressModal .da-input.error {
+        border-color: var(--danger);
+        box-shadow: 0 0 0 3px rgba(var(--danger-rgb, 239, 68, 68), 0.15);
+    }
+
+    /* Footer */
+    #editDigitalAddressModal .da-modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        margin-top: 1.25rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border-color);
+    }
+
+    /* Buttons */
+    #editDigitalAddressModal .da-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1.5rem;
+        border-radius: 0.5rem;
+        cursor: pointer;
+        font-weight: 600;
+        min-height: 44px;
+        font-size: 0.95rem;
+        border: none;
+        transition: transform 0.1s ease, opacity 0.15s ease, background-color 0.15s ease;
+    }
+
+    #editDigitalAddressModal .da-btn:active {
+        transform: translateY(1px);
+    }
+
+    #editDigitalAddressModal .da-btn-secondary {
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+        border: 1px solid var(--border-color);
+    }
+
+    #editDigitalAddressModal .da-btn-secondary:hover {
+        background: var(--bg-tertiary, var(--bg-secondary));
+        opacity: 0.95;
+    }
+
+    #editDigitalAddressModal .da-btn-primary {
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        color: #ffffff;
+    }
+
+    #editDigitalAddressModal .da-btn-primary:hover {
+        opacity: 0.95;
+    }
+
+    #editDigitalAddressModal .da-btn-primary:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    /* Mobile */
+    @media (max-width: 768px) {
+        #editDigitalAddressModal .da-modal-card {
+            max-width: 100%;
+            max-height: 95vh;
+            border-radius: 0.5rem;
+        }
+
+        #editDigitalAddressModal .da-modal-footer {
+            flex-direction: column-reverse;
+        }
+
+        #editDigitalAddressModal .da-modal-footer .da-btn {
+            width: 100%;
+        }
+    }
+
+    /* Dark theme — explicit override so the modal is indistinguishable
+       from the rest of the blade in dark mode even if CSS vars drift. */
+    [data-theme="dark"] #editDigitalAddressModal .da-modal-card {
+        background: #1e293b;
+        border-color: #334155;
+        color: #f1f5f9;
+    }
+
+    [data-theme="dark"] #editDigitalAddressModal .da-modal-header {
+        background: #1e293b;
+        border-bottom-color: #334155;
+    }
+
+    [data-theme="dark"] #editDigitalAddressModal .da-modal-title {
+        color: #f1f5f9;
+    }
+
+    [data-theme="dark"] #editDigitalAddressModal .da-input {
+        background: #0f172a;
+        color: #f1f5f9;
+        border-color: #334155;
+    }
+
+    [data-theme="dark"] #editDigitalAddressModal .da-input::placeholder {
+        color: #94a3b8;
+    }
+
+    [data-theme="dark"] #editDigitalAddressModal .da-info-banner {
+        background: rgba(6, 182, 212, 0.12);
+        border-color: rgba(6, 182, 212, 0.35);
+        color: #e2e8f0;
+    }
+
+    [data-theme="dark"] #editDigitalAddressModal .da-modal-footer {
+        border-top-color: #334155;
+    }
+
+    [data-theme="dark"] #editDigitalAddressModal .da-btn-secondary {
+        background: #0f172a;
+        color: #f1f5f9;
+        border-color: #334155;
+    }
+</style>
 @endif
 
 <!-- Notification Container -->
@@ -1839,8 +2248,7 @@ let photosArray = [];
             'caption' => $photo->is_primary ? 'Primary Photo' : 'Property Photo'
         ];
     }));
-    
-    // Ensure primary photo is first in the array for gallery
+
     const primaryIndex = photosArray.findIndex(p => p.caption === 'Primary Photo');
     if (primaryIndex > 0) {
         const primaryPhoto = photosArray[primaryIndex];
@@ -1853,19 +2261,17 @@ function openPhotoModal(imageUrl, caption) {
     const modal = document.getElementById('photoModal');
     const modalImage = document.getElementById('modalImage');
     const modalCaption = document.getElementById('modalCaption');
-    
-    // Find the index of the clicked photo
+
     currentPhotoIndex = photosArray.findIndex(p => p.url === imageUrl);
     if (currentPhotoIndex === -1) {
         currentPhotoIndex = 0;
     }
-    
+
     modalImage.src = imageUrl;
     modalCaption.textContent = caption + (photosArray.length > 1 ? ` (${currentPhotoIndex + 1} of ${photosArray.length})` : '');
     modal.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
-    
-    // Update navigation buttons visibility
+
     updateNavButtons();
 }
 
@@ -1893,7 +2299,7 @@ function updateModalPhoto() {
     const modalImage = document.getElementById('modalImage');
     const modalCaption = document.getElementById('modalCaption');
     const photo = photosArray[currentPhotoIndex];
-    
+
     modalImage.src = photo.url;
     modalCaption.textContent = photo.caption + ` (${currentPhotoIndex + 1} of ${photosArray.length})`;
     updateNavButtons();
@@ -1902,13 +2308,13 @@ function updateModalPhoto() {
 function updateNavButtons() {
     const prevBtn = document.querySelector('.prev-btn');
     const nextBtn = document.querySelector('.next-btn');
-    
+
     if (photosArray.length <= 1) {
         if (prevBtn) prevBtn.style.display = 'none';
         if (nextBtn) nextBtn.style.display = 'none';
         return;
     }
-    
+
     if (prevBtn) {
         prevBtn.style.display = currentPhotoIndex === 0 ? 'none' : 'flex';
     }
@@ -1931,10 +2337,10 @@ function downloadCurrentPhoto() {
 
 function downloadAllPhotos() {
     if (photosArray.length === 0) return;
-    
+
     if (photosArray.length > 1) {
         showNotification('Preparing download...', 'info');
-        
+
         photosArray.forEach((photo, index) => {
             setTimeout(() => {
                 const link = document.createElement('a');
@@ -1945,7 +2351,7 @@ function downloadAllPhotos() {
                 document.body.removeChild(link);
             }, index * 500);
         });
-        
+
         setTimeout(() => {
             showNotification('Download started for ' + photosArray.length + ' photos', 'success');
         }, 500);
@@ -1954,18 +2360,23 @@ function downloadAllPhotos() {
     }
 }
 
-// ==================== PHOTO UPLOAD FUNCTIONALITY ====================
-
+// ==================== PHOTO UPLOAD FUNCTIONALITY (OWNER ONLY) ====================
+@if($isOwned)
 document.addEventListener('DOMContentLoaded', function() {
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('photoInput');
     const previewContainer = document.getElementById('photoPreviewContainer');
     const uploadBtn = document.getElementById('uploadBtn');
+
+    if (!dropZone || !fileInput || !previewContainer || !uploadBtn) {
+        // Photo management is not rendered for linked users.
+        return;
+    }
+
     const maxPhotos = 10;
     const currentCount = {{ $property->photos->count() ?? 0 }};
     const maxAllowed = maxPhotos - currentCount;
-    
-    // Click to upload
+
     dropZone.addEventListener('click', function() {
         if (currentCount < maxPhotos) {
             fileInput.click();
@@ -1973,86 +2384,80 @@ document.addEventListener('DOMContentLoaded', function() {
             showNotification('Maximum photos reached (10).', 'warning');
         }
     });
-    
-    // Drag and drop
+
     dropZone.addEventListener('dragover', function(e) {
         e.preventDefault();
         this.style.borderColor = 'var(--primary)';
         this.style.backgroundColor = 'rgba(var(--primary-rgb), 0.05)';
     });
-    
+
     dropZone.addEventListener('dragleave', function(e) {
         e.preventDefault();
         this.style.borderColor = 'var(--border-color)';
         this.style.backgroundColor = 'var(--bg-secondary)';
     });
-    
+
     dropZone.addEventListener('drop', function(e) {
         e.preventDefault();
         this.style.borderColor = 'var(--border-color)';
         this.style.backgroundColor = 'var(--bg-secondary)';
-        
+
         if (fileInput.files.length >= maxAllowed) {
             showNotification('You can only upload ' + maxAllowed + ' more photo(s).', 'warning');
             return;
         }
-        
+
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             fileInput.files = files;
             previewFiles(files);
         }
     });
-    
-    // File input change
+
     fileInput.addEventListener('change', function() {
         const files = this.files;
         if (files.length > 0) {
             previewFiles(files);
         }
     });
-    
-    // Preview files
+
     function previewFiles(files) {
         const container = document.getElementById('photoPreviewContainer');
         container.innerHTML = '';
         container.classList.remove('hidden');
-        
+
         const validFiles = [];
-        const maxSize = 5 * 1024 * 1024; // 5MB
+        const maxSize = 5 * 1024 * 1024;
         const maxAllowedToUpload = Math.min(maxAllowed, 10);
-        
+
         for (let i = 0; i < files.length && i < maxAllowedToUpload; i++) {
             const file = files[i];
-            
-            // Validate file type
+
             if (!file.type.startsWith('image/')) {
                 showNotification(file.name + ' is not an image.', 'error');
                 continue;
             }
-            
-            // Validate file size
+
             if (file.size > maxSize) {
                 showNotification(file.name + ' exceeds 5MB limit.', 'error');
                 continue;
             }
-            
+
             validFiles.push(file);
         }
-        
+
         if (validFiles.length === 0) {
             container.classList.add('hidden');
             return;
         }
-        
-        // Preview valid files
+
         validFiles.forEach((file, index) => {
             const reader = new FileReader();
             reader.onload = function(e) {
                 const div = document.createElement('div');
                 div.className = 'relative rounded-lg overflow-hidden';
                 div.style.border = '2px solid var(--border-color)';
-                
+
                 div.innerHTML = `
                     <img src="${e.target.result}" alt="Preview ${index + 1}" class="w-full h-32 object-cover">
                     <div class="absolute top-1 right-1 bg-green-500 text-white text-xs px-2 py-0.5 rounded-full">
@@ -2061,36 +2466,34 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs px-2 py-1 truncate">
                         ${file.name.substring(0, 20)}${file.name.length > 20 ? '...' : ''}
                     </div>
-                    <button onclick="removePreviewFile(${index})" 
+                    <button onclick="removePreviewFile(${index})"
                             class="absolute top-1 right-1 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-700">
                         <i class="fas fa-times"></i>
                     </button>
                 `;
-                
+
                 container.appendChild(div);
             };
             reader.readAsDataURL(file);
         });
-        
-        // Update upload button text
+
         const fileCount = validFiles.length;
         uploadBtn.innerHTML = `<i class="fas fa-upload mr-2"></i> Upload ${fileCount} Photo${fileCount > 1 ? 's' : ''}`;
         uploadBtn.disabled = false;
     }
-    
-    // Remove preview file
+
     window.removePreviewFile = function(index) {
         const dt = new DataTransfer();
         const files = fileInput.files;
-        
+
         for (let i = 0; i < files.length; i++) {
             if (i !== index) {
                 dt.items.add(files[i]);
             }
         }
-        
+
         fileInput.files = dt.files;
-        
+
         if (fileInput.files.length > 0) {
             previewFiles(fileInput.files);
         } else {
@@ -2098,44 +2501,43 @@ document.addEventListener('DOMContentLoaded', function() {
             uploadBtn.innerHTML = '<i class="fas fa-upload mr-2"></i> Upload Photos';
         }
     };
-    
-    // Form submission - show loading state
+
     document.getElementById('photoUploadForm').addEventListener('submit', function() {
         uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Uploading...';
         uploadBtn.disabled = true;
     });
 });
+@endif
 
 // ==================== NOTIFICATION SYSTEM ====================
 
 function showNotification(message, type = 'success') {
     const container = document.getElementById('notificationContainer');
     if (!container) {
-        // Fallback: Use alert or console
         console.log(message);
         return;
     }
-    
+
     const colors = {
         success: 'var(--success)',
         error: 'var(--danger)',
         warning: 'var(--warning)',
         info: 'var(--info)'
     };
-    
+
     const icons = {
         success: 'fa-check-circle',
         error: 'fa-exclamation-circle',
         warning: 'fa-exclamation-triangle',
         info: 'fa-info-circle'
     };
-    
+
     const notification = document.createElement('div');
     notification.className = 'px-6 py-4 rounded-lg shadow-lg text-white flex items-center animate-slide-in';
     notification.style.backgroundColor = colors[type] || colors.info;
     notification.style.minWidth = '300px';
     notification.style.maxWidth = '500px';
-    
+
     notification.innerHTML = `
         <i class="fas ${icons[type] || icons.info} mr-3 text-xl"></i>
         <span class="flex-1">${message}</span>
@@ -2143,10 +2545,9 @@ function showNotification(message, type = 'success') {
             <i class="fas fa-times"></i>
         </button>
     `;
-    
+
     container.appendChild(notification);
-    
-    // Auto remove after 5 seconds
+
     setTimeout(() => {
         if (notification.parentElement) {
             notification.style.opacity = '0';
@@ -2168,7 +2569,7 @@ function copyDigitalAddress() {
         showNotification('No digital address to copy.', 'warning');
         return;
     }
-    
+
     navigator.clipboard.writeText(digitalAddress).then(function() {
         showNotification('Digital address copied to clipboard!', 'success');
     }).catch(function(err) {
@@ -2177,7 +2578,6 @@ function copyDigitalAddress() {
     });
 }
 
-// Tenant Contacts Modal Functions
 function showTenantContacts() {
     const modal = document.getElementById('tenantContactsModal');
     if (modal) {
@@ -2194,7 +2594,6 @@ function hideTenantContactsModal() {
     }
 }
 
-// Close modal when clicking outside
 const tenantContactsModal = document.getElementById('tenantContactsModal');
 if (tenantContactsModal) {
     tenantContactsModal.addEventListener('click', function(e) {
@@ -2219,8 +2618,7 @@ document.addEventListener('keydown', function(e) {
             previousPhoto();
         }
     }
-    
-    // Close tenant modal with Escape
+
     if (e.key === 'Escape') {
         hideTenantContactsModal();
     }
@@ -2229,7 +2627,6 @@ document.addEventListener('keydown', function(e) {
 // ==================== AUTO-HIDE MESSAGES ====================
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Auto-hide success and error messages after 5 seconds
     const messages = document.querySelectorAll('.alert-success, .alert-danger, .bg-green-100, .bg-red-100');
     messages.forEach(function(message) {
         setTimeout(() => {
@@ -2245,6 +2642,116 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 5000);
     });
 });
+
+// ==================== EDIT DIGITAL ADDRESS (OWNER ONLY) ====================
+@if($isOwned)
+(function() {
+    const modal   = document.getElementById('editDigitalAddressModal');
+    const form    = document.getElementById('editDigitalAddressForm');
+    const titleEl = document.getElementById('editDigitalAddressTitle');
+    const input   = document.getElementById('edit_digital_address');
+    const errEl   = document.getElementById('editDigitalAddressError');
+
+    if (!modal || !form || !input) return;
+
+    window.openEditDigitalAddressModal = function() {
+        titleEl.textContent = input.value.trim()
+            ? 'Edit Digital Address'
+            : 'Add Digital Address';
+        errEl.textContent = '';
+        input.classList.remove('error');
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        setTimeout(function() { input.focus(); input.select(); }, 100);
+    };
+
+    function closeModal() {
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    document.getElementById('closeEditDigitalAddressModal').addEventListener('click', closeModal);
+    document.getElementById('cancelEditDigitalAddressBtn').addEventListener('click', closeModal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const value = input.value.trim();
+        if (!value) {
+            errEl.textContent = 'Please enter a digital address.';
+            input.classList.add('error');
+            input.focus();
+            return;
+        }
+        errEl.textContent = '';
+        input.classList.remove('error');
+
+        const submitBtn = document.getElementById('submitEditDigitalAddressBtn');
+        const original = submitBtn.innerHTML;
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Saving...';
+
+        try {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+            const response = await fetch(form.action, {
+                method: 'POST', // _method=PUT is in the form body
+                headers: {
+                    'X-CSRF-TOKEN': csrfToken || '',
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: new FormData(form),
+            });
+
+            const contentType = response.headers.get('content-type') || '';
+            const rawText = await response.text();
+            let data = null;
+
+            if (contentType.includes('application/json')) {
+                try { data = JSON.parse(rawText); } catch (e) { /* fall through */ }
+            }
+            if (!data) {
+                const m = rawText.match(/\{.*\}/s);
+                if (m) { try { data = JSON.parse(m[0]); } catch (e) {} }
+            }
+
+            if (data && data.success === true) {
+                showNotification(data.message || 'Digital address updated successfully.', 'success');
+                closeModal();
+                setTimeout(function() { window.location.reload(); }, 1200);
+            } else if (data && data.success === false) {
+                if (data.errors && data.errors.digital_address) {
+                    errEl.textContent = data.errors.digital_address[0];
+                    input.classList.add('error');
+                } else {
+                    showNotification(data.message || 'Failed to update digital address.', 'error');
+                }
+            } else {
+                showNotification('Unexpected response from server. Please try again.', 'error');
+            }
+        } catch (err) {
+            console.error(err);
+            showNotification('Network error. Please check your connection and try again.', 'error');
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = original;
+        }
+    });
+
+    // Escape to close
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && modal.style.display === 'flex') {
+            closeModal();
+        }
+    });
+
+    // ✅ Auto-open when arriving via #edit-digital-address (e.g. deep-link from list page)
+    if (window.location.hash === '#edit-digital-address') {
+        setTimeout(window.openEditDigitalAddressModal, 300);
+    }
+})();
+@endif
 
 console.log('Property Management System Loaded Successfully!');
 </script>
@@ -2278,7 +2785,6 @@ console.log('Property Management System Loaded Successfully!');
     box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
 }
 
-/* Photo Modal/Navigation Styles */
 .photo-nav-buttons {
     position: absolute;
     top: 50%;
@@ -2318,7 +2824,6 @@ console.log('Property Management System Loaded Successfully!');
     right: 20px;
 }
 
-/* Property Field Styles */
 .property-field {
     margin-bottom: 1rem;
 }
@@ -2344,7 +2849,6 @@ console.log('Property Management System Loaded Successfully!');
     margin: 0.25rem 0 0 0;
 }
 
-/* Tenant Status Badge Styles */
 .badge-success {
     background-color: rgba(var(--success-rgb), 0.15) !important;
     color: var(--success) !important;
@@ -2369,7 +2873,6 @@ console.log('Property Management System Loaded Successfully!');
     border: 1px solid rgba(var(--info-rgb), 0.3) !important;
 }
 
-/* Button Styles */
 .action-button {
     display: flex;
     align-items: center;
@@ -2425,7 +2928,6 @@ console.log('Property Management System Loaded Successfully!');
     background-color: var(--bg-tertiary);
 }
 
-/* Card Styles */
 .card {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     border: 1px solid var(--border-color);
@@ -2442,7 +2944,6 @@ console.log('Property Management System Loaded Successfully!');
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-/* Animation for notifications */
 @keyframes slideIn {
     from {
         transform: translateX(100%);
@@ -2458,7 +2959,6 @@ console.log('Property Management System Loaded Successfully!');
     animation: slideIn 0.3s ease forwards;
 }
 
-/* Dropzone hover effects */
 #dropZone {
     transition: all 0.3s ease;
 }
@@ -2468,66 +2968,64 @@ console.log('Property Management System Loaded Successfully!');
     background-color: rgba(var(--primary-rgb), 0.03) !important;
 }
 
-/* Responsive Design */
 @media (max-width: 768px) {
     .grid.grid-cols-1.lg\:grid-cols-3 {
         grid-template-columns: 1fr;
     }
-    
+
     .flex.justify-between {
         flex-direction: column;
         gap: 1rem;
     }
-    
+
     .flex.space-x-2 {
         flex-direction: column;
         gap: 0.5rem;
     }
-    
+
     .tenant-card .flex-col.md\:flex-row {
         flex-direction: column;
     }
-    
+
     .tenant-card .flex-wrap.gap-2 {
         flex-direction: column;
         align-items: flex-start;
     }
-    
+
     .tenant-card .md\:flex-col {
         flex-direction: row;
         flex-wrap: wrap;
         width: 100%;
     }
-    
+
     .tenant-card .md\:flex-col .w-full {
         width: auto;
         flex: 1;
         min-width: 80px;
     }
-    
+
     .nav-btn {
         width: 40px;
         height: 40px;
     }
-    
+
     .prev-btn {
         left: 10px;
     }
-    
+
     .next-btn {
         right: 10px;
     }
-    
+
     .nav-btn i {
         font-size: 1.5rem;
     }
-    
+
     #photoModal .max-w-7xl {
         margin: 0 0.5rem;
     }
 }
 
-/* Loading Animation */
 @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
@@ -2537,7 +3035,6 @@ console.log('Property Management System Loaded Successfully!');
     animation: spin 1s linear infinite;
 }
 
-/* Modal Animation */
 #photoModal {
     transition: opacity 0.3s ease;
 }
@@ -2557,7 +3054,6 @@ console.log('Property Management System Loaded Successfully!');
     }
 }
 
-/* Photo Management Hover Effects */
 .group:hover .group-hover\:bg-opacity-60 {
     transition: all 0.3s ease;
 }
@@ -2566,7 +3062,6 @@ console.log('Property Management System Loaded Successfully!');
     transition: all 0.3s ease;
 }
 
-/* Photo Upload Preview */
 #photoPreviewContainer .relative {
     transition: all 0.2s ease;
 }
@@ -2576,7 +3071,6 @@ console.log('Property Management System Loaded Successfully!');
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-/* Scrollbar Styling */
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;

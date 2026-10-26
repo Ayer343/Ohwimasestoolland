@@ -2,6 +2,17 @@
 
 @section('title', 'My Properties & Assignments')
 
+@php
+    // ✅ NEW: Region list — prefer controller-provided, fall back to config.
+    if (!isset($regions) || !is_array($regions)) {
+        $regions = config('ghana.regions', [
+            'Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern',
+            'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah',
+            'Upper East', 'Upper West', 'Volta', 'Western', 'Western North',
+        ]);
+    }
+@endphp
+
 @section('content')
 <div class="grid grid-cols-1 gap-6 mb-6">
     <!-- Header Card -->
@@ -69,6 +80,12 @@
         $totalInAssignedPlans = \App\Models\Property::whereIn('registration_plan_id', $assignedPlanIds)->count();
         $activeInAssignedPlans = \App\Models\Property::whereIn('registration_plan_id', $assignedPlanIds)->where('status', 'active')->count();
         $withDigitalInAssignedPlans = \App\Models\Property::whereIn('registration_plan_id', $assignedPlanIds)->hasDigitalAddress()->count();
+
+        // ✅ NEW: region coverage in assigned plans
+        $withRegionInAssignedPlans = \App\Models\Property::whereIn('registration_plan_id', $assignedPlanIds)
+            ->whereNotNull('region')
+            ->where('region', '!=', '')
+            ->count();
     @endphp
 
     <!-- Statistics Cards -->
@@ -133,6 +150,12 @@
                     <p class="text-xs mt-1" style="color: var(--text-secondary);">
                         In assigned plans
                     </p>
+                    {{-- ✅ NEW: region coverage sub-stat --}}
+                    @if($withRegionInAssignedPlans > 0)
+                    <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                        <i class="fas fa-globe-africa mr-1"></i> {{ $withRegionInAssignedPlans }} with region
+                    </p>
+                    @endif
                 </div>
             </div>
         </div>
@@ -313,6 +336,29 @@
                     <input type="text" name="property_name" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);" 
                            placeholder="Property Name" value="{{ request('property_name') }}">
                 </div>
+
+                {{-- ✅ NEW: region + area filters --}}
+                <div>
+                    <select name="region" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                        <option value="">All Regions</option>
+                        @foreach($regions as $regionOption)
+                            <option value="{{ $regionOption }}" {{ request('region') == $regionOption ? 'selected' : '' }}>
+                                {{ $regionOption }}
+                            </option>
+                        @endforeach
+                    </select>
+                </div>
+                <div>
+                    <input type="text" name="area" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);" 
+                           placeholder="Filter by area..." value="{{ request('area') }}">
+                </div>
+                <div>
+                    <select name="has_region" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                        <option value="">Region Coverage: All</option>
+                        <option value="1" {{ request('has_region') === '1' ? 'selected' : '' }}>Has Region</option>
+                        <option value="0" {{ request('has_region') === '0' ? 'selected' : '' }}>Missing Region</option>
+                    </select>
+                </div>
             </div>
             
             <div class="mt-4 text-center">
@@ -344,8 +390,8 @@
             </div>
         </div>
 
-        <!-- Active Filters -->
-        @if(request()->hasAny(['street_name', 'status', 'has_digital_address', 'zone', 'digital_address', 'registration_plan_id', 'house_number', 'block_number', 'property_name']))
+        {{-- ✅ NEW: active filter chips include region/area --}}
+        @if(request()->hasAny(['street_name', 'status', 'has_digital_address', 'zone', 'digital_address', 'registration_plan_id', 'house_number', 'block_number', 'property_name', 'region', 'area', 'has_region']))
         <div class="mb-4 flex items-center flex-wrap gap-2">
             <span class="text-sm mr-2" style="color: var(--text-secondary);">Active filters:</span>
             @if(request('street_name'))
@@ -396,6 +442,24 @@
                 Name: {{ Str::limit(request('property_name'), 15) }}
             </span>
             @endif
+            {{-- ✅ NEW: region chip --}}
+            @if(request('region'))
+            <span class="px-2 py-1 rounded-full text-xs" style="background-color: rgba(var(--info-rgb), 0.2); color: var(--info);">
+                <i class="fas fa-globe-africa mr-1"></i> Region: {{ request('region') }}
+            </span>
+            @endif
+            {{-- ✅ NEW: area chip --}}
+            @if(request('area'))
+            <span class="px-2 py-1 rounded-full text-xs" style="background-color: rgba(var(--info-rgb), 0.2); color: var(--info);">
+                <i class="fas fa-map-pin mr-1"></i> Area: {{ request('area') }}
+            </span>
+            @endif
+            {{-- ✅ NEW: has_region chip --}}
+            @if(request('has_region') !== null && request('has_region') !== '')
+            <span class="px-2 py-1 rounded-full text-xs" style="background-color: rgba(var(--info-rgb), 0.2); color: var(--info);">
+                Region: {{ request('has_region') === '1' ? 'Has Region' : 'Missing Region' }}
+            </span>
+            @endif
         </div>
         @endif
 
@@ -412,7 +476,6 @@
                 </thead>
                 <tbody>
                     @forelse($properties as $property)
-                    <!-- REMOVED hover:bg-gray-50 dark:hover:bg-gray-700 classes to eliminate white hover effect -->
                     <tr class="border-b transition-colors" style="border-color: var(--border-color);">
                         <td class="p-3">
                             <div class="flex items-start space-x-3">
@@ -422,7 +485,7 @@
                                 </div>
                                 <div>
                                     <p class="font-medium" style="color: var(--text-primary);">{{ $property->property_name }}</p>
-                                    <div class="flex items-center space-x-2 mt-1">
+                                    <div class="flex items-center space-x-2 mt-1 flex-wrap">
                                         @if($property->house_number)
                                             <span class="text-sm px-2 py-1 rounded" style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
                                                 #{{ $property->house_number }}
@@ -452,10 +515,31 @@
                             </div>
                         </td>
                         <td class="p-3">
+                            {{-- ✅ NEW: Region + Area line --}}
+                            @if(!empty($property->region) || !empty($property->area))
+                                <p class="text-xs mb-1" style="color: var(--text-secondary);">
+                                    <i class="fas fa-globe-africa mr-1" style="color: var(--info);"></i>
+                                    @if(!empty($property->area))
+                                        <span class="font-medium" style="color: var(--text-primary);">{{ $property->area }}</span>
+                                        @if(!empty($property->region))
+                                            <span style="color: var(--text-secondary);">, </span>
+                                        @endif
+                                    @endif
+                                    @if(!empty($property->region))
+                                        <span>{{ $property->region }}</span>
+                                    @endif
+                                </p>
+                            @endif
+
                             @if($property->zone && $property->section)
                                 <p class="font-medium" style="color: var(--text-primary);">
                                     <i class="fas fa-map-marker-alt mr-1 text-red-500"></i>
                                     {{ $property->zone }} - {{ $property->section }}
+                                </p>
+                            @elseif($property->zone)
+                                <p class="font-medium" style="color: var(--text-primary);">
+                                    <i class="fas fa-map-marker-alt mr-1 text-red-500"></i>
+                                    {{ $property->zone }}
                                 </p>
                             @endif
                             @if($property->digital_address)
@@ -629,13 +713,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Show advanced filters if any advanced filter is already filled
+    // ✅ NEW: include region/area/has_region in the initial detection
     const advancedFilterInputs = [
         'input[name="zone"]',
         'input[name="digital_address"]',
         'select[name="registration_plan_id"]',
         'input[name="house_number"]',
         'input[name="block_number"]',
-        'input[name="property_name"]'
+        'input[name="property_name"]',
+        'select[name="region"]',
+        'input[name="area"]',
+        'select[name="has_region"]'
     ];
     
     let hasAdvancedFilters = false;

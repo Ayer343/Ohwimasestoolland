@@ -1,13 +1,73 @@
-{{-- Fix for undefined variable errors - ensure sidebarUnreadCount is always defined --}}
+{{-- ============ ROLE RESOLUTION (dual-mode: legacy type + role system + session) ============ --}}
 @php
     if (!isset($sidebarUnreadCount)) {
-        $sidebarUnreadCount = auth()->check() ? auth()->user()->unreadNotifications()->count() : 0;
+        $sidebarUnreadCount = auth()->check()
+            ? auth()->user()->unreadNotifications()->count()
+            : 0;
     }
 
     $user = auth()->user();
-    $isFieldAgent = $user->type === \App\Models\User::TYPE_FIELD_AGENT;
-    $isSuperAdmin = $user->type === \App\Models\User::TYPE_SUPER_ADMIN;
-    $isAdmin = $user->type === \App\Models\User::TYPE_ADMIN;
+
+    // ---------- 1. Legacy type flags ----------
+    $legacyType = $user->type;
+    $isFieldAgentLegacy = ($legacyType === \App\Models\User::TYPE_FIELD_AGENT);
+    $isSuperAdminLegacy = ($legacyType === \App\Models\User::TYPE_SUPER_ADMIN);
+    $isAdminLegacy      = ($legacyType === \App\Models\User::TYPE_ADMIN);
+
+    // ---------- 2. Role-based flags ----------
+    // hasRole() returns true for any role the user has, regardless of legacy type
+    $hasFieldAgentRole  = $user->hasRole('field-agent');
+    $hasSuperAdminRole  = $user->hasRole('super-admin');
+    $hasAdminRole       = $user->hasRole('admin');
+
+    // Combined: user qualifies as X if EITHER legacy type OR role matches
+    $canBeFieldAgent = $isFieldAgentLegacy || $hasFieldAgentRole;
+    $canBeSuperAdmin = $isSuperAdminLegacy || $hasSuperAdminRole;
+    $canBeAdmin      = $isAdminLegacy      || $hasAdminRole;
+
+    // ---------- 3. Resolve the ACTIVE role ----------
+    // Priority:
+    //   a) session('selected_role') — what the dashboard switcher last set
+    //   b) route-name sniffing      — fallback for direct URL access
+    //   c) legacy type              — ultimate fallback
+    $activeRole = session('selected_role');
+
+    if (!$activeRole) {
+        $currentRoute = \Route::currentRouteName() ?? '';
+        if (\Illuminate\Support\Str::contains($currentRoute, 'super-admin')) {
+            $activeRole = 'super-admin';
+        } elseif (\Illuminate\Support\Str::contains($currentRoute, 'field-agent')) {
+            $activeRole = 'field-agent';
+        } elseif (\Illuminate\Support\Str::contains($currentRoute, 'admin')) {
+            $activeRole = 'admin';
+        } elseif (\Illuminate\Support\Str::contains($currentRoute, 'landlord')) {
+            $activeRole = 'landlord';
+        } elseif (\Illuminate\Support\Str::contains($currentRoute, 'tenant')) {
+            $activeRole = 'tenant';
+        } elseif (\Illuminate\Support\Str::contains($currentRoute, 'security')) {
+            $activeRole = 'security-personnel';
+        } elseif ($isFieldAgentLegacy) {
+            $activeRole = 'field-agent';
+        } elseif ($isSuperAdminLegacy) {
+            $activeRole = 'super-admin';
+        } elseif ($isAdminLegacy) {
+            $activeRole = 'admin';
+        } else {
+            $activeRole = null;
+        }
+    }
+
+    // ---------- 4. Decide which UI variant to render ----------
+    // The field-agent sidebar should only show field-agent-specific links
+    // when the ACTIVE role is field-agent (not just because the user has it).
+    $viewAsFieldAgent = ($activeRole === 'field-agent') && $canBeFieldAgent;
+    $viewAsAdmin      = in_array($activeRole, ['admin', 'super-admin'], true)
+                        && ($canBeAdmin || $canBeSuperAdmin);
+
+    // Kept for backward compatibility with any @if blocks below
+    $isFieldAgent = $viewAsFieldAgent;
+    $isSuperAdmin = ($activeRole === 'super-admin') && $canBeSuperAdmin;
+    $isAdmin      = ($activeRole === 'admin') && $canBeAdmin;
 @endphp
 
 <!-- Overlay for mobile -->
@@ -18,7 +78,6 @@
     <!-- Enhanced Professional Logo Section -->
     <div class="logo-section">
         @php
-            // Get system settings (guarded so a DB issue never breaks the sidebar)
             try {
                 $systemSettings = \App\Models\SystemSetting::getSettings();
             } catch (\Throwable $e) {
@@ -29,16 +88,11 @@
             $systemShortName = $systemSettings->system_short_name ?? config('app.short_name', 'FieldAgent');
             $systemName      = $systemSettings->system_name ?? config('app.name', 'Laravel');
 
-            // ============ FIXED: Resolve logo URL from the SAME disk uploads use ============
-            // The `public` disk resolves to either storage/app/public (local) or
-            // DigitalOcean Spaces / S3 (production) via PUBLIC_FILESYSTEM_DRIVER.
-            // Using it here keeps local and production consistent.
             $systemLogoUrl = null;
             if ($systemLogo) {
                 try {
                     $systemLogoUrl = \Illuminate\Support\Facades\Storage::disk('public')->url($systemLogo);
                 } catch (\Throwable $e) {
-                    // Last-resort fallback: treat it as a path under /storage
                     try {
                         $systemLogoUrl = \Illuminate\Support\Facades\Storage::url($systemLogo);
                     } catch (\Throwable $e2) {
@@ -51,19 +105,16 @@
         <div class="logo-container">
             <div class="logo-wrapper">
                 @if($systemLogoUrl)
-                    <!-- Professional logo display with proper error handling -->
                     <div class="logo-image-container">
                         <img src="{{ $systemLogoUrl }}"
                              alt="{{ $systemName }}"
                              class="logo-image"
                              onerror="this.style.display='none'; var f=document.getElementById('logoFallback'); if(f) f.style.display='flex';">
-                        <!-- Professional fallback - initially hidden -->
                         <div id="logoFallback" class="logo-fallback" style="display: none;">
                             <i class="fas fa-rocket"></i>
                         </div>
                     </div>
                 @else
-                    <!-- Professional default logo when no system logo exists -->
                     <div class="logo-default">
                         <i class="fas fa-rocket"></i>
                     </div>
@@ -98,32 +149,91 @@
             <span class="menu-text">MAIN NAVIGATION</span>
         </div>
 
-        <a href="{{ route('field-agent.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.dashboard') ? 'active' : '' }}">
-            <i class="fas fa-home mr-4"></i>
-            <span class="nav-text">Dashboard</span>
-        </a>
+        {{-- ============================================================ --}}
+        {{-- DASHBOARD LINK — now role-aware --}}
+        {{-- ============================================================ --}}
+        @if($viewAsFieldAgent)
+            <a href="{{ route('field-agent.dashboard') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.dashboard') ? 'active' : '' }}">
+                <i class="fas fa-home mr-4"></i>
+                <span class="nav-text">Dashboard</span>
+            </a>
+        @elseif($isSuperAdmin)
+            <a href="{{ route('super-admin.dashboard') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('super-admin.dashboard') ? 'active' : '' }}">
+                <i class="fas fa-home mr-4"></i>
+                <span class="nav-text">Dashboard</span>
+            </a>
+        @elseif($isAdmin)
+            <a href="{{ route('admin.dashboard') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.dashboard') ? 'active' : '' }}">
+                <i class="fas fa-home mr-4"></i>
+                <span class="nav-text">Dashboard</span>
+            </a>
+        @else
+            <a href="{{ route('field-agent.dashboard') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.dashboard') ? 'active' : '' }}">
+                <i class="fas fa-home mr-4"></i>
+                <span class="nav-text">Dashboard</span>
+            </a>
+        @endif
 
-        @if(auth()->user()->type === \App\Models\User::TYPE_FIELD_AGENT)
-            <!-- Field Agent Version -->
-            <a href="{{ route('field-agent.registration-plans.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.registration-plans.*') ? 'active' : '' }}">
+        {{-- ============================================================ --}}
+        {{-- ✅ FIXED: REGISTRATION PLANS LINK --}}
+        {{-- Uses the ACTIVE role (session-driven) instead of raw legacy type --}}
+        {{-- ============================================================ --}}
+        @if($viewAsFieldAgent)
+            {{-- Field Agent view: personal assigned plans --}}
+            <a href="{{ route('field-agent.registration-plans.index') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.registration-plans.*') ? 'active' : '' }}">
                 <i class="fas fa-map-marked-alt mr-4"></i>
                 <span class="nav-text">My Assigned Plans</span>
             </a>
-        @elseif(in_array(auth()->user()->type, [\App\Models\User::TYPE_SUPER_ADMIN, \App\Models\User::TYPE_ADMIN]))
-            <!-- Admin Version -->
-            <a href="{{ route('registration-plans.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('registration-plans.*') ? 'active' : '' }}">
+        @elseif($isAdmin || $isSuperAdmin)
+            {{-- Admin view: full plan management --}}
+            <a href="{{ route('registration-plans.index') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('registration-plans.*') ? 'active' : '' }}">
                 <i class="fas fa-map-marked-alt mr-4"></i>
                 <span class="nav-text">Registration Plans</span>
             </a>
         @endif
 
-        <a href="{{ route('field-agent.properties.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.properties.*') ? 'active' : '' }}">
-            <i class="fas fa-building mr-4"></i>
-            <span class="nav-text">Properties</span>
-        </a>
+        {{-- ============================================================ --}}
+        {{-- PROPERTIES LINK — role-aware --}}
+        {{-- ============================================================ --}}
+        @if($viewAsFieldAgent)
+            <a href="{{ route('field-agent.properties.index') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.properties.*') ? 'active' : '' }}">
+                <i class="fas fa-building mr-4"></i>
+                <span class="nav-text">Properties</span>
+            </a>
+        @elseif($isAdmin || $isSuperAdmin)
+            <a href="{{ route('properties.index') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('properties.*') ? 'active' : '' }}">
+                <i class="fas fa-building mr-4"></i>
+                <span class="nav-text">Properties</span>
+            </a>
+        @else
+            <a href="{{ route('field-agent.properties.index') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.properties.*') ? 'active' : '' }}">
+                <i class="fas fa-building mr-4"></i>
+                <span class="nav-text">Properties</span>
+            </a>
+        @endif
 
-        <!-- ✅ UPDATED: Notification link with live count -->
-        <a href="{{ route('field-agent.notifications.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('*.notifications.*') ? 'active' : '' }}" id="sidebarNotificationsLink">
+        {{-- ============================================================ --}}
+        {{-- NOTIFICATIONS — route-aware --}}
+        {{-- ============================================================ --}}
+        @php
+            $notificationsRoute = $viewAsFieldAgent
+                ? route('field-agent.notifications.index')
+                : (($isAdmin || $isSuperAdmin)
+                    ? route('notifications.index')
+                    : route('field-agent.notifications.index'));
+        @endphp
+        <a href="{{ $notificationsRoute }}"
+           class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('*.notifications.*') ? 'active' : '' }}"
+           id="sidebarNotificationsLink">
             <i class="fas fa-bell mr-4"></i>
             <span class="nav-text">Notifications</span>
             <span class="ml-auto" id="sidebarNotificationBadge" style="display: none;">
@@ -131,24 +241,29 @@
             </span>
         </a>
 
-        <!-- Minimal spacing between sections -->
-        <div class="nav-divider mt-1">
-            <span class="menu-text">FIELD AGENT</span>
-        </div>
+        {{-- ============================================================ --}}
+        {{-- FIELD AGENT SECTION — only when viewing AS a field agent --}}
+        {{-- ============================================================ --}}
+        @if($viewAsFieldAgent)
+            <div class="nav-divider mt-1">
+                <span class="menu-text">FIELD AGENT</span>
+            </div>
 
-        <!-- Field Agent specific links -->
-        <a href="{{ route('field-agent.statistics') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.statistics') ? 'active' : '' }}">
-            <i class="fas fa-chart-bar mr-4"></i>
-            <span class="nav-text">Statistics</span>
-        </a>
+            <a href="{{ route('field-agent.statistics') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.statistics') ? 'active' : '' }}">
+                <i class="fas fa-chart-bar mr-4"></i>
+                <span class="nav-text">Statistics</span>
+            </a>
 
-        <a href="{{ route('field-agent.performance') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.performance') ? 'active' : '' }}">
-            <i class="fas fa-tachometer-alt mr-4"></i>
-            <span class="nav-text">Performance</span>
-        </a>
+            <a href="{{ route('field-agent.performance') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('field-agent.performance') ? 'active' : '' }}">
+                <i class="fas fa-tachometer-alt mr-4"></i>
+                <span class="nav-text">Performance</span>
+            </a>
+        @endif
     </nav>
 
-    <!-- Settings Button - Compact positioning -->
+    <!-- Settings Button -->
     <div class="absolute bottom-0 w-full p-3">
         <button id="themeSettingsButton" class="nav-item flex items-center py-2 px-6 w-full justify-center" title="Theme Settings">
             <i class="fas fa-cog text-xl theme-settings-gear" id="settingsIcon"></i>
@@ -159,7 +274,6 @@
 <!-- Theme Settings Modal -->
 <div id="themeSettingsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
     <div class="theme-modal-compact">
-        <!-- Modal Header -->
         <div class="theme-modal-header-compact flex justify-between items-center">
             <h3 class="text-base font-semibold">
                 <i class="fas fa-palette mr-2"></i>Theme Settings
@@ -169,9 +283,7 @@
             </button>
         </div>
 
-        <!-- Modal Body -->
         <div class="theme-modal-body-compact">
-            <!-- Appearance Selection -->
             <div class="mb-6">
                 <h4 class="section-header-compact">Appearance</h4>
                 <p class="section-description-compact">Choose how the application looks</p>
@@ -200,7 +312,6 @@
                 </div>
             </div>
 
-            <!-- Sidebar Themes -->
             <div class="mb-4">
                 <h4 class="section-header-compact">Sidebar Theme</h4>
                 <p class="section-description-compact">Customize your sidebar appearance</p>
@@ -234,7 +345,6 @@
             </div>
         </div>
 
-        <!-- Modal Footer -->
         <div class="theme-modal-footer-compact flex justify-end">
             <button id="closeThemeModalBtn" class="px-3 py-1.5 text-sm font-medium transition-colors duration-200">
                 Close
@@ -246,7 +356,6 @@
 <!-- Search Modal -->
 <div id="searchModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden pt-20">
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-11/12 md:w-2/3 lg:w-1/2 max-w-2xl">
-        <!-- Modal Header -->
         <div class="px-6 py-4 border-b dark:border-gray-700 flex justify-between items-center">
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
                 <i class="fas fa-search mr-2"></i>Advanced Search
@@ -256,9 +365,7 @@
             </button>
         </div>
 
-        <!-- Modal Body -->
         <div class="p-6">
-            <!-- Search Input -->
             <div class="mb-6">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Search Term
@@ -267,7 +374,6 @@
                        class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white">
             </div>
 
-            <!-- Search Category -->
             <div class="mb-6">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Search Category
@@ -282,7 +388,6 @@
                 </select>
             </div>
 
-            <!-- Search Filters -->
             <div class="mb-6">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Search Filters
@@ -303,18 +408,15 @@
                 </div>
             </div>
 
-            <!-- Recent Searches -->
             <div id="recentSearches" class="hidden">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Recent Searches
                 </label>
                 <div id="recentSearchesList" class="flex flex-wrap gap-2">
-                    <!-- Recent searches will be populated here -->
                 </div>
             </div>
         </div>
 
-        <!-- Modal Footer -->
         <div class="px-6 py-4 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-700 flex justify-between">
             <button id="clearSearch" class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors duration-200">
                 Clear
@@ -350,7 +452,7 @@
         </div>
     </div>
     <div class="notifications-footer">
-        <a href="{{ route('field-agent.notifications.index') }}" class="view-all-link">
+        <a href="{{ $notificationsRoute }}" class="view-all-link">
             View all notifications →
         </a>
     </div>
@@ -358,7 +460,6 @@
 
 <!-- Main Content Header -->
 <div class="content" id="mainContent">
-    <!-- Top Navigation -->
     <header class="header flex items-center justify-between">
         <div class="flex items-center">
             <button id="toggleSidebarMobile" class="mobile-menu-btn mr-4 text-gray-600">
@@ -368,30 +469,25 @@
         </div>
 
         <div class="flex items-center space-x-4">
-            <!-- Enhanced Search Bar -->
             <div class="relative">
                 <div class="flex items-center space-x-2">
-                    <!-- Quick Search Input -->
                     <div class="relative hidden md:block">
                         <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2" style="color: var(--text-secondary);"></i>
                         <input type="text" id="quickSearchInput" placeholder="Quick search..."
                                class="header-search pl-10 pr-10"
                                style="color: var(--text-primary); background-color: var(--bg-secondary); border: 1px solid transparent;"
                                data-toggle="tooltip" title="Press / to focus">
-                        <!-- Advanced Search Button - Now opens modal on click -->
                         <button id="advancedSearchBtn" class="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded">
                             <i class="fas fa-sliders-h text-sm"></i>
                         </button>
                     </div>
 
-                    <!-- Mobile Search Button -->
                     <button id="mobileSearchBtn" class="md:hidden p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
                         <i class="fas fa-search text-gray-600 dark:text-gray-300"></i>
                     </button>
                 </div>
             </div>
 
-            <!-- ✅ UPDATED: Notification Bell with Live Counter -->
             <div class="header-buttons flex items-center space-x-2">
                 <div class="relative">
                     <button id="notificationBellBtn" class="relative p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors duration-200">
@@ -408,40 +504,48 @@
                 </button>
             </div>
 
-           <div class="dropdown relative">
-    <button id="userMenuButton" class="flex items-center space-x-2">
-        <div class="avatar-minimal">
-            @if(Auth::user()->photo)
-                <img src="{{ Storage::disk('public')->url('users/photos/' . Auth::user()->photo) }}"
-                     alt="{{ Auth::user()->name }}"
-                     class="w-8 h-8 rounded-full object-cover"
-                     onerror="this.onerror=null;this.src='{{ asset('images/default-avatar.png') }}';">
-            @else
-                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-semibold">
-                    {{ substr(Auth::user()->name, 0, 2) }}
-                </div>
-            @endif
-        </div>
-        <i class="fas fa-chevron-down text-xs" style="color: var(--text-secondary);"></i>
-    </button>
+            <div class="dropdown relative">
+                <button id="userMenuButton" class="flex items-center space-x-2">
+                    <div class="avatar-minimal">
+                        @if(Auth::user()->photo)
+                            <img src="{{ Storage::disk('public')->url('users/photos/' . Auth::user()->photo) }}"
+                                 alt="{{ Auth::user()->name }}"
+                                 class="w-8 h-8 rounded-full object-cover"
+                                 onerror="this.onerror=null;this.src='{{ asset('images/default-avatar.png') }}';">
+                        @else
+                            <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-semibold">
+                                {{ substr(Auth::user()->name, 0, 2) }}
+                            </div>
+                        @endif
+                    </div>
+                    <i class="fas fa-chevron-down text-xs" style="color: var(--text-secondary);"></i>
+                </button>
 
                 <div id="userDropdown" class="dropdown-menu" style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-                   <!-- Updated Profile Link -->
-                    <a href="{{ route('agent.profile.edit') }}" class="dropdown-item">
-                        <i class="far fa-user mr-3" style="color: var(--text-secondary);"></i>
-                        <span style="color: var(--text-primary);">My Profile</span>
-                    </a>
+                    {{-- ✅ FIXED: Profile link depends on active role --}}
+                    @if($viewAsFieldAgent)
+                        <a href="{{ route('agent.profile.edit') }}" class="dropdown-item">
+                            <i class="far fa-user mr-3" style="color: var(--text-secondary);"></i>
+                            <span style="color: var(--text-primary);">My Profile</span>
+                        </a>
+                    @else
+                        <a href="{{ route('admin.profile.edit') }}" class="dropdown-item">
+                            <i class="far fa-user mr-3" style="color: var(--text-secondary);"></i>
+                            <span style="color: var(--text-primary);">My Profile</span>
+                        </a>
+                    @endif
 
-                    <!-- Performance -->
-                    <a href="{{ route('field-agent.performance') }}" class="dropdown-item">
-                        <i class="fas fa-tachometer-alt mr-3" style="color: var(--text-secondary);"></i>
-                        <span style="color: var(--text-primary);">Performance</span>
-                    </a>
+                    {{-- Performance link only shows in field-agent view --}}
+                    @if($viewAsFieldAgent)
+                        <a href="{{ route('field-agent.performance') }}" class="dropdown-item">
+                            <i class="fas fa-tachometer-alt mr-3" style="color: var(--text-secondary);"></i>
+                            <span style="color: var(--text-primary);">Performance</span>
+                        </a>
+                    @endif
 
                     <div class="border-t my-1" style="border-color: var(--border-color);"></div>
 
-                    <!-- ✅ UPDATED: Notifications with live count -->
-                    <a href="{{ route('field-agent.notifications.index') }}" class="dropdown-item" id="dropdownNotificationsLink">
+                    <a href="{{ $notificationsRoute }}" class="dropdown-item" id="dropdownNotificationsLink">
                         <i class="far fa-bell mr-3" style="color: var(--text-secondary);"></i>
                         <span style="color: var(--text-primary);">Notifications</span>
                         <span id="dropdownNotificationBadge" class="ml-auto bg-red-500 text-white text-xs px-2 py-1 rounded-full hidden">0</span>
@@ -449,7 +553,6 @@
 
                     <div class="border-t my-1" style="border-color: var(--border-color);"></div>
 
-                    <!-- Logout -->
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf
                         <button type="submit" class="dropdown-item w-full text-left text-red-500">

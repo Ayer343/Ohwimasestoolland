@@ -26,6 +26,13 @@ class ExportController extends Controller
         try {
             $query = User::withoutGlobalScopes()
                 ->with(['creator'])
+                // ✅ NEW: eager-load counts so the PDF template can show
+                //    owned vs linked without N+1 queries. Two COUNT
+                //    queries total, regardless of how many users export.
+                ->withCount([
+                    'ownedProperties as properties_count',
+                    'approvedFamilyLinks as linked_properties_count',
+                ])
                 ->orderBy('created_at', 'desc');
 
             if ($request->filled('type') && $request->type !== 'all') {
@@ -49,6 +56,30 @@ class ExportController extends Controller
                       ->orWhere('phone', 'like', "%{$search}%")
                       ->orWhere('username', 'like', "%{$search}%");
                 });
+            }
+
+            // Optional property-access filter — mirrors the index page
+            if ($request->filled('property_access') && $request->property_access !== 'all') {
+                switch ($request->property_access) {
+                    case 'owned_only':
+                        $query->whereHas('ownedProperties')
+                              ->whereDoesntHave('approvedFamilyLinks');
+                        break;
+                    case 'linked_only':
+                        $query->whereDoesntHave('ownedProperties')
+                              ->whereHas('approvedFamilyLinks');
+                        break;
+                    case 'any':
+                        $query->where(function ($q) {
+                            $q->whereHas('ownedProperties')
+                              ->orWhereHas('approvedFamilyLinks');
+                        });
+                        break;
+                    case 'none':
+                        $query->whereDoesntHave('ownedProperties')
+                              ->whereDoesntHave('approvedFamilyLinks');
+                        break;
+                }
             }
 
             // Exclude ONLY developers (type = 5)
@@ -118,12 +149,9 @@ class ExportController extends Controller
             // ───────────────────────────────────────────────────────
             // VALIDATION
             //
-            // ⚠️ KEY FIX: `start_date` and `end_date` MUST use `nullable`
-            // (not `sometimes`). The export form always submits them —
-            // as empty strings when the user hasn't picked a range.
-            // `sometimes` treats "present but empty" as "validate the
-            // date rule" → fails. `nullable` allows empty values while
-            // still enforcing the `date` rule when a value IS given.
+            // ⚠️ `start_date` / `end_date` MUST use `nullable` (not
+            //    `sometimes`) because the form always submits them —
+            //    as empty strings when no range is picked.
             // ───────────────────────────────────────────────────────
             $validated = $request->validate([
                 'export_format'      => 'required|in:csv,pdf',
@@ -143,15 +171,22 @@ class ExportController extends Controller
                 'current_filters'    => 'sometimes|boolean',
                 'start_date'         => 'nullable|date',
                 'end_date'           => 'nullable|date|after_or_equal:start_date',
+                'property_access'    => 'sometimes|in:all,any,owned_only,linked_only,none',
             ]);
 
             $selectedTypes       = $validated['user_types'] ?? ['all'];
             $isExportingAllTypes = in_array('all', $selectedTypes, true) || empty($selectedTypes);
 
             // ───────────────────────────────────────────────────────
-            // Base query — WITHOUT global scopes AND with `creator`
+            // Base query — WITHOUT global scopes, with `creator`,
+            // ✅ plus the two property counts.
             // ───────────────────────────────────────────────────────
-            $query = User::withoutGlobalScopes()->with(['creator']);
+            $query = User::withoutGlobalScopes()
+                ->with(['creator'])
+                ->withCount([
+                    'ownedProperties as properties_count',
+                    'approvedFamilyLinks as linked_properties_count',
+                ]);
 
             // Apply type filter
             if (!$isExportingAllTypes) {
@@ -206,6 +241,33 @@ class ExportController extends Controller
             }
 
             // ───────────────────────────────────────────────────────
+            // ✅ Property access filter (works in BOTH export modes —
+            //    this is an opt-in scope, not part of `current_filters`)
+            // ───────────────────────────────────────────────────────
+            if (!empty($validated['property_access']) && $validated['property_access'] !== 'all') {
+                switch ($validated['property_access']) {
+                    case 'owned_only':
+                        $query->whereHas('ownedProperties')
+                              ->whereDoesntHave('approvedFamilyLinks');
+                        break;
+                    case 'linked_only':
+                        $query->whereDoesntHave('ownedProperties')
+                              ->whereHas('approvedFamilyLinks');
+                        break;
+                    case 'any':
+                        $query->where(function ($q) {
+                            $q->whereHas('ownedProperties')
+                              ->orWhereHas('approvedFamilyLinks');
+                        });
+                        break;
+                    case 'none':
+                        $query->whereDoesntHave('ownedProperties')
+                              ->whereDoesntHave('approvedFamilyLinks');
+                        break;
+                }
+            }
+
+            // ───────────────────────────────────────────────────────
             // Date range — apply ONLY when both dates are non-empty
             // ───────────────────────────────────────────────────────
             $startDate = $validated['start_date'] ?? null;
@@ -228,9 +290,7 @@ class ExportController extends Controller
                 ]);
             }
 
-            // ───────────────────────────────────────────────────────
-            // 🔍 DIAGNOSTIC — log the SQL before execution
-            // ───────────────────────────────────────────────────────
+            // 🔍 SQL preview
             Log::info('Export SQL preview', [
                 'sql'      => $query->toSql(),
                 'bindings' => $query->getBindings(),
@@ -238,13 +298,11 @@ class ExportController extends Controller
 
             $users = $query->orderBy('created_at', 'desc')->get();
 
-            // ───────────────────────────────────────────────────────
-            // 🔍 DIAGNOSTIC — log the result counts
-            // ───────────────────────────────────────────────────────
             Log::info('Export query result', [
                 'requested_types'      => $selectedTypes,
                 'is_all_types'         => $isExportingAllTypes,
                 'current_filters'      => $request->boolean('current_filters'),
+                'property_access'      => $validated['property_access'] ?? 'all',
                 'total_users_returned' => $users->count(),
                 'expected_total'       => User::withoutGlobalScopes()
                                             ->where('type', '!=', User::TYPE_DEVELOPER)
@@ -269,9 +327,6 @@ class ExportController extends Controller
             }
 
         } catch (\Illuminate\Validation\ValidationException $e) {
-            // ═══════════════════════════════════════════════════════
-            // 🔍 DIAGNOSTIC — surface validation errors clearly
-            // ═══════════════════════════════════════════════════════
             Log::warning('Export validation failed', [
                 'errors' => $e->errors(),
                 'input'  => $request->all(),
@@ -396,9 +451,9 @@ class ExportController extends Controller
             }
 
             Log::debug('PDF Export — Logo resolved', [
-                'has_settings'    => (bool) $settings,
-                'logo_file'       => $settings->system_logo ?? null,
-                'logo_embedded'   => !empty($systemLogoDataUri),
+                'has_settings'     => (bool) $settings,
+                'logo_file'        => $settings->system_logo ?? null,
+                'logo_embedded'    => !empty($systemLogoDataUri),
                 'logo_datauri_len' => $systemLogoDataUri ? strlen($systemLogoDataUri) : 0,
             ]);
 
@@ -422,6 +477,22 @@ class ExportController extends Controller
 
             foreach ($data['users'] as $user) {
                 $user->type_name = $this->getUserTypeName($user->type);
+
+                // ✅ NEW: attach the derived property counts so the PDF
+                //    template can render owned / linked / total columns
+                //    without re-querying. The counts come from the
+                //    eager-loaded `properties_count` and
+                //    `linked_properties_count` attributes (or from the
+                //    accessors if the eager load was skipped, in which
+                //    case they fall back to per-user queries — avoid
+                //    this by keeping the withCount above).
+                $owned  = (int) ($user->properties_count ?? $user->property_count ?? 0);
+                $linked = (int) ($user->linked_properties_count ?? $user->linked_property_count ?? 0);
+
+                $user->owned_property_count_export  = $owned;
+                $user->linked_property_count_export = $linked;
+                $user->total_property_count_export  = $owned + $linked;
+                $user->property_access_label_export = $this->getPropertyAccessLabel($owned, $linked);
             }
 
             if ($includePhotos) {
@@ -651,22 +722,65 @@ class ExportController extends Controller
     }
 
     /**
+     * ✅ NEW: Human-readable label for a user's property access.
+     *
+     *   Owner with N, linked to M   → "N owned, M linked"
+     *   Owner with N, not linked    → "N owned"
+     *   Linked to M, no owned       → "M linked"
+     *   Neither                     → "—"
+     */
+    private function getPropertyAccessLabel(int $owned, int $linked): string
+    {
+        if ($owned === 0 && $linked === 0) {
+            return '—';
+        }
+
+        if ($linked === 0) {
+            return $owned . ' owned';
+        }
+
+        if ($owned === 0) {
+            return $linked . ' linked';
+        }
+
+        return $owned . ' owned, ' . $linked . ' linked';
+    }
+
+    /**
      * Generate CSV content
      */
     private function generateCsvContent($users): string
     {
         $output = "\xEF\xBB\xBF";
 
+        // ✅ Two new columns inserted after "Profile Photo":
+        //     • Linked Properties    — approved family-link count
+        //     • Total Access         — owned + linked
+        //    The legacy "Property Owner" column is renamed to
+        //    "Owned Properties" for clarity. If you want a boolean
+        //    "Property Owner" column instead, keep the old one and
+        //    add both new ones — see note below.
         $headers = [
             'ID', 'Full Name', 'Email Address', 'Phone Number', 'Username',
             'User Type', 'Account Status', 'Phone Verified', 'Email Verified',
             'Gender', 'Date of Birth', 'Digital Address', 'Region', 'Location',
-            'Profile Photo', 'Created By', 'Registration Date', 'Last Login',
+            'Profile Photo',
+
+            // Property access block
+            'Owned Properties', 'Linked Properties', 'Total Access',
+            'Property Access Summary',
+
+            'Created By', 'Registration Date', 'Last Login',
         ];
 
         $output .= $this->arrayToCsv($headers);
 
         foreach ($users as $user) {
+            // Prefer eager-loaded counts; fall back to accessors.
+            $owned  = (int) ($user->properties_count ?? $user->property_count ?? 0);
+            $linked = (int) ($user->linked_properties_count ?? $user->linked_property_count ?? 0);
+            $total  = $owned + $linked;
+
             $row = [
                 $user->id,
                 $user->name,
@@ -683,6 +797,13 @@ class ExportController extends Controller
                 $user->region ?? 'N/A',
                 $user->location ?? 'N/A',
                 $user->photo ? 'Yes' : 'No',
+
+                // Property access columns
+                $owned,
+                $linked,
+                $total,
+                $this->getPropertyAccessLabel($owned, $linked),
+
                 $user->creator->name ?? 'System',
                 $user->created_at->format('Y-m-d H:i:s'),
                 $user->last_login_at ? $user->last_login_at->format('Y-m-d H:i:s') : 'Never',
@@ -696,6 +817,14 @@ class ExportController extends Controller
 
     /**
      * Generate export statistics
+     *
+     * ✅ NEW keys:
+     *     - property_owners           (owned > 0)
+     *     - linked_family_members     (owned = 0, linked > 0)
+     *     - users_with_any_access     (owned + linked > 0)
+     *     - users_with_no_access      (neither)
+     *     - avg_owned_per_owner
+     *     - avg_linked_per_member
      */
     private function generateExportStatistics($users): array
     {
@@ -703,6 +832,32 @@ class ExportController extends Controller
         $verifiedPhones = $users->whereNotNull('phone_verified_at')->count();
         $verifiedEmails = $users->whereNotNull('email_verified_at')->count();
         $withPhotos     = $users->whereNotNull('photo')->count();
+
+        // ── Property access breakdown ──
+        $ownedOnly   = 0;
+        $linkedOnly  = 0;
+        $both        = 0;
+        $neither     = 0;
+        $totalOwned  = 0;
+        $totalLinked = 0;
+
+        foreach ($users as $user) {
+            $owned  = (int) ($user->properties_count ?? 0);
+            $linked = (int) ($user->linked_properties_count ?? 0);
+
+            $totalOwned  += $owned;
+            $totalLinked += $linked;
+
+            if ($owned > 0 && $linked > 0) {
+                $both++;
+            } elseif ($owned > 0) {
+                $ownedOnly++;
+            } elseif ($linked > 0) {
+                $linkedOnly++;
+            } else {
+                $neither++;
+            }
+        }
 
         $typeBreakdown = $users->groupBy('type')->map(function ($group) use ($users) {
             return [
@@ -729,6 +884,30 @@ class ExportController extends Controller
                 'phone_verification' => $totalUsers > 0 ? round(($verifiedPhones / $totalUsers) * 100, 1) : 0,
                 'email_verification' => $totalUsers > 0 ? round(($verifiedEmails / $totalUsers) * 100, 1) : 0,
                 'profile_photos'     => $totalUsers > 0 ? round(($withPhotos / $totalUsers) * 100, 1) : 0,
+            ],
+
+            // ── Property access stats ──
+            'property_access' => [
+                'owners_only'            => $ownedOnly,
+                'linked_only'            => $linkedOnly,
+                'both'                   => $both,
+                'neither'                => $neither,
+
+                'property_owners'        => $ownedOnly + $both,
+                'linked_family_members'  => $linkedOnly + $both,
+                'users_with_any_access'  => $ownedOnly + $linkedOnly + $both,
+                'users_with_no_access'   => $neither,
+
+                'total_owned_properties'  => $totalOwned,
+                'total_linked_properties' => $totalLinked,
+
+                'avg_owned_per_owner' => ($ownedOnly + $both) > 0
+                    ? round($totalOwned / ($ownedOnly + $both), 1)
+                    : 0,
+
+                'avg_linked_per_member' => ($linkedOnly + $both) > 0
+                    ? round($totalLinked / ($linkedOnly + $both), 1)
+                    : 0,
             ],
         ];
     }

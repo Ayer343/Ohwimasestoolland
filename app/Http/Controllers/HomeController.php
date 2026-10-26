@@ -2143,52 +2143,84 @@ class HomeController extends Controller
      * FIXED: Landlords now counted by ROLE (not just legacy type)
      */
     public function getUserStatistics()
-    {
-        try {
-            return [
-                'total_users' => User::where('type', '!=', User::TYPE_DEVELOPER)->count(),
-                'active_users' => User::where('type', '!=', User::TYPE_DEVELOPER)->where('status', 'active')->count(),
-                'pending_users' => User::where('type', '!=', User::TYPE_DEVELOPER)->where('status', 'pending')->count(),
-                'suspended_users' => User::where('type', '!=', User::TYPE_DEVELOPER)->where('status', 'suspended')->count(),
-                'super_admins' => User::where('type', User::TYPE_SUPER_ADMIN)->count(),
-                'admins' => User::where('type', User::TYPE_ADMIN)->count(),
-                'landlords' => User::where(function($query) {
-                    $query->where('type', User::TYPE_LANDLORD)
-                          ->orWhereHas('roles', function($q) {
-                              $q->where('slug', 'landlord');
-                          });
-                })->count(),
-                'tenants' => User::where('type', User::TYPE_TENANT)->count(),
-                'field_agents' => User::where('type', User::TYPE_FIELD_AGENT)->count(),
-                'developers' => User::where('type', User::TYPE_DEVELOPER)->count(),
-                'security_checkpoints' => User::where('type', User::TYPE_SECURITY_PERSONNEL)->count(),
-                'new_users_today' => User::where('type', '!=', User::TYPE_DEVELOPER)->whereDate('created_at', today())->count(),
-                'new_users_week' => User::where('type', '!=', User::TYPE_DEVELOPER)->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()])->count(),
-            ];
-        } catch (\Exception $e) {
-            Log::error('Error getting user statistics: ' . $e->getMessage());
-            return $this->getEmptyUserStatistics();
-        }
+{
+    try {
+        // ─────────────────────────────────────────────────────────────
+        // "Landlord" for stats purposes = has the landlord role/type
+        // AND does NOT have the linked_family role. Family members
+        // inherit the landlord role when they are materialized, so
+        // counting them here would inflate the landlord figure.
+        // ─────────────────────────────────────────────────────────────
+        $landlordBase = function ($q) {
+            $q->where(function ($inner) {
+                $inner->where('type', User::TYPE_LANDLORD)
+                      ->orWhereHas('roles', fn ($r) => $r->where('slug', 'landlord'));
+            });
+        };
+
+        $linkedFamilyBase = function ($q) {
+            $q->whereHas('roles', fn ($r) => $r->where('slug', 'linked_family'));
+        };
+
+        return [
+            'total_users' => User::where('type', '!=', User::TYPE_DEVELOPER)->count(),
+            'active_users' => User::where('type', '!=', User::TYPE_DEVELOPER)->where('status', 'active')->count(),
+            'pending_users' => User::where('type', '!=', User::TYPE_DEVELOPER)->where('status', 'pending')->count(),
+            'suspended_users' => User::where('type', '!=', User::TYPE_DEVELOPER)->where('status', 'suspended')->count(),
+            'super_admins' => User::where('type', User::TYPE_SUPER_ADMIN)->count(),
+            'admins' => User::where('type', User::TYPE_ADMIN)->count(),
+
+            // ✅ Landlords — EXCLUDING family members.
+            'landlords' => User::where($landlordBase)
+                ->whereDoesntHave('roles', fn ($r) => $r->where('slug', 'linked_family'))
+                ->count(),
+
+            // ✅ NEW: Family members who are linked to at least one property.
+            'linked_family_members' => User::where($linkedFamilyBase)
+                ->whereHas('approvedFamilyLinks')
+                ->count(),
+
+            // ✅ NEW: Family members whose last link was revoked but who
+            //          have not yet been swept by the orphan-archival job.
+            'orphaned_family_members' => User::where($linkedFamilyBase)
+                ->whereDoesntHave('approvedFamilyLinks')
+                ->whereDoesntHave('ownedProperties')
+                ->whereNull('deleted_at')
+                ->count(),
+
+            'tenants' => User::where('type', User::TYPE_TENANT)->count(),
+            'field_agents' => User::where('type', User::TYPE_FIELD_AGENT)->count(),
+            'developers' => User::where('type', User::TYPE_DEVELOPER)->count(),
+            'security_checkpoints' => User::where('type', User::TYPE_SECURITY_PERSONNEL)->count(),
+            'new_users_today' => User::where('type', '!=', User::TYPE_DEVELOPER)->whereDate('created_at', today())->count(),
+            'new_users_week' => User::where('type', '!=', User::TYPE_DEVELOPER)->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()])->count(),
+        ];
+    } catch (\Exception $e) {
+        Log::error('Error getting user statistics: ' . $e->getMessage());
+        return $this->getEmptyUserStatistics();
     }
+}
 
     protected function getEmptyUserStatistics()
-    {
-        return [
-            'total_users' => 0,
-            'active_users' => 0,
-            'pending_users' => 0,
-            'suspended_users' => 0,
-            'super_admins' => 0,
-            'admins' => 0,
-            'landlords' => 0,
-            'tenants' => 0,
-            'field_agents' => 0,
-            'developers' => 0,
-            'security_checkpoints' => 0,
-            'new_users_today' => 0,
-            'new_users_week' => 0,
-        ];
-    }
+{
+    return [
+        'total_users' => 0,
+        'active_users' => 0,
+        'pending_users' => 0,
+        'suspended_users' => 0,
+        'super_admins' => 0,
+        'admins' => 0,
+        'landlords' => 0,
+        'linked_family_members' => 0,      // ✅ NEW
+        'orphaned_family_members' => 0,    // ✅ NEW
+        'tenants' => 0,
+        'field_agents' => 0,
+        'developers' => 0,
+        'security_checkpoints' => 0,
+        'new_users_today' => 0,
+        'new_users_week' => 0,
+    ];
+}
 
     public function getPaymentStatistics($settings = null)
     {
@@ -2776,59 +2808,68 @@ class HomeController extends Controller
      * FIXED: Landlords now counted by ROLE (not just legacy type)
      */
     public function getUserRegistrationChartData()
-    {
-        try {
-            $labels = [];
-            $allData = [];
-            $landlordData = [];
-            $agentData = [];
+{
+    try {
+        $labels = [];
+        $allData = [];
+        $landlordData = [];
+        $linkedFamilyData = [];   // ✅ NEW
+        $agentData = [];
 
-            for ($i = 11; $i >= 0; $i--) {
-                $date = now()->subMonths($i);
-                $month = $date->month;
-                $year = $date->year;
-                
-                $labels[] = $date->format('M Y');
-                
-                $allData[] = User::where('type', '!=', User::TYPE_DEVELOPER)
-                    ->whereYear('created_at', $year)
-                    ->whereMonth('created_at', $month)
-                    ->count();
-                
-                $landlordData[] = User::where(function($query) {
-                        $query->where('type', User::TYPE_LANDLORD)
-                              ->orWhereHas('roles', function($q) {
-                                  $q->where('slug', 'landlord');
-                              });
-                    })
-                    ->whereYear('created_at', $year)
-                    ->whereMonth('created_at', $month)
-                    ->count();
-                
-                $agentData[] = User::where('type', User::TYPE_FIELD_AGENT)
-                    ->whereYear('created_at', $year)
-                    ->whereMonth('created_at', $month)
-                    ->count();
-            }
+        for ($i = 11; $i >= 0; $i--) {
+            $date = now()->subMonths($i);
+            $month = $date->month;
+            $year = $date->year;
 
-            return [
-                'all' => $allData,
-                'landlords' => $landlordData,
-                'agents' => $agentData,
-                'labels' => $labels,
-                'time_period' => 'last_12_months',
-            ];
-        } catch (\Exception $e) {
-            Log::error('Error getting user registration chart data: ' . $e->getMessage());
-            return [
-                'all' => array_fill(0, 12, 0),
-                'landlords' => array_fill(0, 12, 0),
-                'agents' => array_fill(0, 12, 0),
-                'labels' => [],
-                'time_period' => 'last_12_months',
-            ];
+            $labels[] = $date->format('M Y');
+
+            $allData[] = User::where('type', '!=', User::TYPE_DEVELOPER)
+                ->whereYear('created_at', $year)
+                ->whereMonth('created_at', $month)
+                ->count();
+
+            // Landlords — EXCLUDING family members.
+            $landlordData[] = User::where(function ($query) {
+                    $query->where('type', User::TYPE_LANDLORD)
+                          ->orWhereHas('roles', fn ($q) => $q->where('slug', 'landlord'));
+                })
+                ->whereDoesntHave('roles', fn ($r) => $r->where('slug', 'linked_family'))
+                ->whereYear('created_at', $year)
+                ->whereMonth('created_at', $month)
+                ->count();
+
+            // ✅ NEW: Linked family members.
+            $linkedFamilyData[] = User::whereHas('roles', fn ($r) => $r->where('slug', 'linked_family'))
+                ->whereYear('created_at', $year)
+                ->whereMonth('created_at', $month)
+                ->count();
+
+            $agentData[] = User::where('type', User::TYPE_FIELD_AGENT)
+                ->whereYear('created_at', $year)
+                ->whereMonth('created_at', $month)
+                ->count();
         }
+
+        return [
+            'all' => $allData,
+            'landlords' => $landlordData,
+            'linked_family' => $linkedFamilyData,   // ✅ NEW
+            'agents' => $agentData,
+            'labels' => $labels,
+            'time_period' => 'last_12_months',
+        ];
+    } catch (\Exception $e) {
+        Log::error('Error getting user registration chart data: ' . $e->getMessage());
+        return [
+            'all' => array_fill(0, 12, 0),
+            'landlords' => array_fill(0, 12, 0),
+            'linked_family' => array_fill(0, 12, 0),   // ✅ NEW
+            'agents' => array_fill(0, 12, 0),
+            'labels' => [],
+            'time_period' => 'last_12_months',
+        ];
     }
+}
 
     public function getPropertyRegistrationChartData()
     {
@@ -3308,95 +3349,125 @@ class HomeController extends Controller
     // ==================== LANDLORD DASHBOARD HELPER METHODS ====================
 
     private function getLandlordDashboardStats($landlordId)
-    {
-        try {
-            $totalProperties = Property::where('landlord_id', $landlordId)->count();
-            $totalUnits = PropertyUnit::whereHas('property', function($q) use ($landlordId) {
+{
+    try {
+        // ── Owned property metrics (unchanged) ──
+        $totalProperties = Property::where('landlord_id', $landlordId)->count();
+
+        $totalUnits = PropertyUnit::whereHas('property', function ($q) use ($landlordId) {
+            $q->where('landlord_id', $landlordId);
+        })->count();
+
+        $occupiedUnits = PropertyUnit::whereHas('property', function ($q) use ($landlordId) {
+            $q->where('landlord_id', $landlordId);
+        })->whereHas('rentalAgreements', function ($q) {
+            $q->where('status', 'active')
+              ->where('start_date', '<=', now())
+              ->where('end_date', '>=', now());
+        })->count();
+
+        $vacantUnits = $totalUnits - $occupiedUnits;
+        $occupancyRate = $totalUnits > 0 ? round(($occupiedUnits / $totalUnits) * 100) : 0;
+
+        $monthlyRevenue = Payment::whereHas('invoices.unit.property', function ($q) use ($landlordId) {
+            $q->where('landlord_id', $landlordId);
+        })->whereMonth('payment_date', now()->month)
+          ->whereYear('payment_date', now()->year)
+          ->where('status', Payment::STATUS_COMPLETED)
+          ->sum('amount');
+
+        $pendingPayments = $this->calculateLandlordPendingPayments($landlordId);
+
+        $pendingMaintenance = 0;
+        if (class_exists('App\Models\MaintenanceRequest')) {
+            $pendingMaintenance = MaintenanceRequest::whereHas('unit.property', function ($q) use ($landlordId) {
                 $q->where('landlord_id', $landlordId);
-            })->count();
-            
-            $occupiedUnits = PropertyUnit::whereHas('property', function($q) use ($landlordId) {
-                $q->where('landlord_id', $landlordId);
-            })->whereHas('rentalAgreements', function($q) {
-                $q->where('status', 'active')
-                  ->where('start_date', '<=', now())
-                  ->where('end_date', '>=', now());
-            })->count();
-            
-            $vacantUnits = $totalUnits - $occupiedUnits;
-            $occupancyRate = $totalUnits > 0 ? round(($occupiedUnits / $totalUnits) * 100) : 0;
-            
-            $monthlyRevenue = Payment::whereHas('invoices.unit.property', function($q) use ($landlordId) {
-                $q->where('landlord_id', $landlordId);
-            })->whereMonth('payment_date', now()->month)
-              ->whereYear('payment_date', now()->year)
-              ->where('status', Payment::STATUS_COMPLETED)
-              ->sum('amount');
-            
-            $pendingPayments = $this->calculateLandlordPendingPayments($landlordId);
-            
-            $pendingMaintenance = 0;
-            if (class_exists('App\Models\MaintenanceRequest')) {
-                $pendingMaintenance = MaintenanceRequest::whereHas('unit.property', function($q) use ($landlordId) {
-                    $q->where('landlord_id', $landlordId);
-                })->whereIn('status', ['pending', 'assigned', 'in_progress'])->count();
-            }
-            
-            $activeLeases = RentalAgreement::whereHas('unit.property', function($q) use ($landlordId) {
-                $q->where('landlord_id', $landlordId);
-            })->where('status', 'active')->count();
-            
-            $totalTenants = User::where('type', User::TYPE_TENANT)
-                ->whereHas('propertyUnits', function($q) use ($landlordId) {
-                    $q->whereHas('property', function($prop) use ($landlordId) {
-                        $prop->where('landlord_id', $landlordId);
-                    });
-                })->distinct()->count();
-            
-            $tenantApprovals = PropertyUnit::whereHas('property', function($q) use ($landlordId) {
-                $q->where('landlord_id', $landlordId);
-            })->where('tenant_status', 'pending')->count();
-            
-            $pendingLeaseSignatures = RentalAgreement::whereHas('unit.property', function($q) use ($landlordId) {
-                $q->where('landlord_id', $landlordId);
-            })->where('status', 'pending_signature')
-              ->whereNull('tenant_signed_at')
-              ->count();
-            
-            return [
-                'total_properties' => $totalProperties,
-                'total_units' => $totalUnits,
-                'occupied_units' => $occupiedUnits,
-                'vacant_units' => $vacantUnits,
-                'occupancy_rate' => $occupancyRate,
-                'monthly_revenue' => (float) $monthlyRevenue,
-                'pending_payments' => (float) $pendingPayments,
-                'pending_maintenance' => $pendingMaintenance,
-                'active_leases' => $activeLeases,
-                'total_tenants' => $totalTenants,
-                'tenant_approvals' => $tenantApprovals,
-                'pending_lease_signatures' => $pendingLeaseSignatures,
-                'unread_messages' => 0,
-            ];
-        } catch (\Exception $e) {
-            Log::error('Error getting landlord dashboard stats: ' . $e->getMessage());
-            return [
-                'total_properties' => 0,
-                'total_units' => 0,
-                'occupied_units' => 0,
-                'vacant_units' => 0,
-                'occupancy_rate' => 0,
-                'monthly_revenue' => 0,
-                'pending_payments' => 0,
-                'pending_maintenance' => 0,
-                'active_leases' => 0,
-                'total_tenants' => 0,
-                'tenant_approvals' => 0,
-                'pending_lease_signatures' => 0,
-                'unread_messages' => 0,
-            ];
+            })->whereIn('status', ['pending', 'assigned', 'in_progress'])->count();
         }
+
+        $activeLeases = RentalAgreement::whereHas('unit.property', function ($q) use ($landlordId) {
+            $q->where('landlord_id', $landlordId);
+        })->where('status', 'active')->count();
+
+        $totalTenants = User::where('type', User::TYPE_TENANT)
+            ->whereHas('propertyUnits', function ($q) use ($landlordId) {
+                $q->whereHas('property', function ($prop) use ($landlordId) {
+                    $prop->where('landlord_id', $landlordId);
+                });
+            })->distinct()->count();
+
+        $tenantApprovals = PropertyUnit::whereHas('property', function ($q) use ($landlordId) {
+            $q->where('landlord_id', $landlordId);
+        })->where('tenant_status', 'pending')->count();
+
+        $pendingLeaseSignatures = RentalAgreement::whereHas('unit.property', function ($q) use ($landlordId) {
+            $q->where('landlord_id', $landlordId);
+        })->where('status', 'pending_signature')
+          ->whereNull('tenant_signed_at')
+          ->count();
+
+        // ─────────────────────────────────────────────────────────────
+        // ✅ NEW: Family-linked access.
+        //
+        // Counts approved family-link grants where THIS user is the
+        // `linked_user_id` — i.e. properties another landlord has
+        // shared with them.
+        //
+        // This is what feeds the "Total Properties" card's secondary
+        // line ("N linked · M total access"). Owned count stays the
+        // headline number; linked is shown separately.
+        // ─────────────────────────────────────────────────────────────
+        $linkedProperties = \App\Models\PropertyFamilyLink::query()
+            ->where('linked_user_id', $landlordId)
+            ->where('status', \App\Models\PropertyFamilyLink::STATUS_APPROVED)
+            ->count();
+
+        $accessibleProperties = $totalProperties + $linkedProperties;
+
+        return [
+            // Existing keys — untouched so nothing else on the dashboard breaks.
+            'total_properties' => $totalProperties,
+            'total_units' => $totalUnits,
+            'occupied_units' => $occupiedUnits,
+            'vacant_units' => $vacantUnits,
+            'occupancy_rate' => $occupancyRate,
+            'monthly_revenue' => (float) $monthlyRevenue,
+            'pending_payments' => (float) $pendingPayments,
+            'pending_maintenance' => $pendingMaintenance,
+            'active_leases' => $activeLeases,
+            'total_tenants' => $totalTenants,
+            'tenant_approvals' => $tenantApprovals,
+            'pending_lease_signatures' => $pendingLeaseSignatures,
+            'unread_messages' => 0,
+
+            // ✅ NEW: Linked-access keys, consumed by the Total Properties
+            //         card's secondary line and by the dashboard JS.
+            'linked_properties' => $linkedProperties,
+            'accessible_properties' => $accessibleProperties,
+            'has_property_access' => $accessibleProperties > 0,
+        ];
+    } catch (\Exception $e) {
+        Log::error('Error getting landlord dashboard stats: ' . $e->getMessage());
+        return [
+            'total_properties' => 0,
+            'total_units' => 0,
+            'occupied_units' => 0,
+            'vacant_units' => 0,
+            'occupancy_rate' => 0,
+            'monthly_revenue' => 0,
+            'pending_payments' => 0,
+            'pending_maintenance' => 0,
+            'active_leases' => 0,
+            'total_tenants' => 0,
+            'tenant_approvals' => 0,
+            'pending_lease_signatures' => 0,
+            'unread_messages' => 0,
+            'linked_properties' => 0,       // ✅ NEW
+            'accessible_properties' => 0,   // ✅ NEW
+            'has_property_access' => false, // ✅ NEW
+        ];
     }
+}
 
     private function calculateLandlordPendingPayments($landlordId)
     {

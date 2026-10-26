@@ -4,13 +4,13 @@ document.addEventListener('DOMContentLoaded', function() {
     const ThemeAPI = {
         getSettings: function() {
             return fetch('/theme/settings', {
-                headers: { 
+                headers: {
                     'X-Requested-With': 'XMLHttpRequest',
                     'Accept': 'application/json'
                 }
             }).then(res => res.json());
         },
-        
+
         updateSettings: function(settings) {
             return fetch('/theme/update', {
                 method: 'POST',
@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify(settings)
             }).then(res => res.json());
         },
-        
+
         resetSettings: function() {
             return fetch('/theme/reset', {
                 method: 'POST',
@@ -32,19 +32,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }).then(res => res.json());
         },
-        
+
         getOptions: function() {
             return fetch('/theme/options', {
-                headers: { 
+                headers: {
                     'X-Requested-With': 'XMLHttpRequest',
                     'Accept': 'application/json'
                 }
             }).then(res => res.json());
         },
-        
+
         applyTheme: function() {
             return fetch('/theme/apply', {
-                headers: { 
+                headers: {
                     'X-Requested-With': 'XMLHttpRequest',
                     'Accept': 'application/json'
                 }
@@ -57,14 +57,14 @@ document.addEventListener('DOMContentLoaded', function() {
     let isSuperAdmin = false;
     let isAdmin = false;
     let isDeveloper = false;
-    
+
     // Try to get from window.Laravel if available
     if (typeof window !== 'undefined' && window.Laravel && window.Laravel.userType !== undefined) {
         userRole = parseInt(window.Laravel.userType);
         isSuperAdmin = window.Laravel.isSuperAdmin === true;
         isAdmin = window.Laravel.isAdmin === true;
         isDeveloper = window.Laravel.isDeveloper === true;
-    } 
+    }
     // Fallback: try to get from body classes
     else {
         const body = document.body;
@@ -79,7 +79,7 @@ document.addEventListener('DOMContentLoaded', function() {
             userRole = 5;
         }
     }
-    
+
     // If still not set, check meta tag
     if (userRole === null) {
         const metaUserType = document.querySelector('meta[name="user-type"]');
@@ -90,7 +90,7 @@ document.addEventListener('DOMContentLoaded', function() {
             isDeveloper = userRole === 5;
         }
     }
-    
+
     console.log('User role detected:', { userRole, isSuperAdmin, isAdmin, isDeveloper });
 
     // ============ SEARCH FIELDS CONFIGURATION ============
@@ -261,7 +261,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const theme = document.documentElement.getAttribute('data-theme');
         if (theme === 'dark') return 'dark';
         if (theme === 'light') return 'light';
-        
+
         if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
             return 'dark';
         }
@@ -276,7 +276,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // ============ BUILD SEARCH URL BASED ON CATEGORY ============
     function buildSearchUrl(category, searchTerm) {
         const encodedTerm = encodeURIComponent(searchTerm.trim());
-        
+
         // Get route from config or use fallback
         let route;
         if (searchFieldsConfig[category]) {
@@ -293,25 +293,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 route = '/dashboard';
             }
         }
-        
+
         return route + `?search=${encodedTerm}`;
     }
-    
+
     // ============ SIDEBAR TOGGLE FUNCTIONALITY ============
     const toggleSidebarDesktop = document.getElementById('toggleSidebarDesktop');
     const toggleSidebarMobile = document.getElementById('toggleSidebarMobile');
     const overlay = document.getElementById('overlay');
     const sidebar = document.getElementById('sidebar');
-    
+
     function toggleSidebarCollapsed() {
         const body = document.body;
-        
+
         if (body.__x) {
             body.__x.$data.sidebarCollapsed = !body.__x.$data.sidebarCollapsed;
         } else {
             body.classList.toggle('sidebar-collapsed');
         }
-        
+
         if (toggleSidebarDesktop) {
             const icon = toggleSidebarDesktop.querySelector('i');
             if (icon) {
@@ -319,20 +319,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 icon.className = isCollapsed ? 'fas fa-chevron-right' : 'fas fa-chevron-left';
             }
         }
-        
+
         const isCollapsed = body.__x ? body.__x.$data.sidebarCollapsed : body.classList.contains('sidebar-collapsed');
         localStorage.setItem('sidebar_collapsed', isCollapsed ? 'true' : 'false');
-        
-        document.dispatchEvent(new CustomEvent('sidebar-toggled', { 
-            detail: { collapsed: isCollapsed } 
+
+        document.dispatchEvent(new CustomEvent('sidebar-toggled', {
+            detail: { collapsed: isCollapsed }
         }));
     }
-    
+
     function toggleMobileSidebar() {
         if (sidebar && overlay) {
             sidebar.classList.toggle('show-mobile');
             overlay.classList.toggle('show');
-            
+
             if (sidebar.classList.contains('show-mobile')) {
                 document.body.style.overflow = 'hidden';
             } else {
@@ -340,21 +340,21 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     }
-    
+
     if (toggleSidebarDesktop) {
         toggleSidebarDesktop.addEventListener('click', function(e) {
             e.preventDefault();
             toggleSidebarCollapsed();
         });
     }
-    
+
     if (toggleSidebarMobile) {
         toggleSidebarMobile.addEventListener('click', function(e) {
             e.preventDefault();
             toggleMobileSidebar();
         });
     }
-    
+
     if (overlay) {
         overlay.addEventListener('click', function() {
             if (sidebar && sidebar.classList.contains('show-mobile')) {
@@ -364,13 +364,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     function restoreSidebarState() {
         const savedState = localStorage.getItem('sidebar_collapsed');
         if (savedState !== null) {
             const shouldBeCollapsed = savedState === 'true';
             const body = document.body;
-            
+
             if (body.__x) {
                 body.__x.$data.sidebarCollapsed = shouldBeCollapsed;
             } else {
@@ -380,7 +380,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     body.classList.remove('sidebar-collapsed');
                 }
             }
-            
+
             if (toggleSidebarDesktop) {
                 const icon = toggleSidebarDesktop.querySelector('i');
                 if (icon) {
@@ -389,7 +389,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     }
-    
+
     let resizeTimer;
     window.addEventListener('resize', function() {
         clearTimeout(resizeTimer);
@@ -403,9 +403,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }, 250);
     });
-    
+
     restoreSidebarState();
-    
+
     // ============ QUICK SEARCH FUNCTIONALITY ============
     const quickSearchInput = document.getElementById('quickSearchInput');
     const advancedSearchBtn = document.getElementById('advancedSearchBtn');
@@ -413,12 +413,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const globalSearchInput = document.getElementById('globalSearchInput');
     const searchCategory = document.getElementById('searchCategory');
     const mobileSearchBtn = document.getElementById('mobileSearchBtn');
-    
+
     // Filter categories based on user role
     if (searchCategory) {
         const superAdminOptions = ['system-settings', 'payment-providers', 'sms-providers', 'whatsapp-providers', 'superadmin-billing'];
         const adminOptions = ['whatsapp-messages', 'whatsapp-templates', 'whatsapp-logs'];
-        
+
         Array.from(searchCategory.options).forEach(option => {
             // Remove super admin options for non-super admins
             if (!isSuperAdmin && superAdminOptions.includes(option.value)) {
@@ -430,7 +430,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // Create dropdown for quick search results
     const searchResultsDropdown = document.createElement('div');
     searchResultsDropdown.id = 'quickSearchResults';
@@ -450,30 +450,30 @@ document.addEventListener('DOMContentLoaded', function() {
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
         display: none;
     `;
-    
+
     if (quickSearchInput) {
         quickSearchInput.parentElement.style.position = 'relative';
         quickSearchInput.parentElement.appendChild(searchResultsDropdown);
-        
+
         let debounceTimer;
         let currentSearchTerm = '';
-        
+
         quickSearchInput.addEventListener('input', function(e) {
             clearTimeout(debounceTimer);
             const searchTerm = this.value.trim();
             currentSearchTerm = searchTerm;
-            
+
             if (searchTerm.length < 2) {
                 searchResultsDropdown.style.display = 'none';
                 searchResultsDropdown.classList.add('hidden');
                 return;
             }
-            
+
             debounceTimer = setTimeout(() => {
                 performMultiFieldSearch(searchTerm);
             }, 500);
         });
-        
+
         quickSearchInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -485,9 +485,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         });
-        
+
         document.addEventListener('keydown', function(e) {
-            if (e.key === '/' && !e.ctrlKey && !e.metaKey && 
+            if (e.key === '/' && !e.ctrlKey && !e.metaKey &&
                 document.activeElement !== quickSearchInput &&
                 document.activeElement.tagName !== 'INPUT' &&
                 document.activeElement.tagName !== 'TEXTAREA' &&
@@ -496,21 +496,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 quickSearchInput.focus();
                 quickSearchInput.select();
             }
-            
+
             if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
                 e.preventDefault();
                 quickSearchInput.focus();
                 quickSearchInput.select();
             }
         });
-        
+
         document.addEventListener('click', function(e) {
             if (!quickSearchInput.parentElement.contains(e.target)) {
                 searchResultsDropdown.style.display = 'none';
                 searchResultsDropdown.classList.add('hidden');
             }
         });
-        
+
         function updateQuickSearchTheme() {
             const theme = getCurrentTheme();
             if (theme === 'dark') {
@@ -523,15 +523,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 quickSearchInput.style.color = '#2d3748';
             }
         }
-        
+
         updateQuickSearchTheme();
         document.addEventListener('theme-changed', updateQuickSearchTheme);
     }
-    
+
     // ============ PERFORM MULTI-FIELD SEARCH ============
     async function performMultiFieldSearch(searchTerm) {
         if (!searchTerm || searchTerm.length < 2) return;
-        
+
         searchResultsDropdown.innerHTML = `
             <div class="p-4 text-center" style="color: var(--text-secondary);">
                 <i class="fas fa-spinner fa-spin mr-2"></i>
@@ -540,13 +540,13 @@ document.addEventListener('DOMContentLoaded', function() {
         `;
         searchResultsDropdown.style.display = 'block';
         searchResultsDropdown.classList.remove('hidden');
-        
+
         try {
             const allResults = [];
             const searchLower = searchTerm.toLowerCase();
-            
+
             const moduleKeys = Object.keys(searchFieldsConfig);
-            
+
             const searchPromises = moduleKeys.map(async (moduleKey) => {
                 try {
                     const results = await searchModule(moduleKey, searchLower);
@@ -556,15 +556,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     return [];
                 }
             });
-            
+
             const allModuleResults = await Promise.all(searchPromises);
-            
+
             allModuleResults.forEach(results => {
                 allResults.push(...results);
             });
-            
+
             allResults.sort((a, b) => (b.relevance || 0) - (a.relevance || 0));
-            
+
             if (allResults.length > 0) {
                 displayMultiFieldResults(allResults.slice(0, 15), searchTerm);
             } else {
@@ -574,14 +574,14 @@ document.addEventListener('DOMContentLoaded', function() {
                         No results found for "${escapeHtml(searchTerm)}" in any module
                     </div>
                     <div class="p-3 border-t" style="border-color: var(--border-color);">
-                        <button class="w-full text-center text-sm py-2 rounded view-all-results-btn" 
+                        <button class="w-full text-center text-sm py-2 rounded view-all-results-btn"
                                 style="color: var(--primary);">
                             <i class="fas fa-arrow-right mr-2"></i>
                             Search all categories for "${escapeHtml(searchTerm)}"
                         </button>
                     </div>
                 `;
-                
+
                 const viewAllBtn = searchResultsDropdown.querySelector('.view-all-results-btn');
                 if (viewAllBtn) {
                     viewAllBtn.addEventListener('click', function() {
@@ -599,14 +599,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     Search failed. Please try again.
                 </div>
                 <div class="p-3 border-t" style="border-color: var(--border-color);">
-                    <button class="w-full text-center text-sm py-2 rounded view-all-results-btn" 
+                    <button class="w-full text-center text-sm py-2 rounded view-all-results-btn"
                             style="color: var(--primary);">
                         <i class="fas fa-arrow-right mr-2"></i>
                         Search all categories
                     </button>
                 </div>
             `;
-            
+
             const viewAllBtn = searchResultsDropdown.querySelector('.view-all-results-btn');
             if (viewAllBtn) {
                 viewAllBtn.addEventListener('click', function() {
@@ -617,7 +617,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     }
-    
+
     // ============ SEARCH INDIVIDUAL MODULE ============
     async function searchModule(moduleKey, searchLower) {
         const config = searchFieldsConfig[moduleKey];
@@ -638,33 +638,33 @@ document.addEventListener('DOMContentLoaded', function() {
             const doc = parser.parseFromString(html, 'text/html');
 
             const resultItems = doc.querySelectorAll('table tbody tr, .search-result, .list-item, .item-card, .card, .row-item');
-            
+
             resultItems.forEach((item) => {
                 const textContent = item.textContent.toLowerCase();
-                
+
                 if (!textContent.includes(searchLower)) return;
-                
+
                 let displayTitle = '';
                 let displaySubtitle = '';
                 let matchFields = [];
                 let matchedFieldNames = [];
 
                 const cells = item.querySelectorAll('td');
-                
+
                 if (moduleKey === 'users') {
                     const nameEl = item.querySelector('td:nth-child(2)') || item.querySelector('.name') || item.querySelector('[data-field="name"]');
                     const emailEl = item.querySelector('td:nth-child(3)') || item.querySelector('.email') || item.querySelector('[data-field="email"]');
                     const phoneEl = item.querySelector('td:nth-child(4)') || item.querySelector('.phone') || item.querySelector('[data-field="phone"]');
                     const typeEl = item.querySelector('td:nth-child(5)') || item.querySelector('.type') || item.querySelector('[data-field="type"]');
-                    
+
                     displayTitle = nameEl ? nameEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : '');
                     displaySubtitle = emailEl ? emailEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (nameEl && nameEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Name'); matchedFieldNames.push('Name'); }
                     if (emailEl && emailEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Email'); matchedFieldNames.push('Email'); }
                     if (phoneEl && phoneEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Phone'); matchedFieldNames.push('Phone'); }
                     if (typeEl && typeEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Type'); matchedFieldNames.push('Type'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -674,15 +674,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     const streetEl = item.querySelector('td:nth-child(3)') || item.querySelector('.street') || item.querySelector('[data-field="street_name"]');
                     const addressEl = item.querySelector('td:nth-child(4)') || item.querySelector('.digital-address') || item.querySelector('[data-field="digital_address"]');
                     const zoneEl = item.querySelector('td:nth-child(5)') || item.querySelector('.zone') || item.querySelector('[data-field="zone"]');
-                    
+
                     displayTitle = nameEl ? nameEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : '');
                     displaySubtitle = streetEl ? streetEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (nameEl && nameEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Property Name'); matchedFieldNames.push('Property Name'); }
                     if (streetEl && streetEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Street'); matchedFieldNames.push('Street'); }
                     if (addressEl && addressEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Digital Address'); matchedFieldNames.push('Digital Address'); }
                     if (zoneEl && zoneEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Zone'); matchedFieldNames.push('Zone'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -692,15 +692,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     const amountEl = item.querySelector('td:nth-child(3)') || item.querySelector('.amount') || item.querySelector('[data-field="amount"]');
                     const statusEl = item.querySelector('td:nth-child(4)') || item.querySelector('.status') || item.querySelector('[data-field="status"]');
                     const periodEl = item.querySelector('td:nth-child(5)') || item.querySelector('.period') || item.querySelector('[data-field="period"]');
-                    
+
                     displayTitle = numberEl ? numberEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : '');
                     displaySubtitle = amountEl ? amountEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (numberEl && numberEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Invoice Number'); matchedFieldNames.push('Invoice Number'); }
                     if (amountEl && amountEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Amount'); matchedFieldNames.push('Amount'); }
                     if (statusEl && statusEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Status'); matchedFieldNames.push('Status'); }
                     if (periodEl && periodEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Period'); matchedFieldNames.push('Period'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -711,16 +711,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     const amountEl = item.querySelector('td:nth-child(4)') || item.querySelector('.amount') || item.querySelector('[data-field="amount"]');
                     const statusEl = item.querySelector('td:nth-child(5)') || item.querySelector('.status') || item.querySelector('[data-field="status"]');
                     const payerEl = item.querySelector('td:nth-child(6)') || item.querySelector('.payer') || item.querySelector('[data-field="payer_name"]');
-                    
+
                     displayTitle = transIdEl ? transIdEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : '');
                     displaySubtitle = refEl ? refEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (transIdEl && transIdEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Transaction ID'); matchedFieldNames.push('Transaction ID'); }
                     if (refEl && refEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Reference'); matchedFieldNames.push('Reference'); }
                     if (amountEl && amountEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Amount'); matchedFieldNames.push('Amount'); }
                     if (statusEl && statusEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Status'); matchedFieldNames.push('Status'); }
                     if (payerEl && payerEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Payer'); matchedFieldNames.push('Payer'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -730,15 +730,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     const propertyEl = item.querySelector('td:nth-child(3)') || item.querySelector('.property') || item.querySelector('[data-field="property_name"]');
                     const currentEl = item.querySelector('td:nth-child(4)') || item.querySelector('.current-landlord') || item.querySelector('[data-field="current_landlord"]');
                     const newEl = item.querySelector('td:nth-child(5)') || item.querySelector('.new-landlord') || item.querySelector('[data-field="new_landlord"]');
-                    
+
                     displayTitle = refEl ? refEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : '');
                     displaySubtitle = propertyEl ? propertyEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (refEl && refEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Reference'); matchedFieldNames.push('Reference'); }
                     if (propertyEl && propertyEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Property'); matchedFieldNames.push('Property'); }
                     if (currentEl && currentEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Current Landlord'); matchedFieldNames.push('Current Landlord'); }
                     if (newEl && newEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('New Landlord'); matchedFieldNames.push('New Landlord'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -747,14 +747,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     const nameEl = item.querySelector('td:nth-child(2)') || item.querySelector('.post-name') || item.querySelector('[data-field="post_name"]');
                     const locationEl = item.querySelector('td:nth-child(3)') || item.querySelector('.location') || item.querySelector('[data-field="location"]');
                     const codeEl = item.querySelector('td:nth-child(4)') || item.querySelector('.code') || item.querySelector('[data-field="code"]');
-                    
+
                     displayTitle = nameEl ? nameEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : '');
                     displaySubtitle = locationEl ? locationEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (nameEl && nameEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Post Name'); matchedFieldNames.push('Post Name'); }
                     if (locationEl && locationEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Location'); matchedFieldNames.push('Location'); }
                     if (codeEl && codeEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Code'); matchedFieldNames.push('Code'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -763,14 +763,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     const nameEl = item.querySelector('td:nth-child(2)') || item.querySelector('.plan-name') || item.querySelector('[data-field="plan_name"]');
                     const descEl = item.querySelector('td:nth-child(3)') || item.querySelector('.description') || item.querySelector('[data-field="description"]');
                     const statusEl = item.querySelector('td:nth-child(4)') || item.querySelector('.status') || item.querySelector('[data-field="status"]');
-                    
+
                     displayTitle = nameEl ? nameEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : '');
                     displaySubtitle = descEl ? descEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (nameEl && nameEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Plan Name'); matchedFieldNames.push('Plan Name'); }
                     if (descEl && descEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Description'); matchedFieldNames.push('Description'); }
                     if (statusEl && statusEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Status'); matchedFieldNames.push('Status'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -780,15 +780,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     const propNameEl = item.querySelector('td:nth-child(3)') || item.querySelector('.property-name') || item.querySelector('[data-field="property_name"]');
                     const statusEl = item.querySelector('td:nth-child(4)') || item.querySelector('.status') || item.querySelector('[data-field="status"]');
                     const landlordEl = item.querySelector('td:nth-child(5)') || item.querySelector('.landlord-name') || item.querySelector('[data-field="landlord_name"]');
-                    
+
                     displayTitle = regNumEl ? regNumEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : '');
                     displaySubtitle = propNameEl ? propNameEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (regNumEl && regNumEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Registration Number'); matchedFieldNames.push('Registration Number'); }
                     if (propNameEl && propNameEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Property Name'); matchedFieldNames.push('Property Name'); }
                     if (statusEl && statusEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Status'); matchedFieldNames.push('Status'); }
                     if (landlordEl && landlordEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Landlord'); matchedFieldNames.push('Landlord'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -798,14 +798,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     const idEl = item.querySelector('td:nth-child(2)') || item.querySelector('.id') || item.querySelector('[data-field="id"]');
                     const nameEl = item.querySelector('td:nth-child(3)') || item.querySelector('.name') || item.querySelector('[data-field="name"]');
                     const statusEl = item.querySelector('td:nth-child(4)') || item.querySelector('.status') || item.querySelector('[data-field="status"]');
-                    
+
                     displayTitle = nameEl ? nameEl.textContent.trim() : (idEl ? idEl.textContent.trim() : (cells[1] ? cells[1].textContent.trim() : ''));
                     displaySubtitle = statusEl ? statusEl.textContent.trim() : (cells[2] ? cells[2].textContent.trim() : '');
-                    
+
                     if (idEl && idEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('ID'); matchedFieldNames.push('ID'); }
                     if (nameEl && nameEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Name'); matchedFieldNames.push('Name'); }
                     if (statusEl && statusEl.textContent.toLowerCase().includes(searchLower)) { matchFields.push('Status'); matchedFieldNames.push('Status'); }
-                    
+
                     if (matchFields.length === 0) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -819,7 +819,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         displayTitle = textParts[0] || 'Item';
                         displaySubtitle = textParts[1] || '';
                     }
-                    
+
                     if (textContent.includes(searchLower)) {
                         matchFields.push('General');
                         matchedFieldNames.push('General');
@@ -832,7 +832,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         const config = searchFieldsConfig[moduleKey];
                         subtitle = config ? config.label : moduleKey;
                     }
-                    
+
                     results.push({
                         id: results.length + 1,
                         category: moduleKey,
@@ -887,9 +887,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         results.forEach(result => {
             const categoryColor = getCategoryColor(result.category);
-            
+
             html += `
-                <a href="${result.url}" 
+                <a href="${result.url}"
                    class="quick-result-item block p-3 hover:bg-opacity-10 transition-all duration-150"
                    style="border-bottom: 1px solid var(--border-color); text-decoration: none; cursor: pointer;">
                     <div class="flex items-start">
@@ -901,7 +901,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <p class="text-sm font-medium truncate" style="color: var(--text-primary);">
                                     ${highlightText(result.title, searchTerm)}
                                 </p>
-                                <span class="text-xs ml-2 px-2 py-0.5 rounded-full flex-shrink-0" 
+                                <span class="text-xs ml-2 px-2 py-0.5 rounded-full flex-shrink-0"
                                       style="background-color: ${categoryColor}; color: white;">
                                     ${result.categoryLabel}
                                 </span>
@@ -959,13 +959,13 @@ document.addEventListener('DOMContentLoaded', function() {
             showNotification('Please enter a search term', 'warning');
             return;
         }
-        
+
         const trimmedTerm = searchTerm.trim();
         const selectedCategory = category || (searchCategory ? searchCategory.value : 'all');
-        
+
         // Save to recent searches
         saveRecentSearch(trimmedTerm, selectedCategory);
-        
+
         // Create the modal
         const modalOverlay = document.createElement('div');
         modalOverlay.id = 'fullResultsModal';
@@ -983,7 +983,7 @@ document.addEventListener('DOMContentLoaded', function() {
             z-index: 10000;
             padding: 20px;
         `;
-        
+
         modalOverlay.innerHTML = `
             <div class="full-results-modal" style="
                 background-color: var(--card-bg);
@@ -1029,7 +1029,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
-                
+
                 <!-- Modal Body - Loading State -->
                 <div id="fullResultsBody" style="
                     padding: 24px;
@@ -1042,7 +1042,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         Loading search results...
                     </div>
                 </div>
-                
+
                 <!-- Modal Footer -->
                 <div style="
                     padding: 12px 24px;
@@ -1081,10 +1081,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             </div>
         `;
-        
+
         document.body.appendChild(modalOverlay);
         document.body.style.overflow = 'hidden';
-        
+
         // Close handlers
         const closeModal = () => {
             if (document.getElementById('fullResultsModal')) {
@@ -1092,7 +1092,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.body.style.overflow = '';
             }
         };
-        
+
         document.getElementById('closeFullResultsModal').addEventListener('click', closeModal);
         document.getElementById('closeFullResultsModalBtn').addEventListener('click', closeModal);
         modalOverlay.addEventListener('click', function(e) {
@@ -1101,7 +1101,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') closeModal();
         });
-        
+
         // Load full results
         loadFullResults(trimmedTerm, selectedCategory);
     }
@@ -1110,11 +1110,11 @@ document.addEventListener('DOMContentLoaded', function() {
     async function loadFullResults(searchTerm, category) {
         const body = document.getElementById('fullResultsBody');
         if (!body) return;
-        
+
         try {
             const searchLower = searchTerm.toLowerCase();
             let allResults = [];
-            
+
             // Determine which modules to search
             let moduleKeys;
             if (category === 'all') {
@@ -1124,7 +1124,7 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 moduleKeys = Object.keys(searchFieldsConfig);
             }
-            
+
             // Search modules
             const searchPromises = moduleKeys.map(async (moduleKey) => {
                 try {
@@ -1135,15 +1135,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     return [];
                 }
             });
-            
+
             const allModuleResults = await Promise.all(searchPromises);
-            
+
             allModuleResults.forEach(results => {
                 allResults.push(...results);
             });
-            
+
             allResults.sort((a, b) => (b.relevance || 0) - (a.relevance || 0));
-            
+
             if (allResults.length === 0) {
                 body.innerHTML = `
                     <div style="text-align: center; padding: 60px 20px; color: var(--text-secondary);">
@@ -1154,7 +1154,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
                 return;
             }
-            
+
             // Display results
             let html = `
                 <div style="margin-bottom: 16px; color: var(--text-secondary); font-size: 14px;">
@@ -1162,10 +1162,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
                 <div style="display: grid; grid-template-columns: 1fr; gap: 8px;">
             `;
-            
+
             allResults.forEach((result, index) => {
                 const categoryColor = getCategoryColor(result.category);
-                
+
                 html += `
                     <div style="
                         background-color: var(--bg-secondary);
@@ -1177,7 +1177,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         gap: 12px;
                         transition: all 0.2s;
                         cursor: pointer;
-                    " onmouseover="this.style.borderColor='var(--primary)'; this.style.backgroundColor='rgba(var(--primary-rgb), 0.05)'" 
+                    " onmouseover="this.style.borderColor='var(--primary)'; this.style.backgroundColor='rgba(var(--primary-rgb), 0.05)'"
                        onmouseout="this.style.borderColor='var(--border-color)'; this.style.backgroundColor='var(--bg-secondary)'"
                        onclick="window.location.href='${result.url}'">
                         <div style="flex-shrink: 0; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background-color: rgba(var(--primary-rgb), 0.1);">
@@ -1223,11 +1223,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                 `;
             });
-            
+
             html += `</div>`;
-            
+
             body.innerHTML = html;
-            
+
         } catch (error) {
             console.error('Error loading full results:', error);
             body.innerHTML = `
@@ -1267,30 +1267,30 @@ document.addEventListener('DOMContentLoaded', function() {
         };
         return colors[category] || '#6b7280';
     }
-    
+
     // ============ PERFORM FULL SEARCH (Redirect to page) ============
     function performFullSearch(searchTerm, category) {
         if (!searchTerm || searchTerm.trim() === '') {
             showNotification('Please enter a search term', 'warning');
             return;
         }
-        
+
         const trimmedTerm = searchTerm.trim();
         const selectedCategory = category || (searchCategory ? searchCategory.value : 'all');
-        
+
         // Save to recent searches
         saveRecentSearch(trimmedTerm, selectedCategory);
-        
+
         // Build and redirect to search URL
         const searchUrl = buildSearchUrl(selectedCategory, trimmedTerm);
-        
+
         // Close all modals
         closeAllModals();
-        
+
         // Redirect to search results
         window.location.href = searchUrl;
     }
-    
+
     // ============ CLOSE ALL MODALS ============
     function closeAllModals() {
         // Close search modal
@@ -1299,14 +1299,14 @@ document.addEventListener('DOMContentLoaded', function() {
             searchModal.classList.add('hidden');
             document.body.classList.remove('modal-open');
         }
-        
+
         // Close full results modal
         const fullResultsModal = document.getElementById('fullResultsModal');
         if (fullResultsModal) {
             fullResultsModal.remove();
             document.body.style.overflow = '';
         }
-        
+
         // Close dropdown
         const dropdown = document.getElementById('quickSearchResults');
         if (dropdown) {
@@ -1314,36 +1314,36 @@ document.addEventListener('DOMContentLoaded', function() {
             dropdown.classList.add('hidden');
         }
     }
-    
+
     // ============ SAVE RECENT SEARCH ============
     function saveRecentSearch(term, category) {
         try {
             let recentSearches = JSON.parse(localStorage.getItem('global_recent_searches') || '[]');
-            
+
             recentSearches = recentSearches.filter(item => !(item.term === term && item.category === category));
             recentSearches.unshift({ term: term, category: category, timestamp: Date.now() });
             recentSearches = recentSearches.slice(0, 10);
-            
+
             localStorage.setItem('global_recent_searches', JSON.stringify(recentSearches));
             displayRecentSearches();
         } catch (e) {
             console.warn('Could not save recent search:', e);
         }
     }
-    
+
     // ============ DISPLAY RECENT SEARCHES ============
     function displayRecentSearches() {
         const container = document.getElementById('recentSearchesList');
         if (!container) return;
-        
+
         try {
             let recentSearches = JSON.parse(localStorage.getItem('global_recent_searches') || '[]');
-            
+
             if (recentSearches.length === 0) {
                 container.innerHTML = '<div class="text-sm text-gray-500 italic">No recent searches</div>';
                 return;
             }
-            
+
             const categoryNames = {
                 'all': 'All',
                 'users': 'Users',
@@ -1368,12 +1368,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 'whatsapp-logs': 'Logs',
                 'superadmin-billing': 'Billing'
             };
-            
+
             let html = '';
             for (const search of recentSearches) {
                 const categoryName = categoryNames[search.category] || search.category;
                 const displayTerm = search.term.length > 30 ? search.term.substring(0, 30) + '...' : search.term;
-                
+
                 html += `
                     <button class="recent-search-item px-3 py-1 rounded-full text-xs transition-colors duration-200 flex items-center gap-1"
                             data-term="${escapeHtml(search.term)}"
@@ -1385,9 +1385,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     </button>
                 `;
             }
-            
+
             container.innerHTML = html;
-            
+
             document.querySelectorAll('.recent-search-item').forEach(btn => {
                 btn.addEventListener('click', function() {
                     const term = this.dataset.term;
@@ -1405,7 +1405,7 @@ document.addEventListener('DOMContentLoaded', function() {
             console.warn('Could not display recent searches:', e);
         }
     }
-    
+
     // ============ CLEAR RECENT SEARCHES ============
     function clearRecentSearches() {
         if (confirm('Clear all recent searches?')) {
@@ -1414,7 +1414,7 @@ document.addEventListener('DOMContentLoaded', function() {
             showNotification('Recent searches cleared', 'success');
         }
     }
-    
+
     // ============ HELPER FUNCTIONS ============
     function showNotification(message, type = 'info') {
         let toastContainer = document.getElementById('toast-container');
@@ -1424,7 +1424,7 @@ document.addEventListener('DOMContentLoaded', function() {
             toastContainer.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999;';
             document.body.appendChild(toastContainer);
         }
-        
+
         const toast = document.createElement('div');
         const bgColor = type === 'error' ? '#ef4444' : (type === 'success' ? '#10b981' : '#3b82f6');
         toast.style.cssText = `
@@ -1439,33 +1439,33 @@ document.addEventListener('DOMContentLoaded', function() {
             cursor: pointer;
         `;
         toast.textContent = message;
-        
+
         toastContainer.appendChild(toast);
-        
+
         setTimeout(() => {
             toast.style.animation = 'slideOutRight 0.3s ease-out';
             setTimeout(() => toast.remove(), 300);
         }, 3000);
-        
+
         toast.onclick = () => toast.remove();
     }
-    
+
     function highlightText(text, searchTerm) {
         if (!text || !searchTerm) return text;
         const regex = new RegExp(`(${escapeRegex(searchTerm)})`, 'gi');
         return text.replace(regex, '<mark style="background-color: rgba(var(--primary-rgb), 0.3); color: inherit; padding: 0 2px; border-radius: 2px;">$1</mark>');
     }
-    
+
     function escapeRegex(string) {
         return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
-    
+
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
-    
+
     // ============ SEARCH MODAL FUNCTIONALITY ============
     function openSearchModal() {
         if (searchModal) {
@@ -1473,7 +1473,7 @@ document.addEventListener('DOMContentLoaded', function() {
             document.body.classList.add('modal-open');
             updateSearchModalTheme();
             displayRecentSearches();
-            
+
             setTimeout(() => {
                 if (globalSearchInput) {
                     globalSearchInput.focus();
@@ -1481,14 +1481,14 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 150);
         }
     }
-    
+
     function closeSearchModalFunc() {
         if (searchModal) {
             searchModal.classList.add('hidden');
             document.body.classList.remove('modal-open');
         }
     }
-    
+
     if (advancedSearchBtn && searchModal) {
         advancedSearchBtn.addEventListener('click', function(e) {
             e.preventDefault();
@@ -1496,23 +1496,23 @@ document.addEventListener('DOMContentLoaded', function() {
             openSearchModal();
         });
     }
-    
+
     if (mobileSearchBtn) {
         mobileSearchBtn.addEventListener('click', function() {
             openSearchModal();
         });
     }
-    
+
     const closeSearchModal = document.getElementById('closeSearchModal');
     const cancelSearch = document.getElementById('cancelSearch');
-    
+
     if (closeSearchModal) {
         closeSearchModal.addEventListener('click', closeSearchModalFunc);
     }
     if (cancelSearch) {
         cancelSearch.addEventListener('click', closeSearchModalFunc);
     }
-    
+
     if (searchModal) {
         searchModal.addEventListener('click', function(e) {
             if (e.target === searchModal) {
@@ -1520,19 +1520,19 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape' && searchModal && !searchModal.classList.contains('hidden')) {
             closeSearchModalFunc();
         }
     });
-    
+
     // Clear recent searches button
     const clearRecentBtn = document.getElementById('clearRecentSearchesBtn');
     if (clearRecentBtn) {
         clearRecentBtn.addEventListener('click', clearRecentSearches);
     }
-    
+
     // Clear search button
     const clearSearch = document.getElementById('clearSearch');
     if (clearSearch) {
@@ -1541,7 +1541,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (globalSearchInput) globalSearchInput.focus();
         });
     }
-    
+
     // Perform search button in modal
     const performSearchBtn = document.getElementById('performSearch');
     if (performSearchBtn) {
@@ -1551,7 +1551,7 @@ document.addEventListener('DOMContentLoaded', function() {
             showFullResultsModal(searchTerm, category);
         });
     }
-    
+
     // Enter key in global search input
     if (globalSearchInput) {
         globalSearchInput.addEventListener('keypress', function(e) {
@@ -1561,16 +1561,16 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     function updateSearchModalTheme() {
         const theme = getCurrentTheme();
         const modal = document.getElementById('searchModal');
         if (!modal) return;
-        
+
         const modalContainer = modal.querySelector('.search-modal-container');
         const modalHeader = modal.querySelector('.modal-header-light');
         const modalFooter = modal.querySelector('.modal-footer-light');
-        
+
         if (theme === 'dark') {
             if (modalContainer) {
                 modalContainer.style.backgroundColor = '#1a1e2c';
@@ -1599,7 +1599,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     }
-    
+
     // ============ NOTIFICATION FUNCTIONS ============
     // SINGLE SOURCE OF TRUTH FOR NOTIFICATION COUNT
     function updateNotificationCount() {
@@ -1618,17 +1618,17 @@ document.addEventListener('DOMContentLoaded', function() {
         // Find the notification bell container
         const notificationBell = document.getElementById('notificationBell');
         if (!notificationBell) return;
-        
+
         // Remove any existing badge first (cleanup)
         const existingBadges = notificationBell.querySelectorAll('.notification-badge');
         existingBadges.forEach(badge => badge.remove());
-        
+
         // If count > 0, create new badge
         if (count > 0) {
             const badge = document.createElement('span');
             badge.className = 'notification-badge';
             badge.textContent = count > 9 ? '9+' : count;
-            
+
             // Style the badge
             badge.style.cssText = `
                 position: absolute;
@@ -1648,7 +1648,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 animation: pulse 2s infinite;
                 z-index: 10;
             `;
-            
+
             // Make sure the parent has relative positioning
             notificationBell.style.position = 'relative';
             notificationBell.appendChild(badge);
@@ -1659,13 +1659,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // The Alpine component in resources/views/components/notification-bell.blade.php
     // is the single source of truth for loading / marking notifications.
     // ============================================================
-    
+
     // ============ BILLING MANAGEMENT MODAL ============
     const billingModal = document.getElementById('billingManagementModal');
     const billingBtn = document.getElementById('billingManagementBtn');
     const closeBillingModalBtn = document.getElementById('closeBillingModal');
     const cancelBillingModalBtn = document.getElementById('cancelBillingModal');
-    
+
     if (billingBtn && billingModal) {
         billingBtn.addEventListener('click', function(e) {
             e.preventDefault();
@@ -1674,21 +1674,21 @@ document.addEventListener('DOMContentLoaded', function() {
             document.body.style.overflow = 'hidden';
         });
     }
-    
+
     function closeBillingModalFunc() {
         if (billingModal) {
             billingModal.classList.add('hidden');
             document.body.style.overflow = '';
         }
     }
-    
+
     if (closeBillingModalBtn) {
         closeBillingModalBtn.addEventListener('click', closeBillingModalFunc);
     }
     if (cancelBillingModalBtn) {
         cancelBillingModalBtn.addEventListener('click', closeBillingModalFunc);
     }
-    
+
     if (billingModal) {
         billingModal.addEventListener('click', function(e) {
             if (e.target === this) {
@@ -1696,13 +1696,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape' && billingModal && !billingModal.classList.contains('hidden')) {
             closeBillingModalFunc();
         }
     });
-    
+
     window.closeBillingModal = closeBillingModalFunc;
 
     // ============ EMAIL MANAGEMENT MODAL ============
@@ -1710,7 +1710,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const emailBtn = document.getElementById('emailManagementBtn');
     const closeEmailModalBtn = document.getElementById('closeEmailModal');
     const cancelEmailModalBtn = document.getElementById('cancelEmailModal');
-    
+
     if (emailBtn && emailModal) {
         emailBtn.addEventListener('click', function(e) {
             e.preventDefault();
@@ -1718,21 +1718,21 @@ document.addEventListener('DOMContentLoaded', function() {
             document.body.style.overflow = 'hidden';
         });
     }
-    
+
     function closeEmailModalFunc() {
         if (emailModal) {
             emailModal.classList.add('hidden');
             document.body.style.overflow = '';
         }
     }
-    
+
     if (closeEmailModalBtn) {
         closeEmailModalBtn.addEventListener('click', closeEmailModalFunc);
     }
     if (cancelEmailModalBtn) {
         cancelEmailModalBtn.addEventListener('click', closeEmailModalFunc);
     }
-    
+
     if (emailModal) {
         emailModal.addEventListener('click', function(e) {
             if (e.target === this) {
@@ -1740,7 +1740,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     window.closeEmailModal = closeEmailModalFunc;
 
     // ============ SMS MANAGEMENT MODAL ============
@@ -1748,7 +1748,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const smsBtn = document.getElementById('smsManagementBtn');
     const closeSmsModalBtn = document.getElementById('closeSmsModal');
     const cancelSmsModalBtn = document.getElementById('cancelSmsModal');
-    
+
     if (smsBtn && smsModal) {
         smsBtn.addEventListener('click', function(e) {
             e.preventDefault();
@@ -1756,21 +1756,21 @@ document.addEventListener('DOMContentLoaded', function() {
             document.body.style.overflow = 'hidden';
         });
     }
-    
+
     function closeSmsModalFunc() {
         if (smsModal) {
             smsModal.classList.add('hidden');
             document.body.style.overflow = '';
         }
     }
-    
+
     if (closeSmsModalBtn) {
         closeSmsModalBtn.addEventListener('click', closeSmsModalFunc);
     }
     if (cancelSmsModalBtn) {
         cancelSmsModalBtn.addEventListener('click', closeSmsModalFunc);
     }
-    
+
     if (smsModal) {
         smsModal.addEventListener('click', function(e) {
             if (e.target === this) {
@@ -1778,18 +1778,18 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     window.closeSmsModal = closeSmsModalFunc;
 
     // ============ SMS MANAGEMENT FUNCTIONS ============
     function refreshSmsStatus() {
         const btn = event?.target?.closest('button');
         if (!btn) return;
-        
+
         const originalHtml = btn.innerHTML;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Refreshing...';
         btn.disabled = true;
-        
+
         fetch('/api/sms/status/refresh', {
             method: 'POST',
             headers: {
@@ -1825,11 +1825,11 @@ document.addEventListener('DOMContentLoaded', function() {
     function testSmsConnection() {
         const btn = event?.target?.closest('button');
         if (!btn) return;
-        
+
         const originalHtml = btn.innerHTML;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Testing...';
         btn.disabled = true;
-        
+
         fetch('/api/sms/test', {
             method: 'POST',
             headers: {
@@ -1861,7 +1861,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const whatsappBtn = document.getElementById('whatsappManagementBtn');
     const closeWhatsAppModalBtn = document.getElementById('closeWhatsAppModal');
     const cancelWhatsAppModalBtn = document.getElementById('cancelWhatsAppModal');
-    
+
     if (whatsappBtn && whatsappModal) {
         whatsappBtn.addEventListener('click', function(e) {
             e.preventDefault();
@@ -1870,21 +1870,21 @@ document.addEventListener('DOMContentLoaded', function() {
             document.body.style.overflow = 'hidden';
         });
     }
-    
+
     function closeWhatsAppModalFunc() {
         if (whatsappModal) {
             whatsappModal.classList.add('hidden');
             document.body.style.overflow = '';
         }
     }
-    
+
     if (closeWhatsAppModalBtn) {
         closeWhatsAppModalBtn.addEventListener('click', closeWhatsAppModalFunc);
     }
     if (cancelWhatsAppModalBtn) {
         cancelWhatsAppModalBtn.addEventListener('click', closeWhatsAppModalFunc);
     }
-    
+
     if (whatsappModal) {
         whatsappModal.addEventListener('click', function(e) {
             if (e.target === this) {
@@ -1892,13 +1892,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape' && whatsappModal && !whatsappModal.classList.contains('hidden')) {
             closeWhatsAppModalFunc();
         }
     });
-    
+
     window.closeWhatsAppModal = closeWhatsAppModalFunc;
 
     // ============ WHATSAPP MANAGEMENT FUNCTIONS ============
@@ -1917,11 +1917,11 @@ document.addEventListener('DOMContentLoaded', function() {
     function testWhatsAppConnection() {
         const btn = event?.target?.closest('button');
         if (!btn) return;
-        
+
         const originalHtml = btn.innerHTML;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Testing...';
         btn.disabled = true;
-        
+
         fetch('/api/whatsapp/test', {
             method: 'POST',
             headers: {
@@ -1951,11 +1951,11 @@ document.addEventListener('DOMContentLoaded', function() {
     function refreshWhatsAppStatus() {
         const btn = event?.target?.closest('button');
         if (!btn) return;
-        
+
         const originalHtml = btn.innerHTML;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Refreshing...';
         btn.disabled = true;
-        
+
         fetch('/api/whatsapp/status/refresh', {
             method: 'POST',
             headers: {
@@ -1986,14 +1986,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // ============ EMAIL ACCOUNT FUNCTIONS ============
     function syncAccount(accountId) {
         if (!confirm('Sync this email account to fetch new emails?')) return;
-        
+
         const button = event?.target?.closest('button');
         if (!button) return;
-        
+
         const originalHtml = button.innerHTML;
         button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
         button.disabled = true;
-        
+
         fetch(`/email-accounts/${accountId}/sync`, {
             method: 'POST',
             headers: {
@@ -2023,22 +2023,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function syncAllEmails() {
         if (!confirm('Sync all your email accounts to fetch new emails?')) return;
-        
+
         const accounts = document.querySelectorAll('.account-item');
         let synced = 0;
         let total = accounts.length;
-        
+
         if (total === 0) {
             showNotification('No email accounts to sync.', 'info');
             return;
         }
-        
+
         showNotification(`Syncing ${total} account(s)...`, 'info');
-        
+
         accounts.forEach((account, index) => {
-            const accountId = account.getAttribute('data-account-id') || 
+            const accountId = account.getAttribute('data-account-id') ||
                              account.querySelector('[onclick*="syncAccount"]')?.getAttribute('onclick')?.match(/\d+/)?.[0];
-            
+
             if (accountId) {
                 fetch(`/email-accounts/${accountId}/sync`, {
                     method: 'POST',
@@ -2072,7 +2072,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function setPrimaryAccount(accountId) {
         if (!confirm('Set this as your primary email account?')) return;
-        
+
         fetch(`/email-accounts/${accountId}/set-primary`, {
             method: 'POST',
             headers: {
@@ -2099,7 +2099,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function deleteAccount(accountId, email) {
         if (!confirm(`Are you sure you want to unlink the email account "${email}"?`)) return;
         if (!confirm(`This will permanently remove access to "${email}". Continue?`)) return;
-        
+
         fetch(`/email-accounts/${accountId}`, {
             method: 'DELETE',
             headers: {
@@ -2128,7 +2128,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const invoiceBtn = document.getElementById('invoiceManagementBtn');
     const closeInvoiceModalBtn = document.getElementById('closeInvoiceModal');
     const cancelInvoiceModalBtn = document.getElementById('cancelInvoiceModal');
-    
+
     if (invoiceBtn && invoiceModal) {
         invoiceBtn.addEventListener('click', function(e) {
             e.preventDefault();
@@ -2136,21 +2136,21 @@ document.addEventListener('DOMContentLoaded', function() {
             document.body.style.overflow = 'hidden';
         });
     }
-    
+
     function closeInvoiceModalFunc() {
         if (invoiceModal) {
             invoiceModal.classList.add('hidden');
             document.body.style.overflow = '';
         }
     }
-    
+
     if (closeInvoiceModalBtn) {
         closeInvoiceModalBtn.addEventListener('click', closeInvoiceModalFunc);
     }
     if (cancelInvoiceModalBtn) {
         cancelInvoiceModalBtn.addEventListener('click', closeInvoiceModalFunc);
     }
-    
+
     if (invoiceModal) {
         invoiceModal.addEventListener('click', function(e) {
             if (e.target === this) {
@@ -2158,53 +2158,19 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     window.closeInvoiceModal = closeInvoiceModalFunc;
 
     // ============ ADMINISTRATIVE TOOLS MODAL ============
-    const adminToolsModal = document.getElementById('administrativeToolsModal');
-    const adminToolsBtn = document.getElementById('administrativeToolsBtn');
-    const closeAdminToolsModalBtn = document.getElementById('closeAdminToolsModal');
-    const cancelAdminToolsModalBtn = document.getElementById('cancelAdminToolsModal');
-    
-    if (adminToolsBtn && adminToolsModal) {
-        adminToolsBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            adminToolsModal.classList.remove('hidden');
-            document.body.style.overflow = 'hidden';
-        });
-    }
-    
-    function closeAdminToolsModalFunc() {
-        if (adminToolsModal) {
-            adminToolsModal.classList.add('hidden');
-            document.body.style.overflow = '';
-        }
-    }
-    
-    if (closeAdminToolsModalBtn) {
-        closeAdminToolsModalBtn.addEventListener('click', closeAdminToolsModalFunc);
-    }
-    if (cancelAdminToolsModalBtn) {
-        cancelAdminToolsModalBtn.addEventListener('click', closeAdminToolsModalFunc);
-    }
-    
-    if (adminToolsModal) {
-        adminToolsModal.addEventListener('click', function(e) {
-            if (e.target === this) {
-                closeAdminToolsModalFunc();
-            }
-        });
-    }
-    
-    window.closeAdminToolsModal = closeAdminToolsModalFunc;
+    // ⛔ REMOVED — modal dissolved. Security modules + Manage Property Transfer
+    // are now direct sidebar links. No modal handlers required.
 
     // ============ THEME SETTINGS MODAL WITH CONTROLLER INTEGRATION ============
     const themeModal = document.getElementById('themeSettingsModal');
     const themeBtn = document.getElementById('themeSettingsButton');
     const closeThemeModalBtn = document.getElementById('closeThemeModal');
     const closeThemeModalBtn2 = document.getElementById('closeThemeModalBtn');
-    
+
     // Load theme settings from server on page load
     function loadThemeSettings() {
         ThemeAPI.getSettings()
@@ -2246,10 +2212,10 @@ document.addEventListener('DOMContentLoaded', function() {
             document.documentElement.setAttribute('data-animations', settings.animations);
             localStorage.setItem('animations', settings.animations);
         }
-        
+
         // Dispatch theme changed event
-        document.dispatchEvent(new CustomEvent('theme-changed', { 
-            detail: { settings: settings } 
+        document.dispatchEvent(new CustomEvent('theme-changed', {
+            detail: { settings: settings }
         }));
     }
 
@@ -2262,7 +2228,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 el.classList.remove('active');
             }
         });
-        
+
         // Update sidebar theme options
         document.querySelectorAll('.theme-option-compact').forEach(el => {
             if (el.dataset.theme === settings.sidebar_theme) {
@@ -2284,26 +2250,26 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 })
                 .catch(error => console.error('Failed to load theme settings:', error));
-            
+
             themeModal.classList.remove('hidden');
             document.body.style.overflow = 'hidden';
         });
     }
-    
+
     function closeThemeModalFunc() {
         if (themeModal) {
             themeModal.classList.add('hidden');
             document.body.style.overflow = '';
         }
     }
-    
+
     if (closeThemeModalBtn) {
         closeThemeModalBtn.addEventListener('click', closeThemeModalFunc);
     }
     if (closeThemeModalBtn2) {
         closeThemeModalBtn2.addEventListener('click', closeThemeModalFunc);
     }
-    
+
     if (themeModal) {
         themeModal.addEventListener('click', function(e) {
             if (e.target === this) {
@@ -2311,15 +2277,15 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // Theme options with controller integration
     document.querySelectorAll('.appearance-option-compact, .theme-option-compact').forEach(option => {
         option.addEventListener('click', function() {
             const type = this.classList.contains('appearance-option-compact') ? 'appearance' : 'sidebar_theme';
             const value = this.dataset.theme;
-            
+
             if (!value) return;
-            
+
             // Update UI immediately for responsiveness
             if (type === 'appearance') {
                 document.documentElement.setAttribute('data-theme', value);
@@ -2328,17 +2294,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.documentElement.setAttribute('data-sidebar-theme', value);
                 localStorage.setItem('sidebar_theme', value);
             }
-            
+
             // Update active states
             document.querySelectorAll(`.${type === 'appearance' ? 'appearance-option-compact' : 'theme-option-compact'}`).forEach(el => {
                 el.classList.toggle('active', el.dataset.theme === value);
             });
-            
+
             // Dispatch theme changed event
-            document.dispatchEvent(new CustomEvent('theme-changed', { 
-                detail: { [type]: value } 
+            document.dispatchEvent(new CustomEvent('theme-changed', {
+                detail: { [type]: value }
             }));
-            
+
             // Save to server
             const settings = {};
             if (type === 'appearance') {
@@ -2346,7 +2312,7 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 settings.sidebar_theme = value;
             }
-            
+
             ThemeAPI.updateSettings(settings)
                 .then(data => {
                     if (data.success) {
@@ -2364,15 +2330,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
         });
     });
-    
+
     // Load saved theme from server on page load
     loadThemeSettings();
-    
+
     window.closeThemeModal = closeThemeModalFunc;
 
     // ============ SCROLL TO TOP ============
     const scrollToTopBtn = document.getElementById('scrollToTop');
-    
+
     if (scrollToTopBtn) {
         window.addEventListener('scroll', function() {
             if (window.scrollY > 300) {
@@ -2383,7 +2349,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 scrollToTopBtn.classList.remove('opacity-100', 'pointer-events-auto');
             }
         });
-        
+
         scrollToTopBtn.addEventListener('click', function() {
             window.scrollTo({ top: 0, behavior: 'smooth' });
         });
@@ -2395,7 +2361,7 @@ document.addEventListener('DOMContentLoaded', function() {
     window.closeSmsModal = closeSmsModalFunc;
     window.closeWhatsAppModal = closeWhatsAppModalFunc;
     window.closeInvoiceModal = closeInvoiceModalFunc;
-    window.closeAdminToolsModal = closeAdminToolsModalFunc;
+    // ⛔ window.closeAdminToolsModal removed — modal no longer exists
     window.closeThemeModal = closeThemeModalFunc;
     window.closeSearchModal = closeSearchModalFunc;
     window.showNotification = showNotification;
@@ -2409,21 +2375,21 @@ document.addEventListener('DOMContentLoaded', function() {
     window.openWhatsAppCompose = openWhatsAppCompose;
     window.testWhatsAppConnection = testWhatsAppConnection;
     window.refreshWhatsAppStatus = refreshWhatsAppStatus;
-    // window.loadNotifications removed � Alpine bell handles it
+    // window.loadNotifications removed — Alpine bell handles it
     // window.markNotificationRead removed
     // window.markAllAsRead removed
     window.performFullSearch = performFullSearch;
     window.showFullResultsModal = showFullResultsModal;
     window.updateNotificationCount = updateNotificationCount;
     window.ThemeAPI = ThemeAPI;
-    
+
     // ============ INITIAL LOAD ============
     updateNotificationCount();
-    // loadNotifications() removed � Alpine bell loads on demand
+    // loadNotifications() removed — Alpine bell loads on demand
     // Listen for theme changes
     document.addEventListener('theme-changed', function() {
         const currentTheme = getCurrentTheme();
-        
+
         const invoiceModal = document.getElementById('invoiceManagementModal');
         if (invoiceModal && !invoiceModal.classList.contains('hidden')) {
             const modal = invoiceModal.querySelector('.invoice-modal');
@@ -2437,7 +2403,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         }
-        
+
         if (quickSearchInput) {
             if (currentTheme === 'dark') {
                 quickSearchInput.style.backgroundColor = '#2d3748';
@@ -2449,13 +2415,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 quickSearchInput.style.color = '#2d3748';
             }
         }
-        
+
         updateSearchModalTheme();
     });
-    
+
     const initialTheme = getCurrentTheme();
     console.log('Initial theme detected:', initialTheme);
-    
+
     if (window.matchMedia) {
         const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
         darkModeMediaQuery.addEventListener('change', (e) => {

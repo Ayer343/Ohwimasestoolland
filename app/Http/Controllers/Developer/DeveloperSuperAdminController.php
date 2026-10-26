@@ -108,498 +108,486 @@ class DeveloperSuperAdminController extends Controller
         ));
     }
 
-   /**
- * Display trashed (soft-deleted) super admins
- */
-public function trash(Request $request)
-{
-    $query = User::onlyTrashed()
-        ->where('type', User::TYPE_SUPER_ADMIN)
-        ->where('created_by', auth()->id())
-        ->with(['creator'])  // REMOVED 'deletedBy' from here
-        ->orderBy('deleted_at', 'desc');
+    /**
+     * Display trashed (soft-deleted) super admins
+     */
+    public function trash(Request $request)
+    {
+        $query = User::onlyTrashed()
+            ->where('type', User::TYPE_SUPER_ADMIN)
+            ->where('created_by', auth()->id())
+            ->with(['creator'])
+            ->orderBy('deleted_at', 'desc');
 
-    // Apply filters
-    if ($request->has('search') && !empty($request->search)) {
-        $search = $request->search;
-        $query->where(function($q) use ($search) {
-            $q->where('name', 'like', "%{$search}%")
-              ->orWhere('email', 'like', "%{$search}%")
-              ->orWhere('phone', 'like', "%{$search}%");
+        // Apply filters
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%")
+                  ->orWhere('phone', 'like', "%{$search}%");
+            });
+        }
+
+        if ($request->has('date_from') && !empty($request->date_from)) {
+            $query->whereDate('deleted_at', '>=', $request->date_from);
+        }
+        
+        if ($request->has('date_to') && !empty($request->date_to)) {
+            $query->whereDate('deleted_at', '<=', $request->date_to);
+        }
+
+        $trashedSuperAdmins = $query->paginate($request->get('per_page', 20));
+
+        // Add display data
+        $trashedSuperAdmins->getCollection()->transform(function ($user) {
+            $user = $this->prepareUserForDisplay($user);
+            $user->deleted_at_formatted = $user->deleted_at ? $user->deleted_at->format('Y-m-d H:i:s') : 'N/A';
+            $user->deleted_by_name = 'System';
+            $user->days_in_trash = $user->deleted_at ? $user->deleted_at->diffInDays(now()) : 0;
+            return $user;
         });
+
+        $statistics = [
+            'total_trashed' => User::onlyTrashed()
+                ->where('type', User::TYPE_SUPER_ADMIN)
+                ->where('created_by', auth()->id())
+                ->count(),
+            'trashed_this_week' => User::onlyTrashed()
+                ->where('type', User::TYPE_SUPER_ADMIN)
+                ->where('created_by', auth()->id())
+                ->whereBetween('deleted_at', [now()->startOfWeek(), now()->endOfWeek()])
+                ->count(),
+            'trashed_this_month' => User::onlyTrashed()
+                ->where('type', User::TYPE_SUPER_ADMIN)
+                ->where('created_by', auth()->id())
+                ->whereMonth('deleted_at', now()->month)
+                ->count(),
+            'oldest_trashed' => User::onlyTrashed()
+                ->where('type', User::TYPE_SUPER_ADMIN)
+                ->where('created_by', auth()->id())
+                ->orderBy('deleted_at', 'asc')
+                ->first(),
+        ];
+
+        return view('developer.super-admins.trash', compact('trashedSuperAdmins', 'statistics'));
     }
-
-    if ($request->has('date_from') && !empty($request->date_from)) {
-        $query->whereDate('deleted_at', '>=', $request->date_from);
-    }
-    
-    if ($request->has('date_to') && !empty($request->date_to)) {
-        $query->whereDate('deleted_at', '<=', $request->date_to);
-    }
-
-    $trashedSuperAdmins = $query->paginate($request->get('per_page', 20));
-
-    // Add display data
-    $trashedSuperAdmins->getCollection()->transform(function ($user) {
-        $user = $this->prepareUserForDisplay($user);
-        $user->deleted_at_formatted = $user->deleted_at ? $user->deleted_at->format('Y-m-d H:i:s') : 'N/A';
-        $user->deleted_by_name = 'System'; // REMOVED deletedBy relationship, use default
-        $user->days_in_trash = $user->deleted_at ? $user->deleted_at->diffInDays(now()) : 0;
-        return $user;
-    });
-
-    $statistics = [
-        'total_trashed' => User::onlyTrashed()
-            ->where('type', User::TYPE_SUPER_ADMIN)
-            ->where('created_by', auth()->id())
-            ->count(),
-        'trashed_this_week' => User::onlyTrashed()
-            ->where('type', User::TYPE_SUPER_ADMIN)
-            ->where('created_by', auth()->id())
-            ->whereBetween('deleted_at', [now()->startOfWeek(), now()->endOfWeek()])
-            ->count(),
-        'trashed_this_month' => User::onlyTrashed()
-            ->where('type', User::TYPE_SUPER_ADMIN)
-            ->where('created_by', auth()->id())
-            ->whereMonth('deleted_at', now()->month)
-            ->count(),
-        'oldest_trashed' => User::onlyTrashed()
-            ->where('type', User::TYPE_SUPER_ADMIN)
-            ->where('created_by', auth()->id())
-            ->orderBy('deleted_at', 'asc')
-            ->first(),
-    ];
-
-    return view('developer.super-admins.trash', compact('trashedSuperAdmins', 'statistics'));
-}
 
     /**
      * Restore a soft-deleted super admin
      */
-    /**
- * Restore a soft-deleted super admin
- */
-public function restore($id)
-{
-    $user = User::onlyTrashed()
-        ->where('type', User::TYPE_SUPER_ADMIN)
-        ->where('created_by', auth()->id())
-        ->findOrFail($id);
-
-    DB::beginTransaction();
-
-    try {
-        // Restore the user
-        $user->restore();
-        
-        // REMOVED: Invitations don't have soft deletes, so no need to restore them
-        // UserInvitation records remain as they were (not soft deleted)
-        // If you want to reactivate expired invitations, handle that separately
-
-        // Update metadata
-        $metadata = $user->metadata ?? [];
-        $metadata['restored_at'] = now()->toISOString();
-        $metadata['restored_by'] = auth()->id();
-        $metadata['restored_by_name'] = auth()->user()->name;
-        $user->update(['metadata' => $metadata]);
-
-        DB::commit();
-
-        Log::info('Developer restored Super Admin from trash', [
-            'developer_id' => auth()->id(),
-            'super_admin_id' => $user->id,
-            'super_admin_name' => $user->name
-        ]);
-
-        return redirect()->route('developer.super-admins.show', $user->id)
-            ->with('success', 'Super Admin account restored successfully!');
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Failed to restore Super Admin', [
-            'developer_id' => auth()->id(),
-            'super_admin_id' => $user->id,
-            'error' => $e->getMessage()
-        ]);
-
-        return back()->with('error', 'Failed to restore Super Admin: ' . $e->getMessage());
-    }
-}
-
-/**
- * Permanently delete a soft-deleted super admin
- */
-public function forceDelete($id)
-{
-    $user = User::onlyTrashed()
-        ->where('type', User::TYPE_SUPER_ADMIN)
-        ->where('created_by', auth()->id())
-        ->findOrFail($id);
-
-    DB::beginTransaction();
-
-    try {
-        // Check if user created other accounts (prevent orphaned data)
-        $createdUsersCount = User::withTrashed()
-            ->where('created_by', $user->id)
-            ->where('id', '!=', $user->id)
-            ->count();
-        
-        if ($createdUsersCount > 0) {
-            throw new \Exception("Cannot permanently delete Super Admin who created {$createdUsersCount} user accounts. These accounts would become orphaned.");
-        }
-
-        // FIXED: Use delete() instead of forceDelete() since UserInvitation doesn't have SoftDeletes
-        // This will permanently remove the invitation records
-        UserInvitation::where('user_id', $user->id)->delete();
-
-        // Delete user photo if exists
-        if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
-            Storage::disk('public')->delete('users/photos/' . $user->photo);
-        }
-
-        // Store info for logging before force delete
-        $userName = $user->name;
-        $userEmail = $user->email;
-
-        // Permanently delete the user
-        $user->forceDelete();
-
-        DB::commit();
-
-        Log::info('Developer permanently deleted Super Admin', [
-            'developer_id' => auth()->id(),
-            'super_admin_name' => $userName,
-            'super_admin_email' => $userEmail
-        ]);
-
-        return redirect()->route('developer.super-admins.trash')
-            ->with('success', 'Super Admin permanently deleted successfully!');
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Failed to permanently delete Super Admin', [
-            'developer_id' => auth()->id(),
-            'super_admin_id' => $user->id,
-            'error' => $e->getMessage()
-        ]);
-
-        return back()->with('error', 'Failed to permanently delete: ' . $e->getMessage());
-    }
-}
-
-/**
- * Bulk restore multiple soft-deleted super admins
- */
-public function bulkRestore(Request $request)
-{
-    $validator = Validator::make($request->all(), [
-        'user_ids' => 'required|array',
-        'user_ids.*' => 'exists:users,id',
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Validation failed',
-            'errors' => $validator->errors()
-        ], 422);
-    }
-
-    DB::beginTransaction();
-    $results = ['success' => 0, 'failed' => 0, 'details' => []];
-
-    try {
-        foreach ($request->user_ids as $userId) {
-            try {
-                $user = User::onlyTrashed()
-                    ->where('type', User::TYPE_SUPER_ADMIN)
-                    ->where('created_by', auth()->id())
-                    ->find($userId);
-
-                if (!$user) {
-                    $results['failed']++;
-                    $results['details'][] = [
-                        'id' => $userId,
-                        'success' => false,
-                        'message' => 'User not found or not in trash'
-                    ];
-                    continue;
-                }
-
-                $user->restore();
-                
-                // REMOVED: Invitations don't have soft deletes, so no need to restore them
-                // UserInvitation records remain as they were
-
-                // Update metadata for each restored user
-                $metadata = $user->metadata ?? [];
-                $metadata['restored_at'] = now()->toISOString();
-                $metadata['restored_by'] = auth()->id();
-                $metadata['restored_by_name'] = auth()->user()->name;
-                $metadata['restored_via'] = 'bulk_restore';
-                $user->update(['metadata' => $metadata]);
-
-                $results['success']++;
-                $results['details'][] = [
-                    'id' => $userId,
-                    'success' => true,
-                    'message' => 'Restored successfully'
-                ];
-
-            } catch (\Exception $e) {
-                $results['failed']++;
-                $results['details'][] = [
-                    'id' => $userId,
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ];
-            }
-        }
-
-        DB::commit();
-
-        Log::info('Bulk restore completed', [
-            'developer_id' => auth()->id(),
-            'success_count' => $results['success'],
-            'failed_count' => $results['failed']
-        ]);
-
-        return response()->json([
-            'success' => $results['success'] > 0,
-            'results' => $results,
-            'message' => "Restored {$results['success']} out of " . count($request->user_ids) . " Super Admins"
-        ]);
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Bulk restore failed', [
-            'developer_id' => auth()->id(),
-            'error' => $e->getMessage()
-        ]);
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Bulk restore failed: ' . $e->getMessage()
-        ], 500);
-    }
-}
-
-/**
- * Bulk permanently delete multiple soft-deleted super admins
- */
-public function bulkPermanentDelete(Request $request)
-{
-    $validator = Validator::make($request->all(), [
-        'user_ids' => 'required|array',
-        'user_ids.*' => 'exists:users,id',
-        'confirmation' => 'required|accepted'
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Validation failed',
-            'errors' => $validator->errors()
-        ], 422);
-    }
-
-    DB::beginTransaction();
-    $results = ['success' => 0, 'failed' => 0, 'details' => [], 'deleted_names' => []];
-
-    try {
-        foreach ($request->user_ids as $userId) {
-            try {
-                $user = User::onlyTrashed()
-                    ->where('type', User::TYPE_SUPER_ADMIN)
-                    ->where('created_by', auth()->id())
-                    ->find($userId);
-
-                if (!$user) {
-                    $results['failed']++;
-                    $results['details'][] = [
-                        'id' => $userId,
-                        'success' => false,
-                        'message' => 'User not found or not in trash'
-                    ];
-                    continue;
-                }
-
-                // Check if user created other accounts
-                $createdUsersCount = User::withTrashed()
-                    ->where('created_by', $user->id)
-                    ->where('id', '!=', $user->id)
-                    ->count();
-                
-                if ($createdUsersCount > 0) {
-                    $results['failed']++;
-                    $results['details'][] = [
-                        'id' => $userId,
-                        'success' => false,
-                        'message' => "Created {$createdUsersCount} user accounts - cannot delete"
-                    ];
-                    continue;
-                }
-
-                // Store name for logging
-                $userName = $user->name;
-
-                // FIXED: Use delete() instead of forceDelete() for invitations
-                // This permanently removes the invitation records
-                UserInvitation::where('user_id', $user->id)->delete();
-
-                // Delete user photo if exists
-                if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
-                    Storage::disk('public')->delete('users/photos/' . $user->photo);
-                }
-
-                // Permanently delete the user
-                $user->forceDelete();
-
-                $results['success']++;
-                $results['deleted_names'][] = $userName;
-                $results['details'][] = [
-                    'id' => $userId,
-                    'success' => true,
-                    'message' => 'Permanently deleted'
-                ];
-
-            } catch (\Exception $e) {
-                $results['failed']++;
-                $results['details'][] = [
-                    'id' => $userId,
-                    'success' => false,
-                    'message' => $e->getMessage()
-                ];
-            }
-        }
-
-        DB::commit();
-
-        Log::info('Bulk permanent delete completed', [
-            'developer_id' => auth()->id(),
-            'success_count' => $results['success'],
-            'failed_count' => $results['failed'],
-            'deleted_users' => $results['deleted_names']
-        ]);
-
-        return response()->json([
-            'success' => $results['success'] > 0,
-            'results' => $results,
-            'message' => "Permanently deleted {$results['success']} out of " . count($request->user_ids) . " Super Admins"
-        ]);
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Bulk permanent delete failed', [
-            'developer_id' => auth()->id(),
-            'error' => $e->getMessage()
-        ]);
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Bulk permanent delete failed: ' . $e->getMessage()
-        ], 500);
-    }
-}
-
-    /**
- * Empty entire trash (permanently delete all soft-deleted super admins)
- */
-public function emptyTrash(Request $request)
-{
-    $validator = Validator::make($request->all(), [
-        'confirmation' => 'required|string|in:EMPTY_ALL_TRASH'
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Please type "EMPTY_ALL_TRASH" to confirm this destructive action.'
-        ], 422);
-    }
-
-    DB::beginTransaction();
-
-    try {
-        $trashedUsers = User::onlyTrashed()
+    public function restore($id)
+    {
+        $user = User::onlyTrashed()
             ->where('type', User::TYPE_SUPER_ADMIN)
             ->where('created_by', auth()->id())
-            ->get();
+            ->findOrFail($id);
 
-        $totalCount = $trashedUsers->count();
-        $deletedCount = 0;
-        $failedUsers = [];
+        DB::beginTransaction();
 
-        foreach ($trashedUsers as $user) {
-            try {
-                // Skip if user created other accounts
-                $createdUsersCount = User::withTrashed()
-                    ->where('created_by', $user->id)
-                    ->where('id', '!=', $user->id)
-                    ->count();
-                
-                if ($createdUsersCount > 0) {
-                    $failedUsers[] = "{$user->name} (created {$createdUsersCount} accounts)";
-                    continue;
-                }
+        try {
+            // Restore the user
+            $user->restore();
+            
+            // Update metadata
+            $metadata = $user->metadata ?? [];
+            $metadata['restored_at'] = now()->toISOString();
+            $metadata['restored_by'] = auth()->id();
+            $metadata['restored_by_name'] = auth()->user()->name;
+            $user->update(['metadata' => $metadata]);
 
-                // FIXED: Use delete() instead of forceDelete() for invitations
-                UserInvitation::where('user_id', $user->id)->delete();
+            DB::commit();
 
-                if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
-                    Storage::disk('public')->delete('users/photos/' . $user->photo);
-                }
+            Log::info('Developer restored Super Admin from trash', [
+                'developer_id' => auth()->id(),
+                'super_admin_id' => $user->id,
+                'super_admin_name' => $user->name
+            ]);
 
-                $user->forceDelete();
-                $deletedCount++;
+            return redirect()->route('developer.super-admins.show', $user->id)
+                ->with('success', 'Super Admin account restored successfully!');
 
-            } catch (\Exception $e) {
-                $failedUsers[] = "{$user->name}: " . $e->getMessage();
-                Log::error("Failed to delete user {$user->id} during empty trash", [
-                    'error' => $e->getMessage()
-                ]);
-            }
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to restore Super Admin', [
+                'developer_id' => auth()->id(),
+                'super_admin_id' => $user->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return back()->with('error', 'Failed to restore Super Admin: ' . $e->getMessage());
         }
-
-        DB::commit();
-
-        Log::info('Developer emptied Super Admin trash', [
-            'developer_id' => auth()->id(),
-            'total_deleted' => $deletedCount,
-            'total_failed' => count($failedUsers)
-        ]);
-
-        $message = "Trash emptied! Permanently deleted {$deletedCount} out of {$totalCount} Super Admins.";
-        
-        if (!empty($failedUsers)) {
-            $message .= " Failed to delete: " . implode(', ', array_slice($failedUsers, 0, 5));
-            if (count($failedUsers) > 5) {
-                $message .= " and " . (count($failedUsers) - 5) . " more.";
-            }
-        }
-
-        return response()->json([
-            'success' => true,
-            'message' => $message,
-            'deleted_count' => $deletedCount,
-            'total_count' => $totalCount,
-            'failed_users' => $failedUsers
-        ]);
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Failed to empty trash', [
-            'developer_id' => auth()->id(),
-            'error' => $e->getMessage()
-        ]);
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to empty trash: ' . $e->getMessage()
-        ], 500);
     }
-}
+
+    /**
+     * Permanently delete a soft-deleted super admin
+     */
+    public function forceDelete($id)
+    {
+        $user = User::onlyTrashed()
+            ->where('type', User::TYPE_SUPER_ADMIN)
+            ->where('created_by', auth()->id())
+            ->findOrFail($id);
+
+        DB::beginTransaction();
+
+        try {
+            // Check if user created other accounts (prevent orphaned data)
+            $createdUsersCount = User::withTrashed()
+                ->where('created_by', $user->id)
+                ->where('id', '!=', $user->id)
+                ->count();
+            
+            if ($createdUsersCount > 0) {
+                throw new \Exception("Cannot permanently delete Super Admin who created {$createdUsersCount} user accounts. These accounts would become orphaned.");
+            }
+
+            // Use delete() instead of forceDelete() since UserInvitation doesn't have SoftDeletes
+            UserInvitation::where('user_id', $user->id)->delete();
+
+            // Delete user photo if exists
+            if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
+                Storage::disk('public')->delete('users/photos/' . $user->photo);
+            }
+
+            // Store info for logging before force delete
+            $userName = $user->name;
+            $userEmail = $user->email;
+
+            // Permanently delete the user
+            $user->forceDelete();
+
+            DB::commit();
+
+            Log::info('Developer permanently deleted Super Admin', [
+                'developer_id' => auth()->id(),
+                'super_admin_name' => $userName,
+                'super_admin_email' => $userEmail
+            ]);
+
+            return redirect()->route('developer.super-admins.trash')
+                ->with('success', 'Super Admin permanently deleted successfully!');
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to permanently delete Super Admin', [
+                'developer_id' => auth()->id(),
+                'super_admin_id' => $user->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return back()->with('error', 'Failed to permanently delete: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Bulk restore multiple soft-deleted super admins
+     */
+    public function bulkRestore(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'user_ids' => 'required|array',
+            'user_ids.*' => 'exists:users,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        DB::beginTransaction();
+        $results = ['success' => 0, 'failed' => 0, 'details' => []];
+
+        try {
+            foreach ($request->user_ids as $userId) {
+                try {
+                    $user = User::onlyTrashed()
+                        ->where('type', User::TYPE_SUPER_ADMIN)
+                        ->where('created_by', auth()->id())
+                        ->find($userId);
+
+                    if (!$user) {
+                        $results['failed']++;
+                        $results['details'][] = [
+                            'id' => $userId,
+                            'success' => false,
+                            'message' => 'User not found or not in trash'
+                        ];
+                        continue;
+                    }
+
+                    $user->restore();
+
+                    // Update metadata for each restored user
+                    $metadata = $user->metadata ?? [];
+                    $metadata['restored_at'] = now()->toISOString();
+                    $metadata['restored_by'] = auth()->id();
+                    $metadata['restored_by_name'] = auth()->user()->name;
+                    $metadata['restored_via'] = 'bulk_restore';
+                    $user->update(['metadata' => $metadata]);
+
+                    $results['success']++;
+                    $results['details'][] = [
+                        'id' => $userId,
+                        'success' => true,
+                        'message' => 'Restored successfully'
+                    ];
+
+                } catch (\Exception $e) {
+                    $results['failed']++;
+                    $results['details'][] = [
+                        'id' => $userId,
+                        'success' => false,
+                        'message' => $e->getMessage()
+                    ];
+                }
+            }
+
+            DB::commit();
+
+            Log::info('Bulk restore completed', [
+                'developer_id' => auth()->id(),
+                'success_count' => $results['success'],
+                'failed_count' => $results['failed']
+            ]);
+
+            return response()->json([
+                'success' => $results['success'] > 0,
+                'results' => $results,
+                'message' => "Restored {$results['success']} out of " . count($request->user_ids) . " Super Admins"
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Bulk restore failed', [
+                'developer_id' => auth()->id(),
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Bulk restore failed: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Bulk permanently delete multiple soft-deleted super admins
+     */
+    public function bulkPermanentDelete(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'user_ids' => 'required|array',
+            'user_ids.*' => 'exists:users,id',
+            'confirmation' => 'required|accepted'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        DB::beginTransaction();
+        $results = ['success' => 0, 'failed' => 0, 'details' => [], 'deleted_names' => []];
+
+        try {
+            foreach ($request->user_ids as $userId) {
+                try {
+                    $user = User::onlyTrashed()
+                        ->where('type', User::TYPE_SUPER_ADMIN)
+                        ->where('created_by', auth()->id())
+                        ->find($userId);
+
+                    if (!$user) {
+                        $results['failed']++;
+                        $results['details'][] = [
+                            'id' => $userId,
+                            'success' => false,
+                            'message' => 'User not found or not in trash'
+                        ];
+                        continue;
+                    }
+
+                    // Check if user created other accounts
+                    $createdUsersCount = User::withTrashed()
+                        ->where('created_by', $user->id)
+                        ->where('id', '!=', $user->id)
+                        ->count();
+                    
+                    if ($createdUsersCount > 0) {
+                        $results['failed']++;
+                        $results['details'][] = [
+                            'id' => $userId,
+                            'success' => false,
+                            'message' => "Created {$createdUsersCount} user accounts - cannot delete"
+                        ];
+                        continue;
+                    }
+
+                    // Store name for logging
+                    $userName = $user->name;
+
+                    // Use delete() instead of forceDelete() for invitations
+                    UserInvitation::where('user_id', $user->id)->delete();
+
+                    // Delete user photo if exists
+                    if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
+                        Storage::disk('public')->delete('users/photos/' . $user->photo);
+                    }
+
+                    // Permanently delete the user
+                    $user->forceDelete();
+
+                    $results['success']++;
+                    $results['deleted_names'][] = $userName;
+                    $results['details'][] = [
+                        'id' => $userId,
+                        'success' => true,
+                        'message' => 'Permanently deleted'
+                    ];
+
+                } catch (\Exception $e) {
+                    $results['failed']++;
+                    $results['details'][] = [
+                        'id' => $userId,
+                        'success' => false,
+                        'message' => $e->getMessage()
+                    ];
+                }
+            }
+
+            DB::commit();
+
+            Log::info('Bulk permanent delete completed', [
+                'developer_id' => auth()->id(),
+                'success_count' => $results['success'],
+                'failed_count' => $results['failed'],
+                'deleted_users' => $results['deleted_names']
+            ]);
+
+            return response()->json([
+                'success' => $results['success'] > 0,
+                'results' => $results,
+                'message' => "Permanently deleted {$results['success']} out of " . count($request->user_ids) . " Super Admins"
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Bulk permanent delete failed', [
+                'developer_id' => auth()->id(),
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Bulk permanent delete failed: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Empty entire trash (permanently delete all soft-deleted super admins)
+     */
+    public function emptyTrash(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'confirmation' => 'required|string|in:EMPTY_ALL_TRASH'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Please type "EMPTY_ALL_TRASH" to confirm this destructive action.'
+            ], 422);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $trashedUsers = User::onlyTrashed()
+                ->where('type', User::TYPE_SUPER_ADMIN)
+                ->where('created_by', auth()->id())
+                ->get();
+
+            $totalCount = $trashedUsers->count();
+            $deletedCount = 0;
+            $failedUsers = [];
+
+            foreach ($trashedUsers as $user) {
+                try {
+                    // Skip if user created other accounts
+                    $createdUsersCount = User::withTrashed()
+                        ->where('created_by', $user->id)
+                        ->where('id', '!=', $user->id)
+                        ->count();
+                    
+                    if ($createdUsersCount > 0) {
+                        $failedUsers[] = "{$user->name} (created {$createdUsersCount} accounts)";
+                        continue;
+                    }
+
+                    // Use delete() instead of forceDelete() for invitations
+                    UserInvitation::where('user_id', $user->id)->delete();
+
+                    if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
+                        Storage::disk('public')->delete('users/photos/' . $user->photo);
+                    }
+
+                    $user->forceDelete();
+                    $deletedCount++;
+
+                } catch (\Exception $e) {
+                    $failedUsers[] = "{$user->name}: " . $e->getMessage();
+                    Log::error("Failed to delete user {$user->id} during empty trash", [
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
+            DB::commit();
+
+            Log::info('Developer emptied Super Admin trash', [
+                'developer_id' => auth()->id(),
+                'total_deleted' => $deletedCount,
+                'total_failed' => count($failedUsers)
+            ]);
+
+            $message = "Trash emptied! Permanently deleted {$deletedCount} out of {$totalCount} Super Admins.";
+            
+            if (!empty($failedUsers)) {
+                $message .= " Failed to delete: " . implode(', ', array_slice($failedUsers, 0, 5));
+                if (count($failedUsers) > 5) {
+                    $message .= " and " . (count($failedUsers) - 5) . " more.";
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'deleted_count' => $deletedCount,
+                'total_count' => $totalCount,
+                'failed_users' => $failedUsers
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to empty trash', [
+                'developer_id' => auth()->id(),
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to empty trash: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 
     /**
      * Show form for creating a new super admin
@@ -633,296 +621,296 @@ public function emptyTrash(Request $request)
         ));
     }
 
-   /**
- * Store a newly created super admin with email invitation
- */
-public function store(Request $request)
-{
-    $rules = [
-        'name' => 'required|string|max:255',
-        'email' => 'required|email|unique:users,email',
-        'phone' => 'required|string|max:20|unique:users,phone',
-        'status' => 'required|string|in:' . implode(',', [
-            User::STATUS_PENDING,
-            User::STATUS_ACTIVE
-        ]),
-        'gender' => 'nullable|string|in:male,female,other',
-        'digital_address' => 'nullable|string|max:255',
-        'region' => 'nullable|string|max:100',
-        'location' => 'nullable|string|max:255',
-        'username' => 'nullable|string|max:100|unique:users,username',
-        'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
-        'send_invitation' => 'required|boolean',
-        'custom_message' => 'nullable|string|max:1000',
-        'expires_in_days' => 'nullable|integer|min:1|max:30',
-        'auto_verify_phone' => 'sometimes|boolean',
-        'auto_verify_email' => 'sometimes|boolean',
-    ];
-
-    // Add password validation only if NOT sending invitation
-    if (!$request->boolean('send_invitation')) {
-        $rules['password'] = 'required|confirmed|min:8';
-        $rules['password_confirmation'] = 'required';
-    }
-
-    $validator = Validator::make($request->all(), $rules, [
-        'email.unique' => 'This email is already registered.',
-        'phone.unique' => 'This phone number is already registered.',
-        'send_invitation.required' => 'Please specify if invitation should be sent.',
-        'password.required' => 'Password is required when not sending invitation.',
-        'password.confirmed' => 'Password confirmation does not match.',
-    ]);
-
-    $validator->after(function ($validator) use ($request) {
-        if ($request->boolean('send_invitation')) {
-            $emailStatus = $this->getEmailConfigurationStatus();
-            
-            if (!$emailStatus['can_send']) {
-                $validator->errors()->add('send_invitation', 
-                    'Email configuration is not set up or not working. Please configure email settings first.');
-            }
-        }
-    });
-
-    if ($validator->fails()) {
-        return redirect()->back()
-            ->withErrors($validator)
-            ->withInput()
-            ->with('error', 'Please correct the errors below.');
-    }
-
-    DB::beginTransaction();
-
-    try {
-        // Prepare user data
-        $userData = [
-            'name' => $request->name,
-            'email' => $request->email,
-            'phone' => $request->phone,
-            'type' => (int) User::TYPE_SUPER_ADMIN,
-            'status' => $request->status,
-            'gender' => $request->gender ?? null,
-            'digital_address' => $request->digital_address ?? null,
-            'region' => $request->region ?? null,
-            'location' => $request->location ?? null,
-            'username' => $request->username ?? null,
-            'created_by' => auth()->id(),
-            'metadata' => [
-                'created_via' => 'developer_portal',
-                'created_by_developer' => auth()->id(),
-                'developer_name' => auth()->user()->name,
-                'initial_status' => $request->status,
-                'setup_method' => $request->boolean('send_invitation') ? 'invitation' : 'manual_password',
-                'auto_verification_enabled' => [
-                    'phone' => $request->boolean('auto_verify_phone'),
-                    'email' => $request->boolean('auto_verify_email')
-                ]
-            ]
+    /**
+     * Store a newly created super admin with email invitation
+     */
+    public function store(Request $request)
+    {
+        $rules = [
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email',
+            'phone' => 'required|string|max:20|unique:users,phone',
+            'status' => 'required|string|in:' . implode(',', [
+                User::STATUS_PENDING,
+                User::STATUS_ACTIVE
+            ]),
+            'gender' => 'nullable|string|in:male,female,other',
+            'digital_address' => 'nullable|string|max:255',
+            'region' => 'nullable|string|max:100',
+            'location' => 'nullable|string|max:255',
+            'username' => 'nullable|string|max:100|unique:users,username',
+            'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
+            'send_invitation' => 'required|boolean',
+            'custom_message' => 'nullable|string|max:1000',
+            'expires_in_days' => 'nullable|integer|min:1|max:30',
+            'auto_verify_phone' => 'sometimes|boolean',
+            'auto_verify_email' => 'sometimes|boolean',
         ];
 
-        // Handle password logic
-        if ($request->boolean('send_invitation')) {
-            $temporaryPassword = Str::random(32);
-            $userData['password'] = Hash::make($temporaryPassword);
-            $userData['status'] = User::STATUS_PENDING;
-            $invitationPasswordHash = Hash::make($temporaryPassword);
-        } else {
-            $userData['password'] = Hash::make($request->password);
-            
-            if ($request->boolean('auto_verify_email')) {
-                $userData['email_verified_at'] = now();
+        // Add password validation only if NOT sending invitation
+        if (!$request->boolean('send_invitation')) {
+            $rules['password'] = 'required|confirmed|min:8';
+            $rules['password_confirmation'] = 'required';
+        }
+
+        $validator = Validator::make($request->all(), $rules, [
+            'email.unique' => 'This email is already registered.',
+            'phone.unique' => 'This phone number is already registered.',
+            'send_invitation.required' => 'Please specify if invitation should be sent.',
+            'password.required' => 'Password is required when not sending invitation.',
+            'password.confirmed' => 'Password confirmation does not match.',
+        ]);
+
+        $validator->after(function ($validator) use ($request) {
+            if ($request->boolean('send_invitation')) {
+                $emailStatus = $this->getEmailConfigurationStatus();
+                
+                if (!$emailStatus['can_send']) {
+                    $validator->errors()->add('send_invitation', 
+                        'Email configuration is not set up or not working. Please configure email settings first.');
+                }
             }
-            $userData['status'] = User::STATUS_ACTIVE;
+        });
+
+        if ($validator->fails()) {
+            return redirect()->back()
+                ->withErrors($validator)
+                ->withInput()
+                ->with('error', 'Please correct the errors below.');
         }
 
-        // Handle phone verification
-        if ($request->boolean('auto_verify_phone')) {
-            $userData['phone_verified_at'] = now();
-        }
+        DB::beginTransaction();
 
-        // Handle photo upload
-        if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
-            $photoPath = $this->photoService->upload($request->file('photo'), 'super_admins');
-            $userData['photo'] = $photoPath;
-        }
-
-        // Create super admin
-        $user = User::create($userData);
-
-        // 🔥 FIXED: Ensure super-admin role exists using firstOrCreate
-        $superAdminRole = \App\Models\Role::firstOrCreate(
-            ['slug' => 'super-admin'],
-            [
-                'name' => 'Super Administrator',
-                'display_name' => 'Super Administrator',
-                'description' => 'Full system access with all permissions',
-                'priority' => 1,
-                'is_default' => false,
-                'is_system' => true,
-                'permissions' => ['*'],
+        try {
+            // Prepare user data
+            $userData = [
+                'name' => $request->name,
+                'email' => $request->email,
+                'phone' => $request->phone,
+                'type' => (int) User::TYPE_SUPER_ADMIN,
+                'status' => $request->status,
+                'gender' => $request->gender ?? null,
+                'digital_address' => $request->digital_address ?? null,
+                'region' => $request->region ?? null,
+                'location' => $request->location ?? null,
+                'username' => $request->username ?? null,
+                'created_by' => auth()->id(),
                 'metadata' => [
-                    'created_via' => 'auto_creation',
-                    'created_at' => now()->toISOString(),
-                    'created_by' => auth()->id()
+                    'created_via' => 'developer_portal',
+                    'created_by_developer' => auth()->id(),
+                    'developer_name' => auth()->user()->name,
+                    'initial_status' => $request->status,
+                    'setup_method' => $request->boolean('send_invitation') ? 'invitation' : 'manual_password',
+                    'auto_verification_enabled' => [
+                        'phone' => $request->boolean('auto_verify_phone'),
+                        'email' => $request->boolean('auto_verify_email')
+                    ]
                 ]
-            ]
-        );
-        
-        // Check if role assignment already exists to avoid duplicates
-        if (!$user->roles()->where('role_id', $superAdminRole->id)->exists()) {
-            // Assign the role using the pivot table with metadata
-            $user->roles()->attach($superAdminRole->id, [
-                'assigned_by' => auth()->id(),
-                'assigned_at' => now(),
-                'is_active' => true,
-                'is_primary' => true,
-                'metadata' => json_encode([
-                    'source' => 'developer_creation',
-                    'assigned_via' => 'developer_portal',
-                    'developer_id' => auth()->id(),
-                    'developer_name' => auth()->user()->name
-                ])
-            ]);
-            
-            \Log::info('Super admin role assigned to user', [
-                'user_id' => $user->id,
-                'user_name' => $user->name,
-                'user_email' => $user->email,
-                'role_id' => $superAdminRole->id,
-                'role_slug' => $superAdminRole->slug,
-                'role_name' => $superAdminRole->name,
-                'assigned_by' => auth()->id(),
-                'assigned_by_name' => auth()->user()->name
-            ]);
-        } else {
-            \Log::info('Super admin role already assigned to user', [
-                'user_id' => $user->id,
-                'user_name' => $user->name,
-                'role_id' => $superAdminRole->id
-            ]);
-        }
+            ];
 
-        // Send invitation if requested
-        $invitationResult = null;
-        $invitationRecord = null;
-        
-        if ($request->boolean('send_invitation')) {
-            $invitationResult = $this->sendSuperAdminInvitation($user, $request, $invitationPasswordHash ?? null);
-            
-            if (isset($invitationResult['invitation_id'])) {
-                $invitationRecord = UserInvitation::find($invitationResult['invitation_id']);
-            }
-
-            if ($invitationResult['success']) {
-                $user->update(['last_invitation_sent_at' => now()]);
-            }
-        }
-
-        DB::commit();
-
-        $successMessage = 'Super Admin created successfully!';
-        if ($invitationResult) {
-            if ($invitationResult['success']) {
-                $successMessage .= " Invitation email sent successfully. User must complete account setup.";
+            // Handle password logic
+            if ($request->boolean('send_invitation')) {
+                $temporaryPassword = Str::random(32);
+                $userData['password'] = Hash::make($temporaryPassword);
+                $userData['status'] = User::STATUS_PENDING;
+                $invitationPasswordHash = Hash::make($temporaryPassword);
             } else {
-                $successMessage .= ' But failed to send invitation: ' . ($invitationResult['message'] ?? 'Unknown error');
+                $userData['password'] = Hash::make($request->password);
+                
+                if ($request->boolean('auto_verify_email')) {
+                    $userData['email_verified_at'] = now();
+                }
+                $userData['status'] = User::STATUS_ACTIVE;
             }
+
+            // Handle phone verification
+            if ($request->boolean('auto_verify_phone')) {
+                $userData['phone_verified_at'] = now();
+            }
+
+            // Handle photo upload
+            if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
+                $photoPath = $this->photoService->upload($request->file('photo'), 'super_admins');
+                $userData['photo'] = $photoPath;
+            }
+
+            // Create super admin
+            $user = User::create($userData);
+
+            // Ensure super-admin role exists using firstOrCreate
+            $superAdminRole = \App\Models\Role::firstOrCreate(
+                ['slug' => 'super-admin'],
+                [
+                    'name' => 'Super Administrator',
+                    'display_name' => 'Super Administrator',
+                    'description' => 'Full system access with all permissions',
+                    'priority' => 1,
+                    'is_default' => false,
+                    'is_system' => true,
+                    'permissions' => ['*'],
+                    'metadata' => [
+                        'created_via' => 'auto_creation',
+                        'created_at' => now()->toISOString(),
+                        'created_by' => auth()->id()
+                    ]
+                ]
+            );
+            
+            // Check if role assignment already exists to avoid duplicates
+            if (!$user->roles()->where('role_id', $superAdminRole->id)->exists()) {
+                // Assign the role using the pivot table with metadata
+                $user->roles()->attach($superAdminRole->id, [
+                    'assigned_by' => auth()->id(),
+                    'assigned_at' => now(),
+                    'is_active' => true,
+                    'is_primary' => true,
+                    'metadata' => json_encode([
+                        'source' => 'developer_creation',
+                        'assigned_via' => 'developer_portal',
+                        'developer_id' => auth()->id(),
+                        'developer_name' => auth()->user()->name
+                    ])
+                ]);
+                
+                \Log::info('Super admin role assigned to user', [
+                    'user_id' => $user->id,
+                    'user_name' => $user->name,
+                    'user_email' => $user->email,
+                    'role_id' => $superAdminRole->id,
+                    'role_slug' => $superAdminRole->slug,
+                    'role_name' => $superAdminRole->name,
+                    'assigned_by' => auth()->id(),
+                    'assigned_by_name' => auth()->user()->name
+                ]);
+            } else {
+                \Log::info('Super admin role already assigned to user', [
+                    'user_id' => $user->id,
+                    'user_name' => $user->name,
+                    'role_id' => $superAdminRole->id
+                ]);
+            }
+
+            // Send invitation if requested
+            $invitationResult = null;
+            $invitationRecord = null;
+            
+            if ($request->boolean('send_invitation')) {
+                $invitationResult = $this->sendSuperAdminInvitation($user, $request, $invitationPasswordHash ?? null);
+                
+                if (isset($invitationResult['invitation_id'])) {
+                    $invitationRecord = UserInvitation::find($invitationResult['invitation_id']);
+                }
+
+                if ($invitationResult['success']) {
+                    $user->update(['last_invitation_sent_at' => now()]);
+                }
+            }
+
+            DB::commit();
+
+            $successMessage = 'Super Admin created successfully!';
+            if ($invitationResult) {
+                if ($invitationResult['success']) {
+                    $successMessage .= " Invitation email sent successfully. User must complete account setup.";
+                } else {
+                    $successMessage .= ' But failed to send invitation: ' . ($invitationResult['message'] ?? 'Unknown error');
+                }
+            }
+
+            Log::info('Developer created Super Admin', [
+                'developer_id' => auth()->id(),
+                'developer_name' => auth()->user()->name,
+                'super_admin_id' => $user->id,
+                'super_admin_name' => $user->name,
+                'super_admin_email' => $user->email,
+                'setup_method' => $userData['metadata']['setup_method'],
+                'status' => $user->status,
+                'invitation_sent' => $request->boolean('send_invitation'),
+                'role_assigned' => true,
+                'role_id' => $superAdminRole->id,
+                'role_name' => $superAdminRole->name
+            ]);
+
+            return redirect()->route('developer.super-admins.show', $user->id)
+                ->with('success', $successMessage)
+                ->with('invitation_result', $invitationResult)
+                ->with('invitation_record', $invitationRecord);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Failed to create Super Admin', [
+                'developer_id' => auth()->id(),
+                'developer_name' => auth()->user()->name ?? 'Unknown',
+                'error' => $e->getMessage(),
+                'error_file' => $e->getFile(),
+                'error_line' => $e->getLine(),
+                'error_trace' => $e->getTraceAsString(),
+                'request_data' => $request->except(['password', 'password_confirmation'])
+            ]);
+
+            return back()->with('error', 'Failed to create Super Admin: ' . $e->getMessage())
+                ->withInput();
         }
-
-        Log::info('Developer created Super Admin', [
-            'developer_id' => auth()->id(),
-            'developer_name' => auth()->user()->name,
-            'super_admin_id' => $user->id,
-            'super_admin_name' => $user->name,
-            'super_admin_email' => $user->email,
-            'setup_method' => $userData['metadata']['setup_method'],
-            'status' => $user->status,
-            'invitation_sent' => $request->boolean('send_invitation'),
-            'role_assigned' => true,
-            'role_id' => $superAdminRole->id,
-            'role_name' => $superAdminRole->name
-        ]);
-
-        return redirect()->route('developer.super-admins.show', $user->id)
-            ->with('success', $successMessage)
-            ->with('invitation_result', $invitationResult)
-            ->with('invitation_record', $invitationRecord);
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        
-        Log::error('Failed to create Super Admin', [
-            'developer_id' => auth()->id(),
-            'developer_name' => auth()->user()->name ?? 'Unknown',
-            'error' => $e->getMessage(),
-            'error_file' => $e->getFile(),
-            'error_line' => $e->getLine(),
-            'error_trace' => $e->getTraceAsString(),
-            'request_data' => $request->except(['password', 'password_confirmation'])
-        ]);
-
-        return back()->with('error', 'Failed to create Super Admin: ' . $e->getMessage())
-            ->withInput();
     }
-}
 
     /**
- * Display the specified super admin
- */
-public function show($id)
-{
-    $user = User::with([
-        'creator',
-        'invitations' => function($query) {
-            $query->orderBy('created_at', 'desc');
-        },
-        'roles'  // ← ADD THIS to load roles
-    ])->withTrashed()->findOrFail($id);
+     * Display the specified super admin
+     */
+    public function show($id)
+    {
+        $user = User::with([
+            'creator',
+            'invitations' => function($query) {
+                $query->orderBy('created_at', 'desc');
+            },
+            'roles'
+        ])->withTrashed()->findOrFail($id);
 
-    // Ensure only the creator developer can view
-    if ($user->created_by !== auth()->id() && !auth()->user()->isSuperAdmin()) {
-        abort(403, 'Unauthorized.');
+        // Ensure only the creator developer can view
+        if ($user->created_by !== auth()->id() && !auth()->user()->isSuperAdmin()) {
+            abort(403, 'Unauthorized.');
+        }
+
+        // Ensure it's a super admin
+        if ($user->type !== User::TYPE_SUPER_ADMIN) {
+            abort(404, 'User not found.');
+        }
+
+        $userData = $this->prepareUserForDisplay($user);
+        $emailConfigStatus = $this->getEmailConfigurationStatus();
+        $invitationStats = $this->getInvitationStats($user);
+        
+        // Get available roles for Super Admin (except super-admin role itself)
+        $availableRoles = \App\Models\Role::where('slug', '!=', 'super-admin')
+            ->where('slug', '!=', 'developer')
+            ->orderBy('priority')
+            ->get();
+        
+        // Check if Super Admin already has landlord role
+        $hasLandlordRole = $user->hasRole('landlord');
+        $hasAdminRole = $user->hasRole('admin');
+        $propertyCount = $user->properties()->count();
+        $isPropertyOwner = $propertyCount > 0;
+        
+        $recentActivities = [];
+        if (class_exists(\App\Models\UserActivity::class)) {
+            $recentActivities = $this->getRecentActivities($user);
+        }
+
+        return view('developer.super-admins.show', compact(
+            'user',
+            'userData',
+            'emailConfigStatus',
+            'invitationStats',
+            'recentActivities',
+            'availableRoles',
+            'hasLandlordRole',
+            'hasAdminRole',
+            'propertyCount',
+            'isPropertyOwner'
+        ));
     }
-
-    // Ensure it's a super admin
-    if ($user->type !== User::TYPE_SUPER_ADMIN) {
-        abort(404, 'User not found.');
-    }
-
-    $userData = $this->prepareUserForDisplay($user);
-    $emailConfigStatus = $this->getEmailConfigurationStatus();
-    $invitationStats = $this->getInvitationStats($user);
-    
-    // ADD: Get available roles for Super Admin (except super-admin role itself)
-    $availableRoles = \App\Models\Role::where('slug', '!=', 'super-admin')
-        ->where('slug', '!=', 'developer')
-        ->orderBy('priority')
-        ->get();
-    
-    // ADD: Check if Super Admin already has landlord role
-    $hasLandlordRole = $user->hasRole('landlord');
-    $hasAdminRole = $user->hasRole('admin');
-    $propertyCount = $user->properties()->count();
-    $isPropertyOwner = $propertyCount > 0;
-    
-    $recentActivities = [];
-    if (class_exists(\App\Models\UserActivity::class)) {
-        $recentActivities = $this->getRecentActivities($user);
-    }
-
-    return view('developer.super-admins.show', compact(
-        'user',
-        'userData',
-        'emailConfigStatus',
-        'invitationStats',
-        'recentActivities',
-        'availableRoles',      // ADD
-        'hasLandlordRole',     // ADD
-        'hasAdminRole',        // ADD
-        'propertyCount',       // ADD
-        'isPropertyOwner'      // ADD
-    ));
-}
 
     /**
      * Show the form for editing the specified super admin
@@ -969,100 +957,134 @@ public function show($id)
         ));
     }
 
-   /**
- * Update the specified super admin
- */
-public function update(Request $request, $id)
-{
-    $user = User::findOrFail($id);
+    /**
+     * Update the specified super admin
+     */
+    public function update(Request $request, $id)
+    {
+        $user = User::findOrFail($id);
 
-    if ($user->created_by !== auth()->id()) {
-        abort(403, 'Unauthorized. You can only update Super Admins you created.');
-    }
+        if ($user->created_by !== auth()->id()) {
+            abort(403, 'Unauthorized. You can only update Super Admins you created.');
+        }
 
-    $validator = Validator::make($request->all(), [
-        'name' => 'required|string|max:255',
-        'email' => 'required|email|unique:users,email,' . $id,
-        'phone' => 'required|string|max:20|unique:users,phone,' . $id,
-        'status' => 'required|string|in:' . implode(',', [
-            User::STATUS_PENDING,
-            User::STATUS_ACTIVE,
-            User::STATUS_SUSPENDED,
-            User::STATUS_INACTIVE
-        ]),
-        'gender' => 'nullable|string|in:male,female,other',
-        'digital_address' => 'nullable|string|max:255',
-        'region' => 'nullable|string|max:100',
-        'location' => 'nullable|string|max:255',
-        'username' => 'nullable|string|max:100|unique:users,username,' . $id,
-        'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
-        'remove_photo' => 'sometimes|boolean',
-        'auto_verify_phone' => 'sometimes|boolean',
-        'remove_phone_verification' => 'sometimes|boolean',
-    ]);
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email,' . $id,
+            'phone' => 'required|string|max:20|unique:users,phone,' . $id,
+            'status' => 'required|string|in:' . implode(',', [
+                User::STATUS_PENDING,
+                User::STATUS_ACTIVE,
+                User::STATUS_SUSPENDED,
+                User::STATUS_INACTIVE
+            ]),
+            'gender' => 'nullable|string|in:male,female,other',
+            'digital_address' => 'nullable|string|max:255',
+            'region' => 'nullable|string|max:100',
+            'location' => 'nullable|string|max:255',
+            'username' => 'nullable|string|max:100|unique:users,username,' . $id,
+            'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
+            'remove_photo' => 'sometimes|boolean',
+            'auto_verify_phone' => 'sometimes|boolean',
+            'remove_phone_verification' => 'sometimes|boolean',
+            'auto_verify_email' => 'sometimes|boolean',
+            'remove_email_verification' => 'sometimes|boolean',
+        ]);
 
-    if ($validator->fails()) {
-        return back()->withErrors($validator)->withInput();
-    }
+        if ($validator->fails()) {
+            return back()->withErrors($validator)->withInput();
+        }
 
-    DB::beginTransaction();
+        DB::beginTransaction();
 
-    try {
-        $updateData = [
-            'name' => $request->name,
-            'email' => $request->email,
-            'phone' => $request->phone,
-            'status' => $request->status,
-            'gender' => $request->gender ?? null,
-            'digital_address' => $request->digital_address ?? null,
-            'region' => $request->region ?? null,
-            'location' => $request->location ?? null,
-            'username' => $request->username ?? null,
-        ];
+        try {
+            $updateData = [
+                'name' => $request->name,
+                'email' => $request->email,
+                'phone' => $request->phone,
+                'status' => $request->status,
+                'gender' => $request->gender ?? null,
+                'digital_address' => $request->digital_address ?? null,
+                'region' => $request->region ?? null,
+                'location' => $request->location ?? null,
+                'username' => $request->username ?? null,
+            ];
 
-        // 🔥 Ensure type remains SUPER_ADMIN
-        $updateData['type'] = User::TYPE_SUPER_ADMIN;
+            // Ensure type remains SUPER_ADMIN
+            $updateData['type'] = User::TYPE_SUPER_ADMIN;
 
-        // Handle photo
-        if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
-            if ($user->photo) {
-                $this->photoService->delete($user->photo, 'super_admins');
+            // Handle photo
+            if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
+                if ($user->photo) {
+                    $this->photoService->delete($user->photo, 'super_admins');
+                }
+                $photoPath = $this->photoService->upload($request->file('photo'), 'super_admins');
+                $updateData['photo'] = $photoPath;
             }
-            $photoPath = $this->photoService->upload($request->file('photo'), 'super_admins');
-            $updateData['photo'] = $photoPath;
-        }
 
-        if ($request->has('remove_photo') && $request->boolean('remove_photo') && $user->photo) {
-            $this->photoService->delete($user->photo, 'super_admins');
-            $updateData['photo'] = null;
-        }
+            if ($request->has('remove_photo') && $request->boolean('remove_photo') && $user->photo) {
+                $this->photoService->delete($user->photo, 'super_admins');
+                $updateData['photo'] = null;
+            }
 
-        // Handle phone verification
-        if ($request->has('auto_verify_phone') && $request->boolean('auto_verify_phone')) {
-            $updateData['phone_verified_at'] = now();
-        } elseif ($request->has('remove_phone_verification') && $request->boolean('remove_phone_verification')) {
-            $updateData['phone_verified_at'] = null;
-        }
+            // Handle phone verification
+            if ($request->has('auto_verify_phone') && $request->boolean('auto_verify_phone')) {
+                $updateData['phone_verified_at'] = now();
+            } elseif ($request->has('remove_phone_verification') && $request->boolean('remove_phone_verification')) {
+                $updateData['phone_verified_at'] = null;
+            }
 
-        // Update metadata
-        $metadata = $user->metadata ?? [];
-        $metadata['last_updated_by_developer'] = [
-            'id' => auth()->id(),
-            'name' => auth()->user()->name,
-            'at' => now()->toISOString()
-        ];
-        $updateData['metadata'] = $metadata;
+            // Handle email verification
+            if ($request->has('auto_verify_email') && $request->boolean('auto_verify_email')) {
+                $updateData['email_verified_at'] = now();
+            } elseif ($request->has('remove_email_verification') && $request->boolean('remove_email_verification')) {
+                $updateData['email_verified_at'] = null;
+            }
 
-        $user->update($updateData);
+            // Update metadata
+            $metadata = $user->metadata ?? [];
+            $metadata['last_updated_by_developer'] = [
+                'id' => auth()->id(),
+                'name' => auth()->user()->name,
+                'at' => now()->toISOString()
+            ];
+            $updateData['metadata'] = $metadata;
 
-        // 🔥 FIX: Check if super-admin role exists and assign if needed
-        // Use the correct Role model namespace
-        $superAdminRole = \App\Models\Role::where('slug', 'super-admin')->first();
-        
-        if ($superAdminRole) {
-            // Check if user already has the role using the correct method
-            if (!$user->roles()->where('role_id', $superAdminRole->id)->exists()) {
-                // Use the pivot table directly instead of assignRole()
+            $user->update($updateData);
+
+            // Check if super-admin role exists and assign if needed
+            $superAdminRole = \App\Models\Role::where('slug', 'super-admin')->first();
+            
+            if ($superAdminRole) {
+                if (!$user->roles()->where('role_id', $superAdminRole->id)->exists()) {
+                    $user->roles()->attach($superAdminRole->id, [
+                        'assigned_by' => auth()->id(),
+                        'assigned_at' => now(),
+                        'is_active' => true,
+                        'is_primary' => true,
+                        'metadata' => json_encode(['source' => 'developer_update'])
+                    ]);
+                    \Log::info('Super-admin role assigned during update', [
+                        'user_id' => $user->id,
+                        'user_name' => $user->name,
+                        'updated_by' => auth()->id()
+                    ]);
+                }
+            } else {
+                \Log::warning('Super-admin role not found - creating it during update', [
+                    'user_id' => $user->id
+                ]);
+                
+                $superAdminRole = \App\Models\Role::create([
+                    'name' => 'super-admin',
+                    'slug' => 'super-admin',
+                    'display_name' => 'Super Admin',
+                    'description' => 'Full system access with all permissions',
+                    'priority' => 100,
+                    'is_system' => true,
+                    'permissions' => ['*']
+                ]);
+                
                 $user->roles()->attach($superAdminRole->id, [
                     'assigned_by' => auth()->id(),
                     'assigned_at' => now(),
@@ -1070,121 +1092,92 @@ public function update(Request $request, $id)
                     'is_primary' => true,
                     'metadata' => json_encode(['source' => 'developer_update'])
                 ]);
-                \Log::info('Super-admin role assigned during update', [
-                    'user_id' => $user->id,
-                    'user_name' => $user->name,
-                    'updated_by' => auth()->id()
-                ]);
             }
-        } else {
-            // Create the role if it doesn't exist
-            \Log::warning('Super-admin role not found - creating it during update', [
-                'user_id' => $user->id
+
+            DB::commit();
+
+            Log::info('Developer updated Super Admin', [
+                'developer_id' => auth()->id(),
+                'super_admin_id' => $user->id,
+                'updates' => array_keys($updateData)
             ]);
-            
-            $superAdminRole = \App\Models\Role::create([
-                'name' => 'super-admin',
-                'slug' => 'super-admin',
-                'display_name' => 'Super Admin',
-                'description' => 'Full system access with all permissions',
-                'priority' => 100,
-                'is_system' => true,
-                'permissions' => ['*']
+
+            return redirect()->route('developer.super-admins.show', $user->id)
+                ->with('success', 'Super Admin updated successfully!');
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Developer failed to update Super Admin', [
+                'developer_id' => auth()->id(),
+                'super_admin_id' => $user->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
-            
-            $user->roles()->attach($superAdminRole->id, [
-                'assigned_by' => auth()->id(),
-                'assigned_at' => now(),
-                'is_active' => true,
-                'is_primary' => true,
-                'metadata' => json_encode(['source' => 'developer_update'])
-            ]);
+
+            return back()->with('error', 'Failed to update Super Admin: ' . $e->getMessage())
+                ->withInput();
         }
-
-        DB::commit();
-
-        Log::info('Developer updated Super Admin', [
-            'developer_id' => auth()->id(),
-            'super_admin_id' => $user->id,
-            'updates' => array_keys($updateData)
-        ]);
-
-        return redirect()->route('developer.super-admins.show', $user->id)
-            ->with('success', 'Super Admin updated successfully!');
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Developer failed to update Super Admin', [
-            'developer_id' => auth()->id(),
-            'super_admin_id' => $user->id,
-            'error' => $e->getMessage(),
-            'trace' => $e->getTraceAsString()
-        ]);
-
-        return back()->with('error', 'Failed to update Super Admin: ' . $e->getMessage())
-            ->withInput();
     }
-}
 
     /**
- * Soft delete the specified super admin
- */
-public function destroy($id)
-{
-    $user = User::findOrFail($id);
+     * Soft delete the specified super admin
+     */
+    public function destroy($id)
+    {
+        $user = User::findOrFail($id);
 
-    if ($user->created_by !== auth()->id()) {
-        return back()->with('error', 'Unauthorized. You can only delete Super Admins you created.');
-    }
-
-    if ($user->id === auth()->id()) {
-        return back()->with('error', 'You cannot delete your own account.');
-    }
-
-    DB::beginTransaction();
-
-    try {
-        // Check for critical relations
-        $createdUsersCount = User::where('created_by', $user->id)->count();
-        if ($createdUsersCount > 0) {
-            return back()->with('error', "Cannot delete Super Admin who has created {$createdUsersCount} user accounts. Move to trash or deactivate instead.");
+        if ($user->created_by !== auth()->id()) {
+            return back()->with('error', 'Unauthorized. You can only delete Super Admins you created.');
         }
 
-        // Store deletion info in metadata before soft delete (without deleted_by since no column)
-        $metadata = $user->metadata ?? [];
-        $metadata['deletion_info'] = [
-            'deleted_at' => now()->toISOString(),
-            'deleted_by' => auth()->id(),
-            'deleted_by_name' => auth()->user()->name,
-            'deletion_type' => 'soft_delete'
-        ];
-        $user->update(['metadata' => $metadata]);
+        if ($user->id === auth()->id()) {
+            return back()->with('error', 'You cannot delete your own account.');
+        }
 
-        // Perform soft delete
-        $user->delete();
+        DB::beginTransaction();
 
-        DB::commit();
+        try {
+            // Check for critical relations
+            $createdUsersCount = User::where('created_by', $user->id)->count();
+            if ($createdUsersCount > 0) {
+                return back()->with('error', "Cannot delete Super Admin who has created {$createdUsersCount} user accounts. Move to trash or deactivate instead.");
+            }
 
-        Log::info('Developer soft deleted Super Admin', [
-            'developer_id' => auth()->id(),
-            'super_admin_id' => $user->id,
-            'super_admin_name' => $user->name
-        ]);
+            // Store deletion info in metadata before soft delete
+            $metadata = $user->metadata ?? [];
+            $metadata['deletion_info'] = [
+                'deleted_at' => now()->toISOString(),
+                'deleted_by' => auth()->id(),
+                'deleted_by_name' => auth()->user()->name,
+                'deletion_type' => 'soft_delete'
+            ];
+            $user->update(['metadata' => $metadata]);
 
-        return redirect()->route('developer.super-admins.index')
-            ->with('success', 'Super Admin moved to trash successfully! You can restore it from the trash section.');
+            // Perform soft delete
+            $user->delete();
 
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Developer failed to delete Super Admin', [
-            'developer_id' => auth()->id(),
-            'super_admin_id' => $user->id,
-            'error' => $e->getMessage()
-        ]);
+            DB::commit();
 
-        return back()->with('error', 'Failed to delete Super Admin: ' . $e->getMessage());
+            Log::info('Developer soft deleted Super Admin', [
+                'developer_id' => auth()->id(),
+                'super_admin_id' => $user->id,
+                'super_admin_name' => $user->name
+            ]);
+
+            return redirect()->route('developer.super-admins.index')
+                ->with('success', 'Super Admin moved to trash successfully! You can restore it from the trash section.');
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Developer failed to delete Super Admin', [
+                'developer_id' => auth()->id(),
+                'super_admin_id' => $user->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return back()->with('error', 'Failed to delete Super Admin: ' . $e->getMessage());
+        }
     }
-}
 
     /**
      * Show the form for changing super admin password
@@ -1202,6 +1195,9 @@ public function destroy($id)
 
     /**
      * Change super admin password
+     *
+     * FIXED: Stores force_password_change flag in the `metadata` JSON column
+     * because the `users` table does not have a `force_password_change` column.
      */
     public function changePassword(Request $request, $id)
     {
@@ -1222,22 +1218,37 @@ public function destroy($id)
         }
 
         try {
+            // Update password
             $user->password = Hash::make($request->new_password);
-            
+
+            // Handle force_password_change flag via metadata (no dedicated column exists)
+            $metadata = $user->metadata ?? [];
+
             if ($request->has('force_password_change') && $request->boolean('force_password_change')) {
-                $user->force_password_change = true;
+                $metadata['force_password_change'] = true;
+                $metadata['force_password_change_set_at'] = now()->toISOString();
+                $metadata['force_password_change_set_by'] = auth()->id();
+                $metadata['force_password_change_set_by_name'] = auth()->user()->name;
+            } else {
+                // Clear the flag if the checkbox is unchecked
+                unset($metadata['force_password_change']);
+                unset($metadata['force_password_change_set_at']);
+                unset($metadata['force_password_change_set_by']);
+                unset($metadata['force_password_change_set_by_name']);
             }
-            
+
+            $user->metadata = $metadata;
             $user->save();
 
-            if ($request->has('notify_user') && $request->notify_user) {
+            // Send notification if requested
+            if ($request->has('notify_user') && $request->boolean('notify_user')) {
                 $this->sendPasswordChangeNotification($user);
             }
 
             Log::info('Developer changed Super Admin password', [
                 'developer_id' => auth()->id(),
                 'super_admin_id' => $user->id,
-                'force_change_required' => $user->force_password_change ?? false
+                'force_change_required' => $user->metadata['force_password_change'] ?? false
             ]);
 
             return redirect()->route('developer.super-admins.show', $user->id)
@@ -1333,91 +1344,90 @@ public function destroy($id)
         }
     }
 
-   /**
- * Resend invitation to super admin
- */
-public function resendInvitation(Request $request, $id)
-{
-    $user = User::findOrFail($id);
+    /**
+     * Resend invitation to super admin
+     */
+    public function resendInvitation(Request $request, $id)
+    {
+        $user = User::findOrFail($id);
 
-    if ($user->created_by !== auth()->id()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Unauthorized. You can only resend invitations to Super Admins you created.'
-        ], 403);
-    }
-
-    $validator = Validator::make($request->all(), [
-        'custom_message' => 'nullable|string|max:1000',
-        'expires_in_days' => 'nullable|integer|min:1|max:30',
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Validation failed',
-            'errors' => $validator->errors()
-        ], 422);
-    }
-
-    $emailStatus = $this->getEmailConfigurationStatus();
-    if (!$emailStatus['can_send']) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Email configuration is not set up or not working. Please configure email settings first.'
-        ], 422);
-    }
-
-    DB::beginTransaction();
-
-    try {
-        // FIX: Delete existing pending invitations instead of trying to update with missing columns
-        UserInvitation::where('user_id', $user->id)
-            ->whereIn('status', [UserInvitation::STATUS_PENDING, UserInvitation::STATUS_SENT])
-            ->where('expires_at', '>', now())
-            ->delete();
-
-        $result = $this->sendSuperAdminInvitation($user, $request);
-
-        DB::commit();
-
-        if ($result['success']) {
-            Log::info('Developer resent invitation to Super Admin', [
-                'developer_id' => auth()->id(),
-                'super_admin_id' => $user->id
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Invitation resent successfully!',
-                'invitation_url' => $result['invitation_url'] ?? null,
-                'invitation_id' => $result['invitation_id'] ?? null
-            ]);
-        } else {
+        if ($user->created_by !== auth()->id()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to resend invitation: ' . ($result['message'] ?? 'Unknown error')
+                'message' => 'Unauthorized. You can only resend invitations to Super Admins you created.'
+            ], 403);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'custom_message' => 'nullable|string|max:1000',
+            'expires_in_days' => 'nullable|integer|min:1|max:30',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
             ], 422);
         }
 
-    } catch (\Exception $e) {
-        DB::rollBack();
-        Log::error('Exception in resendInvitation: ' . $e->getMessage(), [
-            'developer_id' => auth()->id(),
-            'super_admin_id' => $user->id,
-            'error_trace' => $e->getTraceAsString()
-        ]);
+        $emailStatus = $this->getEmailConfigurationStatus();
+        if (!$emailStatus['can_send']) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Email configuration is not set up or not working. Please configure email settings first.'
+            ], 422);
+        }
 
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to resend invitation: ' . $e->getMessage()
-        ], 500);
+        DB::beginTransaction();
+
+        try {
+            // Delete existing pending invitations instead of trying to update with missing columns
+            UserInvitation::where('user_id', $user->id)
+                ->whereIn('status', [UserInvitation::STATUS_PENDING, UserInvitation::STATUS_SENT])
+                ->where('expires_at', '>', now())
+                ->delete();
+
+            $result = $this->sendSuperAdminInvitation($user, $request);
+
+            DB::commit();
+
+            if ($result['success']) {
+                Log::info('Developer resent invitation to Super Admin', [
+                    'developer_id' => auth()->id(),
+                    'super_admin_id' => $user->id
+                ]);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Invitation resent successfully!',
+                    'invitation_url' => $result['invitation_url'] ?? null,
+                    'invitation_id' => $result['invitation_id'] ?? null
+                ]);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Failed to resend invitation: ' . ($result['message'] ?? 'Unknown error')
+                ], 422);
+            }
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Exception in resendInvitation: ' . $e->getMessage(), [
+                'developer_id' => auth()->id(),
+                'super_admin_id' => $user->id,
+                'error_trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to resend invitation: ' . $e->getMessage()
+            ], 500);
+        }
     }
-}
 
     /**
      * Send super admin invitation with email only
-     * FIX: Removed temporary password from user metadata
      */
     private function sendSuperAdminInvitation(User $user, Request $request, $preHashedPassword = null)
     {
@@ -1446,7 +1456,7 @@ public function resendInvitation(Request $request, $id)
                 'token' => $token,
                 'status' => UserInvitation::STATUS_PENDING,
                 'metadata' => [
-                    'temporary_password_hash' => $passwordHash, // Store hash, not plain password
+                    'temporary_password_hash' => $passwordHash,
                     'expires_in_days' => $expiresInDays,
                     'created_via' => 'developer_portal'
                 ]
@@ -1917,74 +1927,72 @@ HTML;
     }
 
     /**
- * Prepare user for display
- */
-private function prepareUserForDisplay(User $user): User
-{
-    $user->display_status = $this->getStatusDisplayInfo($user->status);
-    $user->display_phone = $this->getPhoneDisplayInfo($user->phone, $user->phone_verified_at);
-    $user->has_photo = !empty($user->photo);
-    $user->initials = $this->getUserInitials($user->name, $user->email);
-    $user->local_phone = $this->getLocalPhone($user->phone);
-    $user->creator_name = $user->creator ? $user->creator->name : 'System';
-    // REMOVED deletedBy reference
-    $user->deleted_by_name = 'System'; // Add default value
-    $user->age = $user->created_at ? $user->created_at->diffForHumans() : 'N/A';
-    $user->last_active = $user->last_login_at ? $user->last_login_at->diffForHumans() : 'Never';
-    $user->is_trashed = $user->trashed();
-    
-    $user->metadata_info = $this->formatMetadata($user->metadata);
-    
-    return $user;
-}
+     * Prepare user for display
+     */
+    private function prepareUserForDisplay(User $user): User
+    {
+        $user->display_status = $this->getStatusDisplayInfo($user->status);
+        $user->display_phone = $this->getPhoneDisplayInfo($user->phone, $user->phone_verified_at);
+        $user->has_photo = !empty($user->photo);
+        $user->initials = $this->getUserInitials($user->name, $user->email);
+        $user->local_phone = $this->getLocalPhone($user->phone);
+        $user->creator_name = $user->creator ? $user->creator->name : 'System';
+        $user->deleted_by_name = 'System';
+        $user->age = $user->created_at ? $user->created_at->diffForHumans() : 'N/A';
+        $user->last_active = $user->last_login_at ? $user->last_login_at->diffForHumans() : 'Never';
+        $user->is_trashed = $user->trashed();
+        
+        $user->metadata_info = $this->formatMetadata($user->metadata);
+        
+        return $user;
+    }
 
     /**
- * Format metadata for display
- */
-private function formatMetadata($metadata): array
-{
-    if (!$metadata) {
-        return [];
-    }
-    
-    $formatted = [];
-    
-    if (isset($metadata['invitation_history'])) {
-        $formatted['invitation_history'] = array_map(function($invitation) {
-            return [
-                'sent_at' => Carbon::parse($invitation['sent_at'])->format('Y-m-d H:i'),
-                'channel' => $invitation['channel'] ?? 'email',
-                'expires_at' => Carbon::parse($invitation['expires_at'])->format('Y-m-d H:i'),
-            ];
-        }, $metadata['invitation_history']);
-    }
-    
-    if (isset($metadata['creation'])) {
-        $formatted['creation'] = [
-            'via' => $metadata['created_via'] ?? 'unknown',
-            'by_developer' => $metadata['created_by_developer'] ?? null,
-            'developer_name' => $metadata['developer_name'] ?? null,
-            'initial_status' => $metadata['initial_status'] ?? null,
-        ];
-    }
-    
-    if (isset($metadata['deletion_info'])) {
-        $formatted['deletion_info'] = $metadata['deletion_info'];
-        // REMOVED deletedBy reference from metadata formatting
-        if (isset($formatted['deletion_info']['deleted_by_name'])) {
-            // Keep the name if it exists in metadata
-        } else {
-            $formatted['deletion_info']['deleted_by_name'] = 'System';
+     * Format metadata for display
+     */
+    private function formatMetadata($metadata): array
+    {
+        if (!$metadata) {
+            return [];
         }
+        
+        $formatted = [];
+        
+        if (isset($metadata['invitation_history'])) {
+            $formatted['invitation_history'] = array_map(function($invitation) {
+                return [
+                    'sent_at' => Carbon::parse($invitation['sent_at'])->format('Y-m-d H:i'),
+                    'channel' => $invitation['channel'] ?? 'email',
+                    'expires_at' => Carbon::parse($invitation['expires_at'])->format('Y-m-d H:i'),
+                ];
+            }, $metadata['invitation_history']);
+        }
+        
+        if (isset($metadata['creation'])) {
+            $formatted['creation'] = [
+                'via' => $metadata['created_via'] ?? 'unknown',
+                'by_developer' => $metadata['created_by_developer'] ?? null,
+                'developer_name' => $metadata['developer_name'] ?? null,
+                'initial_status' => $metadata['initial_status'] ?? null,
+            ];
+        }
+        
+        if (isset($metadata['deletion_info'])) {
+            $formatted['deletion_info'] = $metadata['deletion_info'];
+            if (isset($formatted['deletion_info']['deleted_by_name'])) {
+                // Keep the name if it exists in metadata
+            } else {
+                $formatted['deletion_info']['deleted_by_name'] = 'System';
+            }
+        }
+        
+        if (isset($metadata['restored_at'])) {
+            $formatted['restored_at'] = Carbon::parse($metadata['restored_at'])->format('Y-m-d H:i');
+            $formatted['restored_by'] = $metadata['restored_by_name'] ?? 'Unknown';
+        }
+        
+        return $formatted;
     }
-    
-    if (isset($metadata['restored_at'])) {
-        $formatted['restored_at'] = Carbon::parse($metadata['restored_at'])->format('Y-m-d H:i');
-        $formatted['restored_by'] = $metadata['restored_by_name'] ?? 'Unknown';
-    }
-    
-    return $formatted;
-}
 
     /**
      * Get status display info
@@ -2835,80 +2843,78 @@ HTML;
     }
 
     /**
- * Display invitation history for a super admin
- */
-public function invitationHistory($id)
-{
-    $user = User::findOrFail($id);
-    
-    if ($user->created_by !== auth()->id()) {
-        abort(403);
-    }
-    
-    $invitations = $user->invitations()->orderBy('created_at', 'desc')->paginate(20);
-    
-    return view('developer.super-admins.invitation-history', compact('user', 'invitations'));
-}
-
-/**
- * Display activities for a super admin
- */
-public function activities($id)
-{
-    $user = User::findOrFail($id);
-    
-    if ($user->created_by !== auth()->id()) {
-        abort(403);
-    }
-    
-    // Fetch activities from your activity log system
-    // This depends on how you track activities
-    $activities = \App\Models\UserActivity::where('user_id', $user->id)
-        ->orderBy('created_at', 'desc')
-        ->paginate(20);
-    
-    return view('developer.super-admins.activities', compact('user', 'activities'));
-}
-
-/**
- * Export activities to CSV
- */
-public function exportActivities($id)
-{
-    $user = User::findOrFail($id);
-    
-    if ($user->created_by !== auth()->id()) {
-        abort(403);
-    }
-    
-    $activities = \App\Models\UserActivity::where('user_id', $user->id)
-        ->orderBy('created_at', 'desc')
-        ->get();
-    
-    $filename = "user-{$user->id}-activities-" . date('Y-m-d') . ".csv";
-    
-    $headers = [
-        'Content-Type' => 'text/csv',
-        'Content-Disposition' => "attachment; filename={$filename}",
-    ];
-    
-    $callback = function() use ($activities) {
-        $file = fopen('php://output', 'w');
-        fputcsv($file, ['Date', 'Activity', 'IP Address', 'User Agent']);
+     * Display invitation history for a super admin
+     */
+    public function invitationHistory($id)
+    {
+        $user = User::findOrFail($id);
         
-        foreach ($activities as $activity) {
-            fputcsv($file, [
-                $activity->created_at->format('Y-m-d H:i:s'),
-                $activity->description,
-                $activity->ip_address ?? 'N/A',
-                $activity->user_agent ?? 'N/A'
-            ]);
+        if ($user->created_by !== auth()->id()) {
+            abort(403);
         }
         
-        fclose($file);
-    };
-    
-    return response()->stream($callback, 200, $headers);
-}
+        $invitations = $user->invitations()->orderBy('created_at', 'desc')->paginate(20);
+        
+        return view('developer.super-admins.invitation-history', compact('user', 'invitations'));
+    }
 
+    /**
+     * Display activities for a super admin
+     */
+    public function activities($id)
+    {
+        $user = User::findOrFail($id);
+        
+        if ($user->created_by !== auth()->id()) {
+            abort(403);
+        }
+        
+        // Fetch activities from your activity log system
+        $activities = \App\Models\UserActivity::where('user_id', $user->id)
+            ->orderBy('created_at', 'desc')
+            ->paginate(20);
+        
+        return view('developer.super-admins.activities', compact('user', 'activities'));
+    }
+
+    /**
+     * Export activities to CSV
+     */
+    public function exportActivities($id)
+    {
+        $user = User::findOrFail($id);
+        
+        if ($user->created_by !== auth()->id()) {
+            abort(403);
+        }
+        
+        $activities = \App\Models\UserActivity::where('user_id', $user->id)
+            ->orderBy('created_at', 'desc')
+            ->get();
+        
+        $filename = "user-{$user->id}-activities-" . date('Y-m-d') . ".csv";
+        
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => "attachment; filename={$filename}",
+        ];
+        
+        $callback = function() use ($activities) {
+            $file = fopen('php://output', 'w');
+            fputcsv($file, ['Date', 'Activity', 'IP Address', 'User Agent']);
+            
+            foreach ($activities as $activity) {
+                fputcsv($file, [
+                    $activity->created_at->format('Y-m-d H:i:s'),
+                    $activity->description,
+                    $activity->ip_address ?? 'N/A',
+                    $activity->user_agent ?? 'N/A'
+                ]);
+            }
+            
+            fclose($file);
+        };
+        
+        return response()->stream($callback, 200, $headers);
+    }
 }

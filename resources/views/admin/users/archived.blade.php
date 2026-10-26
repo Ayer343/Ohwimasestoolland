@@ -15,7 +15,7 @@
                     View and manage archived user accounts. Archived accounts have restricted access and can be restored or permanently deleted.
                 </p>
                 <div class="mt-3">
-                    <a href="{{ route('admin.users.index') }}" 
+                    <a href="{{ route('admin.users.index') }}"
                        class="inline-flex items-center text-sm font-medium transition-colors hover:opacity-80"
                        style="color: var(--primary);">
                         <i class="fas fa-arrow-left mr-2"></i>
@@ -25,30 +25,30 @@
             </div>
             <div class="flex items-center space-x-3 flex-wrap gap-2">
                 <!-- Export Button -->
-                <button onclick="showExportArchivedModal()" 
-                   class="btn-success flex items-center px-3 py-2 rounded-lg text-sm" 
+                <button onclick="showExportArchivedModal()"
+                   class="btn-success flex items-center px-3 py-2 rounded-lg text-sm"
                    title="Export Archived Users">
                     <i class="fas fa-file-export mr-2"></i> Export
                 </button>
-                
+
                 <!-- Bulk Actions Dropdown -->
                 <div class="relative">
-                    <button id="bulkActionsBtn" 
+                    <button id="bulkActionsBtn"
                             class="btn-primary flex items-center px-3 py-2 rounded-lg text-sm"
                             onclick="toggleBulkActions()">
                         <i class="fas fa-tasks mr-2"></i> Bulk Actions
                         <i class="fas fa-chevron-down ml-2 text-xs"></i>
                     </button>
-                    <div id="bulkActionsDropdown" 
+                    <div id="bulkActionsDropdown"
                          class="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border z-10 hidden"
                          style="background-color: var(--bg-primary); border-color: var(--border-color);">
                         <div class="py-1">
-                            <button onclick="bulkRestoreArchived()" 
+                            <button onclick="bulkRestoreArchived()"
                                     class="w-full text-left px-4 py-2 text-sm hover:bg-opacity-10"
                                     style="color: var(--text-primary);">
                                 <i class="fas fa-undo-alt mr-2 text-success"></i> Restore Selected
                             </button>
-                            <button onclick="bulkPermanentDeleteArchived()" 
+                            <button onclick="bulkPermanentDeleteArchived()"
                                     class="w-full text-left px-4 py-2 text-sm hover:bg-opacity-10"
                                     style="color: var(--danger);">
                                 <i class="fas fa-trash-alt mr-2"></i> Permanently Delete
@@ -102,7 +102,9 @@
             <div class="flex justify-between items-start">
                 <div>
                     <p class="text-sm font-medium" style="color: var(--text-secondary);">Restored This Month</p>
-                    <h3 class="text-2xl font-bold mt-1" style="color: var(--text-primary);">{{ $stats['restored_this_month'] ?? 0 }}</h3>
+                    <h3 class="text-2xl font-bold mt-1" style="color: var(--text-primary);">
+                        {{ $stats['restored_this_month'] ?? ($stats['restored_count'] ?? 0) }}
+                    </h3>
                 </div>
                 <div class="p-3 rounded-full" style="background-color: rgba(40, 167, 69, 0.1);">
                     <i class="fas fa-undo-alt text-lg" style="color: #28a745;"></i>
@@ -116,15 +118,15 @@
         <form action="{{ route('admin.users.archived') }}" method="GET" class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Search</label>
-                <input type="text" name="search" value="{{ request('search') }}" 
-                       class="w-full p-2 border rounded" 
+                <input type="text" name="search" value="{{ request('search') }}"
+                       class="w-full p-2 border rounded"
                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                        placeholder="Name, email, phone...">
             </div>
 
             <div>
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">User Type</label>
-                <select name="type" class="w-full p-2 border rounded" 
+                <select name="type" class="w-full p-2 border rounded"
                         style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                     <option value="all">All Types</option>
                     @foreach($userTypes ?? [] as $value => $label)
@@ -137,7 +139,7 @@
 
             <div>
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Archival Date</label>
-                <select name="archival_period" class="w-full p-2 border rounded" 
+                <select name="archival_period" class="w-full p-2 border rounded"
                         style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                     <option value="all">All Time</option>
                     <option value="today" {{ request('archival_period') == 'today' ? 'selected' : '' }}>Today</option>
@@ -149,7 +151,7 @@
 
             <div>
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Deletion Status</label>
-                <select name="deletion_status" class="w-full p-2 border rounded" 
+                <select name="deletion_status" class="w-full p-2 border rounded"
                         style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
                     <option value="all">All</option>
                     <option value="scheduled" {{ request('deletion_status') == 'scheduled' ? 'selected' : '' }}>Scheduled for Deletion</option>
@@ -192,19 +194,115 @@
                 </thead>
                 <tbody>
                     @forelse($users as $user)
+                    @php
+                        // ─────────────────────────────────────────────────────
+                        // Normalize the archival_info block so the row never
+                        // crashes when metadata is missing or the model lacks
+                        // an archived_at column.
+                        // ─────────────────────────────────────────────────────
+
+                        // 1. Pull archival_info from wherever it lives.
+                        $archivalInfo = null;
+
+                        if (isset($user->archival_info) && is_array($user->archival_info)) {
+                            $archivalInfo = $user->archival_info;
+                        } else {
+                            $rawMetadata = $user->metadata ?? null;
+                            if (is_string($rawMetadata)) {
+                                $rawMetadata = json_decode($rawMetadata, true);
+                            }
+                            if (is_array($rawMetadata)) {
+                                $archivalInfo = $rawMetadata['archival_info']
+                                    ?? $rawMetadata['archived']
+                                    ?? null;
+                            }
+                        }
+                        $archivalInfo = is_array($archivalInfo) ? $archivalInfo : [];
+
+                        // 2. Resolve "archived at" — deleted_at is canonical.
+                        $archivedAt = $user->deleted_at
+                            ?? (isset($archivalInfo['archived_at'])
+                                ? \Carbon\Carbon::parse($archivalInfo['archived_at'])
+                                : null);
+
+                        // 3. Resolve deletion schedule.
+                        $deletionScheduledAt = $user->deletion_scheduled_at ?? null;
+                        if ($deletionScheduledAt && !($deletionScheduledAt instanceof \Carbon\Carbon)) {
+                            try {
+                                $deletionScheduledAt = \Carbon\Carbon::parse($deletionScheduledAt);
+                            } catch (\Throwable $e) {
+                                $deletionScheduledAt = null;
+                            }
+                        }
+
+                        // 4. Resolve archival reason.
+                        $archivalReason = $archivalInfo['archived_reason']
+                            ?? $archivalInfo['reason']
+                            ?? $user->deletion_reason
+                            ?? 'No reason provided';
+
+                        // 5. Resolve archiver name.
+                        $archivedByName = $archivalInfo['archived_by_name']
+                            ?? $archivalInfo['archived_by']
+                            ?? null;
+
+                        // 6. Days remaining.
+                        $daysUntilDeletion = $deletionScheduledAt
+                            ? max(0, (int) now()->diffInDays($deletionScheduledAt, false))
+                            : null;
+
+                        // ─────────────────────────────────────────────────────
+                        // 7. ✅ NEW: Resolve the archival source.
+                        //
+                        //    `archival_type` is set by each archival path:
+                        //      • 'auto_orphaned_family_member'  → system sweep
+                        //      • 'manual_admin'                 → admin clicked Archive
+                        //      • (older rows)                   → unknown
+                        //    A null `archived_by` combined with any of the auto
+                        //    types also implies system-triggered.
+                        // ─────────────────────────────────────────────────────
+                        $archivalType = $archivalInfo['archival_type'] ?? null;
+                        $isSystemArchive = in_array($archivalType, [
+                            'auto_orphaned_family_member',
+                            'auto_orphaned_tenant',
+                            'auto_orphaned_landlord',
+                            'system',
+                        ], true);
+
+                        $sourceLabel = $isSystemArchive ? 'Auto' : 'Manual';
+                        $sourceIcon  = $isSystemArchive ? 'robot' : 'user-shield';
+                        $sourceColor = $isSystemArchive
+                            ? 'bg-indigo-100 text-indigo-800'
+                            : 'bg-gray-100 text-gray-700';
+                        $sourceTitle = $isSystemArchive
+                            ? 'Archived automatically by a scheduled system job'
+                            : 'Archived manually by an administrator';
+
+                        // ─────────────────────────────────────────────────────
+                        // 8. ✅ NEW: Detect if the user was a family member.
+                        //    Family members were elevated to the Landlord type
+                        //    on archival, but retain the `linked_family` role.
+                        // ─────────────────────────────────────────────────────
+                        $isFamilyMember = false;
+                        try {
+                            $isFamilyMember = $user->hasRole('linked_family');
+                        } catch (\Throwable $e) {
+                            $isFamilyMember = false;
+                        }
+                    @endphp
                     <tr class="border-b archived-row" style="border-bottom-color: var(--border-color); background-color: var(--bg-secondary);">
                         <td class="py-4 px-4">
-                            <input type="checkbox" name="archived_user_ids[]" value="{{ $user->id }}" 
+                            <input type="checkbox" name="archived_user_ids[]" value="{{ $user->id }}"
                                    class="archived-user-checkbox rounded border-gray-300"
                                    data-user-name="{{ $user->name }}"
                                    data-user-type="{{ $user->type }}">
                         </td>
-                        
+
                         <td class="py-4 px-4">
                             <div class="flex items-center">
                                 <div class="flex-shrink-0 w-10 h-10">
                                     @if($user->has_photo)
-                                        <img src="{{ $user->avatar_url }}" 
+                                        <img src="{{ $user->avatar_url }}"
                                              alt="{{ $user->name }}"
                                              class="w-10 h-10 rounded-full object-cover border-2 cursor-pointer"
                                              style="border-color: #6c757d;"
@@ -217,11 +315,18 @@
                                     @endif
                                 </div>
                                 <div class="ml-4">
-                                    <div class="font-medium flex items-center" style="color: var(--text-primary);">
+                                    <div class="font-medium flex items-center flex-wrap gap-1" style="color: var(--text-primary);">
                                         {{ $user->name }}
                                         <span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-gray-500 text-white">
                                             Archived
                                         </span>
+                                        {{-- ✅ NEW: Family-member badge --}}
+                                        @if($isFamilyMember)
+                                            <span class="ml-1 px-2 py-0.5 text-xs rounded-full bg-indigo-100 text-indigo-800"
+                                                  title="This user was linked as a family member">
+                                                <i class="fas fa-user-friends mr-1"></i> Family Member
+                                            </span>
+                                        @endif
                                     </div>
                                     <div class="text-sm" style="color: var(--text-secondary);">{{ $user->email }}</div>
                                     @if($user->username)
@@ -239,33 +344,47 @@
                         </td>
 
                         <td class="py-4 px-4">
-                            <div style="color: var(--text-primary);">{{ $user->archived_at ? $user->archived_at->format('M j, Y H:i') : 'N/A' }}</div>
-                            <div class="text-xs" style="color: var(--text-secondary);">
-                                {{ $user->archived_at ? $user->archived_at->diffForHumans() : '' }}
-                            </div>
+                            @if($archivedAt)
+                                <div style="color: var(--text-primary);">{{ $archivedAt->format('M j, Y H:i') }}</div>
+                                <div class="text-xs" style="color: var(--text-secondary);">
+                                    {{ $archivedAt->diffForHumans() }}
+                                </div>
+                            @else
+                                <span class="text-muted">N/A</span>
+                            @endif
                         </td>
 
                         <td class="py-4 px-4">
-                            @if($user->deletion_scheduled_at)
+                            @if($deletionScheduledAt)
                                 <div class="text-danger">
                                     <i class="fas fa-calendar-times mr-1"></i>
-                                    {{ $user->deletion_scheduled_at->format('M j, Y') }}
+                                    {{ $deletionScheduledAt->format('M j, Y') }}
                                 </div>
+                                @if($daysUntilDeletion !== null)
                                 <div class="text-xs text-warning mt-1">
-                                    {{ now()->diffInDays($user->deletion_scheduled_at) }} days remaining
+                                    {{ $daysUntilDeletion }} day{{ $daysUntilDeletion === 1 ? '' : 's' }} remaining
                                 </div>
+                                @endif
                             @else
                                 <span class="text-muted">Not scheduled</span>
                             @endif
                         </td>
 
                         <td class="py-4 px-4">
-                            <div class="text-sm" style="color: var(--text-secondary);">
-                                {{ $user->archival_info['archived_reason'] ?? 'No reason provided' }}
+                            {{-- ✅ NEW: Source badge above the reason text --}}
+                            <div class="mb-1">
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium {{ $sourceColor }}"
+                                      title="{{ $sourceTitle }}">
+                                    <i class="fas fa-{{ $sourceIcon }} mr-1"></i>
+                                    {{ $sourceLabel }}
+                                </span>
                             </div>
-                            @if(($user->archival_info['archived_by'] ?? false))
+                            <div class="text-sm" style="color: var(--text-secondary);">
+                                {{ $archivalReason }}
+                            </div>
+                            @if($archivedByName)
                                 <div class="text-xs text-muted mt-1">
-                                    By: {{ $user->archival_info['archived_by_name'] ?? 'System' }}
+                                    By: {{ $archivedByName }}
                                 </div>
                             @endif
                         </td>
@@ -273,27 +392,27 @@
                         <td class="py-4 px-4">
                             <div class="flex items-center space-x-2 flex-wrap gap-1">
                                 <!-- View Details -->
-                                <button onclick="showArchivedUserDetails({{ $user->id }})" 
+                                <button onclick="showArchivedUserDetails({{ $user->id }})"
                                         class="btn-info btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="View Details">
                                     <i class="fas fa-eye"></i>
                                 </button>
-                                
+
                                 <!-- Restore User -->
-                                <button onclick="restoreArchivedUser({{ $user->id }}, '{{ addslashes($user->name) }}')" 
+                                <button onclick="restoreArchivedUser({{ $user->id }}, '{{ addslashes($user->name) }}')"
                                         class="btn-success btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Restore Account">
                                     <i class="fas fa-undo-alt"></i>
                                 </button>
-                                
+
                                 <!-- Cancel Deletion Schedule -->
-                                @if($user->deletion_scheduled_at && $user->deletion_scheduled_at->isFuture())
-                                <button onclick="cancelArchivalSchedule({{ $user->id }}, '{{ addslashes($user->name) }}')" 
+                                @if($deletionScheduledAt && $deletionScheduledAt->isFuture())
+                                <button onclick="cancelArchivalSchedule({{ $user->id }}, '{{ addslashes($user->name) }}')"
                                         class="btn-warning btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Cancel Deletion Schedule">
                                     <i class="fas fa-ban"></i>
                                 </button>
                                 @endif
-                                
+
                                 <!-- Permanent Delete -->
-                                <button onclick="permanentDeleteUser({{ $user->id }}, '{{ addslashes($user->name) }}')" 
+                                <button onclick="permanentDeleteUser({{ $user->id }}, '{{ addslashes($user->name) }}')"
                                         class="btn-danger btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Permanently Delete">
                                     <i class="fas fa-trash-alt"></i>
                                 </button>
@@ -305,7 +424,10 @@
                         <td colspan="7" class="py-8 px-4 text-center" style="color: var(--text-secondary);">
                             <i class="fas fa-archive text-4xl mb-4 opacity-50"></i>
                             <p class="text-lg">No archived users found</p>
-                            <p class="text-sm mt-2">Archived users will appear here when landlords transfer all properties.</p>
+                            <p class="text-sm mt-2">
+                                Archived users will appear here when landlords, tenants, or family members are archived —
+                                either manually by an administrator or automatically by the scheduled archival sweeps.
+                            </p>
                         </td>
                     </tr>
                     @endforelse
@@ -328,8 +450,10 @@
             <div>
                 <h4 class="font-semibold mb-1" style="color: var(--text-primary);">About Account Archival</h4>
                 <p class="text-sm" style="color: var(--text-secondary);">
-                    Landlord accounts are automatically archived 30 days after transferring all properties. 
-                    Archived accounts cannot log in but all historical data is preserved. 
+                    Landlord accounts are automatically archived after transferring all properties.
+                    Tenants who remain unassigned to any property unit for 30+ days are also archived automatically.
+                    Family members who lose their last property link are archived automatically after the nightly sweep.
+                    Archived accounts cannot log in but all historical data is preserved.
                     Accounts can be restored within 30 days of archival. After 365 days, archived accounts may be permanently deleted.
                 </p>
             </div>
@@ -345,7 +469,7 @@
             <i class="fas fa-info-circle mr-2"></i>
             <strong>Restore Account:</strong> This will reactivate the user account and restore full access.
         </div>
-        
+
         <p class="mb-4" style="color: var(--text-primary);">
             Are you sure you want to restore <strong id="restoreArchivedUserName"></strong>?
         </p>
@@ -367,7 +491,7 @@
             <i class="fas fa-exclamation-triangle mr-2"></i>
             <strong>Warning:</strong> This action cannot be undone. All user data will be permanently deleted.
         </div>
-        
+
         <p class="mb-4" style="color: var(--text-primary);">
             Are you sure you want to permanently delete <strong id="permanentDeleteUserName"></strong>?
         </p>
@@ -376,8 +500,8 @@
             <label for="permanent_delete_reason" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                 Reason for Permanent Deletion (Optional)
             </label>
-            <textarea id="permanent_delete_reason" rows="3" 
-                      class="w-full p-2 border rounded" 
+            <textarea id="permanent_delete_reason" rows="3"
+                      class="w-full p-2 border rounded"
                       style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                       placeholder="Enter reason for permanent deletion..."></textarea>
         </div>
@@ -421,7 +545,7 @@
                 </button>
             </div>
         </div>
-        
+
         <div class="p-6">
             <form id="exportArchivedForm" method="GET" action="{{ route('admin.users.archived.export') }}">
                 @csrf
@@ -432,7 +556,7 @@
                         <option value="pdf">PDF Format</option>
                     </select>
                 </div>
-                
+
                 <div class="mb-4">
                     <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Include Data</label>
                     <div class="space-y-2">
@@ -446,7 +570,7 @@
                         </label>
                     </div>
                 </div>
-                
+
                 <div class="flex justify-end space-x-3">
                     <button type="button" onclick="closeExportArchivedModal()" class="btn-secondary px-4 py-2 rounded-lg">Cancel</button>
                     <button type="submit" class="btn-success px-4 py-2 rounded-lg">
@@ -483,7 +607,7 @@ function toggleBulkActions() {
 document.addEventListener('click', function(event) {
     const dropdown = document.getElementById('bulkActionsDropdown');
     const btn = document.getElementById('bulkActionsBtn');
-    if (dropdown && !dropdown.classList.contains('hidden') && 
+    if (dropdown && !dropdown.classList.contains('hidden') &&
         !dropdown.contains(event.target) && !btn.contains(event.target)) {
         dropdown.classList.add('hidden');
     }
@@ -498,27 +622,26 @@ document.getElementById('select-all-archived')?.addEventListener('change', funct
     });
 });
 
-// ==================== RESTORE FUNCTIONS WITH DEBUGGING ====================
+// ==================== RESTORE FUNCTIONS ====================
 
 function restoreArchivedUser(userId, userName) {
     logDebug('restoreArchivedUser called', { userId, userName, userIdType: typeof userId });
-    
-    // Validate userId
+
     if (!userId || isNaN(parseInt(userId))) {
         logDebug('Invalid userId detected!', userId);
         showNotification('Error: Invalid user ID. Please refresh the page and try again.', 'error');
         return;
     }
-    
+
     currentRestoreUserId = parseInt(userId);
     currentRestoreUserName = userName;
-    
-    logDebug('Stored restore data', { 
-        currentRestoreUserId, 
+
+    logDebug('Stored restore data', {
+        currentRestoreUserId,
         currentRestoreUserName,
         url: `/admin/users/${currentRestoreUserId}/restore-archived`
     });
-    
+
     document.getElementById('restoreArchivedUserName').textContent = userName;
     document.getElementById('restoreArchivedModal').classList.remove('hidden');
 }
@@ -536,20 +659,20 @@ function confirmRestoreArchived() {
         closeRestoreArchivedModal();
         return;
     }
-    
-    logDebug('confirmRestoreArchived called', { 
-        userId: currentRestoreUserId, 
+
+    logDebug('confirmRestoreArchived called', {
+        userId: currentRestoreUserId,
         userName: currentRestoreUserName,
         url: `/admin/users/${currentRestoreUserId}/restore-archived`
     });
-    
+
     const restoreBtn = document.getElementById('confirmRestoreArchivedBtn');
     restoreBtn.disabled = true;
     restoreBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Restoring...';
-    
+
     const url = `/admin/users/${currentRestoreUserId}/restore-archived`;
     logDebug('Sending restore request to:', url);
-    
+
     fetch(url, {
         method: 'POST',
         headers: {
@@ -560,12 +683,12 @@ function confirmRestoreArchived() {
         body: JSON.stringify({})
     })
     .then(response => {
-        logDebug('Restore response received', { 
-            status: response.status, 
+        logDebug('Restore response received', {
+            status: response.status,
             statusText: response.statusText,
-            ok: response.ok 
+            ok: response.ok
         });
-        
+
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
@@ -573,7 +696,7 @@ function confirmRestoreArchived() {
     })
     .then(data => {
         logDebug('Restore response data:', data);
-        
+
         if (data.success) {
             showNotification('User account restored successfully!', 'success');
             closeRestoreArchivedModal();
@@ -597,20 +720,20 @@ function confirmRestoreArchived() {
 function bulkRestoreArchived() {
     const selectedUsers = Array.from(document.querySelectorAll('.archived-user-checkbox:checked'))
                                .map(checkbox => checkbox.value);
-    
+
     logDebug('bulkRestoreArchived called', { selectedUsers, count: selectedUsers.length });
-    
+
     if (selectedUsers.length === 0) {
         showNotification('Please select at least one user to restore.', 'error');
         return;
     }
-    
+
     if (!confirm(`Are you sure you want to restore ${selectedUsers.length} archived user(s)?`)) {
         return;
     }
-    
+
     showNotification('Restoring selected users...', 'info');
-    
+
     fetch('{{ route("admin.users.bulk-restore-archived") }}', {
         method: 'POST',
         headers: {
@@ -646,7 +769,7 @@ function permanentDeleteUser(userId, userName) {
     logDebug('permanentDeleteUser called', { userId, userName });
     currentPermanentDeleteUserId = userId;
     currentPermanentDeleteUserName = userName;
-    
+
     document.getElementById('permanentDeleteUserName').textContent = userName;
     document.getElementById('permanent_delete_reason').value = '';
     document.getElementById('permanentDeleteModal').classList.remove('hidden');
@@ -660,20 +783,21 @@ function closePermanentDeleteModal() {
 
 function confirmPermanentDelete() {
     if (!currentPermanentDeleteUserId) return;
-    
+
     const reason = document.getElementById('permanent_delete_reason').value;
     const deleteBtn = document.getElementById('confirmPermanentDeleteBtn');
     deleteBtn.disabled = true;
     deleteBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Deleting...';
-    
+
     fetch(`/admin/users/${currentPermanentDeleteUserId}/permanent-delete`, {
-        method: 'DELETE',
+        method: 'POST',
         headers: {
             'X-CSRF-TOKEN': '{{ csrf_token() }}',
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         },
         body: JSON.stringify({
+            _method: 'DELETE',
             reason: reason || 'Manual permanent deletion by admin'
         })
     })
@@ -700,18 +824,18 @@ function confirmPermanentDelete() {
 function bulkPermanentDeleteArchived() {
     const selectedUsers = Array.from(document.querySelectorAll('.archived-user-checkbox:checked'))
                                .map(checkbox => checkbox.value);
-    
+
     if (selectedUsers.length === 0) {
         showNotification('Please select at least one user to delete.', 'error');
         return;
     }
-    
+
     if (!confirm(`⚠️ WARNING: You are about to permanently delete ${selectedUsers.length} user(s). This action CANNOT be undone. Are you absolutely sure?`)) {
         return;
     }
-    
+
     showNotification('Permanently deleting selected users...', 'info');
-    
+
     fetch('{{ route("admin.users.bulk-permanent-delete-archived") }}', {
         method: 'POST',
         headers: {
@@ -747,7 +871,7 @@ function cancelArchivalSchedule(userId, userName) {
     if (!confirm(`Cancel deletion schedule for ${userName}? The account will remain archived but will not be automatically deleted.`)) {
         return;
     }
-    
+
     fetch(`/admin/users/${userId}/cancel-archival-schedule`, {
         method: 'POST',
         headers: {
@@ -780,9 +904,9 @@ function showArchivedUserDetails(userId) {
     const modal = document.getElementById('archivedUserDetailsModal');
     const content = document.getElementById('archivedUserDetailsContent');
     modal.classList.remove('hidden');
-    
+
     content.innerHTML = '<div class="text-center py-8"><div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div><p class="mt-4">Loading user details...</p></div>';
-    
+
     fetch(`/admin/users/archived/${userId}`, {
         headers: {
             'Accept': 'application/json',
@@ -792,7 +916,11 @@ function showArchivedUserDetails(userId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            renderArchivedUserDetails(data.user, data.archival_info, data.transfer_history);
+            renderArchivedUserDetails(
+                data.user,
+                data.archival_info || {},
+                data.transfer_history || []
+            );
         } else {
             content.innerHTML = '<div class="text-center py-8 text-danger">Failed to load user details.</div>';
         }
@@ -805,7 +933,7 @@ function showArchivedUserDetails(userId) {
 
 function renderArchivedUserDetails(user, archivalInfo, transferHistory) {
     const content = document.getElementById('archivedUserDetailsContent');
-    
+
     let transferHistoryHtml = '';
     if (transferHistory && transferHistory.length > 0) {
         transferHistoryHtml = `
@@ -834,13 +962,23 @@ function renderArchivedUserDetails(user, archivalInfo, transferHistory) {
             </div>
         `;
     }
-    
+
+    // ✅ NEW: Render an archival-source line in the details modal too.
+    const archivalType = archivalInfo?.archival_type ?? null;
+    const isSystemArchive = [
+        'auto_orphaned_family_member',
+        'auto_orphaned_tenant',
+        'auto_orphaned_landlord',
+        'system',
+    ].includes(archivalType);
+    const sourceLabel = isSystemArchive ? 'Automatic (system)' : 'Manual (administrator)';
+
     content.innerHTML = `
         <div class="space-y-4">
             <div class="flex items-center">
                 <div class="w-20 h-20 rounded-full bg-gray-200 flex items-center justify-center">
-                    ${user.has_photo ? 
-                        `<img src="${user.avatar_url}" class="w-20 h-20 rounded-full object-cover">` : 
+                    ${user.has_photo ?
+                        `<img src="${user.avatar_url}" class="w-20 h-20 rounded-full object-cover">` :
                         `<div class="w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl" style="background-color: #6c757d;">${user.initials}</div>`
                     }
                 </div>
@@ -850,7 +988,7 @@ function renderArchivedUserDetails(user, archivalInfo, transferHistory) {
                     <p class="text-sm" style="color: var(--text-secondary);">${user.phone || 'No phone'}</p>
                 </div>
             </div>
-            
+
             <div class="grid grid-cols-2 gap-4">
                 <div>
                     <label class="text-sm font-medium" style="color: var(--text-secondary);">User Type</label>
@@ -865,6 +1003,10 @@ function renderArchivedUserDetails(user, archivalInfo, transferHistory) {
                     <p style="color: var(--text-primary);">${archivalInfo?.archived_reason || 'No reason provided'}</p>
                 </div>
                 <div>
+                    <label class="text-sm font-medium" style="color: var(--text-secondary);">Archival Source</label>
+                    <p style="color: var(--text-primary);">${sourceLabel}</p>
+                </div>
+                <div>
                     <label class="text-sm font-medium" style="color: var(--text-secondary);">Original Email</label>
                     <p style="color: var(--text-primary);">${archivalInfo?.original_email || user.email}</p>
                 </div>
@@ -877,7 +1019,7 @@ function renderArchivedUserDetails(user, archivalInfo, transferHistory) {
                     <p style="color: var(--text-primary);">${archivalInfo?.days_since_archival || 'N/A'} days</p>
                 </div>
             </div>
-            
+
             ${transferHistoryHtml}
         </div>
     `;
@@ -919,9 +1061,9 @@ function showNotification(message, type = 'info') {
             <span>${message}</span>
         </div>
     `;
-    
+
     document.body.appendChild(notification);
-    
+
     setTimeout(() => {
         notification.remove();
     }, 5000);
@@ -931,20 +1073,18 @@ function showNotification(message, type = 'info') {
 
 document.addEventListener('DOMContentLoaded', function() {
     logDebug('Page loaded - Archived Users page');
-    
-    // Log all restore buttons found
+
     const restoreButtons = document.querySelectorAll('[onclick*="restoreArchivedUser"]');
     logDebug(`Found ${restoreButtons.length} restore buttons on the page`);
-    
+
     restoreButtons.forEach((btn, index) => {
         const onclickAttr = btn.getAttribute('onclick');
         logDebug(`Button ${index}: ${onclickAttr}`);
     });
-    
-    // Log all archived users
+
     const userRows = document.querySelectorAll('tbody tr');
     logDebug(`Found ${userRows.length} user rows`);
-    
+
     userRows.forEach((row, index) => {
         const nameCell = row.querySelector('td:nth-child(2) .font-medium');
         const name = nameCell ? nameCell.textContent.trim() : 'Unknown';
@@ -979,7 +1119,6 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// Initial debug output
 console.log('Script loaded - Archived Users Management');
 console.log('CSRF Token present:', '{{ csrf_token() }}' ? 'Yes' : 'No');
 </script>

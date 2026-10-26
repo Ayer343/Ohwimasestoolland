@@ -21,7 +21,7 @@ class RoleRedirectionService
         User::TYPE_FIELD_AGENT => 'field-agent.dashboard',
         User::TYPE_DEVELOPER => 'developer.dashboard',
         User::TYPE_SECURITY_PERSONNEL => 'security.dashboard',
-        User::TYPE_SANITATION_PERSONNEL => 'sanitation.dashboard',  // ✅ ADDED
+        User::TYPE_SANITATION_PERSONNEL => 'sanitation.dashboard',
         User::TYPE_CONTRACTOR => 'contractor.dashboard',
         User::TYPE_FORMER_LANDLORD => 'dashboard',
     ];
@@ -37,7 +37,7 @@ class RoleRedirectionService
         'field-agent' => 'field-agent.dashboard',
         'developer' => 'developer.dashboard',
         'security-personnel' => 'security.dashboard',
-        'sanitation-personnel' => 'sanitation.dashboard',  // ✅ ADDED
+        'sanitation-personnel' => 'sanitation.dashboard',
         'contractor' => 'contractor.dashboard',
     ];
 
@@ -52,7 +52,7 @@ class RoleRedirectionService
         User::TYPE_FIELD_AGENT => 'Field Agent',
         User::TYPE_DEVELOPER => 'Developer',
         User::TYPE_SECURITY_PERSONNEL => 'Security Personnel',
-        User::TYPE_SANITATION_PERSONNEL => 'Sanitation Personnel',  // ✅ ADDED
+        User::TYPE_SANITATION_PERSONNEL => 'Sanitation Personnel',
         User::TYPE_CONTRACTOR => 'Contractor',
         User::TYPE_FORMER_LANDLORD => 'Former Landlord',
     ];
@@ -67,7 +67,7 @@ class RoleRedirectionService
         'landlord' => 80,
         'contractor' => 75,
         'security-personnel' => 70,
-        'sanitation-personnel' => 65,  // ✅ ADDED
+        'sanitation-personnel' => 65,
         'field-agent' => 60,
         'tenant' => 50,
     ];
@@ -77,104 +77,180 @@ class RoleRedirectionService
      */
     protected string $defaultRoute = 'dashboard';
 
+    // ============================================================
+    // ✅ SESSION-SAFE HELPERS
+    // ------------------------------------------------------------
+    // On stateless API requests (no StartSession middleware bound),
+    // calling session() throws "Session store not set on request".
+    // Every session call in this service now goes through one of
+    // these helpers, which return null when no session is available.
+    // ============================================================
+
+    /**
+     * Return the active session store, or null when none is bound.
+     *
+     * Safe to call from:
+     *   • Web requests      → returns the session store
+     *   • API requests      → returns null (no session driver bound)
+     *   • Console / queue   → returns null (no HTTP request bound)
+     */
+    protected function sessionOrNull(): ?\Illuminate\Session\Store
+    {
+        try {
+            if (!app()->bound('session')) {
+                return null;
+            }
+
+            $session = app('session');
+
+            if (!($session instanceof \Illuminate\Session\Store)) {
+                return null;
+            }
+
+            return $session->isStarted() ? $session : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Persist the session when one exists. No-op on API requests.
+     */
+    protected function saveSession(): void
+    {
+        $this->sessionOrNull()?->save();
+    }
+
+    /**
+     * Read the current session id, or a stable fallback on API.
+     *
+     * Fallback = a short random hex string prefixed with `api-`,
+     * so log lines still show a distinguishable non-session id.
+     */
+    protected function sessionIdOrFallback(): string
+    {
+        $id = $this->sessionOrNull()?->getId();
+        return $id ?: 'api-' . bin2hex(random_bytes(8));
+    }
+
+    /**
+     * Invalidate the session when one exists. No-op on API requests.
+     */
+    protected function invalidateSession(): void
+    {
+        $this->sessionOrNull()?->invalidate();
+    }
+
+    /**
+     * Regenerate the CSRF token when a session exists. No-op on API.
+     */
+    protected function regenerateSessionToken(): void
+    {
+        $this->sessionOrNull()?->regenerateToken();
+    }
+
+    // ============================================================
+    // PUBLIC API
+    // ============================================================
+
     /**
      * Redirect user based on their type after successful login
      * ✅ COMPLETE: Supports all user types with proper error handling
      */
     public function redirect(User $user): RedirectResponse
     {
-        // ✅ CRITICAL: Save session before any redirect
-        session()->save();
-        
+        // ✅ CRITICAL: Save session before any redirect (no-op on API)
+        $this->saveSession();
+
         $userType = $user->getRawOriginal('type');
         $userTypeName = $this->typeNames[$userType] ?? 'Unknown';
-        
+
         // ✅ Check by role first (for multi-role users)
         $routeName = $this->getRouteFromRoles($user);
-        
+
         // If no role-based route found, use legacy type
         if (!$routeName) {
             $routeName = $this->getRouteFromType($userType);
         }
-        
+
         // Log the redirect for debugging
         Log::info('RoleRedirectionService: Redirecting user', [
-            'user_id' => $user->id,
-            'user_email' => $user->email,
-            'user_type' => $userType,
+            'user_id'        => $user->id,
+            'user_email'     => $user->email,
+            'user_type'      => $userType,
             'user_type_name' => $userTypeName,
-            'user_roles' => $user->roles->pluck('slug')->toArray(),
-            'route_name' => $routeName,
-            'session_id' => session()->getId(),
+            'user_roles'     => $user->roles->pluck('slug')->toArray(),
+            'route_name'     => $routeName,
+            'session_id'     => $this->sessionIdOrFallback(),
         ]);
-        
+
         // If no route found, handle appropriately
         if (!$routeName) {
             Log::warning('RoleRedirectionService: No route found for user', [
-                'user_id' => $user->id,
-                'user_type' => $userType,
+                'user_id'    => $user->id,
+                'user_type'  => $userType,
                 'user_roles' => $user->roles->pluck('slug')->toArray(),
             ]);
-            
+
             // Try to redirect based on first available role
             if ($user->roles->isNotEmpty()) {
                 $firstRole = $user->roles->first();
                 $routeName = $this->roleSlugMap[$firstRole->slug] ?? null;
-                
+
                 if ($routeName && Route::has($routeName)) {
                     Log::info('RoleRedirectionService: Using first available role', [
                         'user_id' => $user->id,
-                        'role' => $firstRole->slug,
-                        'route' => $routeName,
+                        'role'    => $firstRole->slug,
+                        'route'   => $routeName,
                     ]);
                 } else {
                     $routeName = null;
                 }
             }
-            
+
             // If still no route, use default
             if (!$routeName || !Route::has($routeName)) {
                 $routeName = $this->defaultRoute;
-                
+
                 Log::warning('RoleRedirectionService: Using default dashboard', [
-                    'user_id' => $user->id,
+                    'user_id'       => $user->id,
                     'default_route' => $routeName,
                 ]);
             }
         }
-        
+
         // ✅ Check if route exists
         if (!Route::has($routeName)) {
             Log::error('RoleRedirectionService: Dashboard route not found', [
-                'route' => $routeName,
-                'user_id' => $user->id,
-                'user_type' => $userType,
+                'route'      => $routeName,
+                'user_id'    => $user->id,
+                'user_type'  => $userType,
                 'user_roles' => $user->roles->pluck('slug')->toArray(),
             ]);
-            
-            // Log out user with invalid route
+
+            // Log out user with invalid route (session ops are no-op on API)
             auth()->logout();
-            session()->invalidate();
-            
+            $this->invalidateSession();
+
             return redirect()->route('login')
                 ->withErrors(['login' => 'Invalid user role configuration. Please contact administrator.']);
         }
 
         // ✅ Save session before generating redirect
-        session()->save();
-        
+        $this->saveSession();
+
         Log::info('RoleRedirectionService: Redirecting to route', [
-            'user_id' => $user->id,
-            'route' => $routeName,
-            'url' => route($routeName),
-            'session_id' => session()->getId(),
+            'user_id'    => $user->id,
+            'route'      => $routeName,
+            'url'        => route($routeName),
+            'session_id' => $this->sessionIdOrFallback(),
         ]);
 
         // ✅ Use route() directly instead of intended()
         $response = redirect()->route($routeName);
-        
+
         // ✅ Save session after generating response
-        session()->save();
+        $this->saveSession();
 
         return $response;
     }
@@ -186,33 +262,33 @@ class RoleRedirectionService
     protected function getRouteFromRoles(User $user): ?string
     {
         $roles = $user->roles;
-        
+
         if ($roles->isEmpty()) {
             return null;
         }
-        
+
         // Sort roles by priority
-        $sortedRoles = $roles->sortByDesc(function($role) {
+        $sortedRoles = $roles->sortByDesc(function ($role) {
             return $this->rolePriority[$role->slug] ?? 0;
         });
-        
+
         // Get the highest priority role
         $primaryRole = $sortedRoles->first();
-        
+
         if ($primaryRole && isset($this->roleSlugMap[$primaryRole->slug])) {
             $routeName = $this->roleSlugMap[$primaryRole->slug];
-            
+
             if (Route::has($routeName)) {
                 Log::info('RoleRedirectionService: Found route from primary role', [
-                    'user_id' => $user->id,
-                    'role' => $primaryRole->slug,
-                    'route' => $routeName,
+                    'user_id'  => $user->id,
+                    'role'     => $primaryRole->slug,
+                    'route'    => $routeName,
                     'priority' => $this->rolePriority[$primaryRole->slug] ?? 0,
                 ]);
                 return $routeName;
             }
         }
-        
+
         // Try to find any role with a valid route
         foreach ($sortedRoles as $role) {
             if (isset($this->roleSlugMap[$role->slug])) {
@@ -220,14 +296,14 @@ class RoleRedirectionService
                 if (Route::has($routeName)) {
                     Log::info('RoleRedirectionService: Found route from role', [
                         'user_id' => $user->id,
-                        'role' => $role->slug,
-                        'route' => $routeName,
+                        'role'    => $role->slug,
+                        'route'   => $routeName,
                     ]);
                     return $routeName;
                 }
             }
         }
-        
+
         return null;
     }
 
@@ -238,17 +314,17 @@ class RoleRedirectionService
     {
         if (isset($this->redirectMap[$userType])) {
             $routeName = $this->redirectMap[$userType];
-            
+
             if (Route::has($routeName)) {
                 return $routeName;
             }
-            
+
             Log::warning('RoleRedirectionService: Route exists in mapping but not defined', [
                 'user_type' => $userType,
-                'route' => $routeName,
+                'route'     => $routeName,
             ]);
         }
-        
+
         return null;
     }
 
@@ -258,14 +334,14 @@ class RoleRedirectionService
     public function getDashboardRoute(User $user): ?string
     {
         $userType = $user->getRawOriginal('type');
-        
+
         // Check roles first
         $routeName = $this->getRouteFromRoles($user);
-        
+
         if ($routeName) {
             return $routeName;
         }
-        
+
         // Fallback to legacy type
         return $this->redirectMap[$userType] ?? null;
     }
@@ -276,11 +352,11 @@ class RoleRedirectionService
     public function getDashboardUrl(User $user): ?string
     {
         $routeName = $this->getDashboardRoute($user);
-        
+
         if ($routeName && Route::has($routeName)) {
             return route($routeName);
         }
-        
+
         return null;
     }
 
@@ -290,14 +366,14 @@ class RoleRedirectionService
     public function canAccessDashboard(User $user, string $dashboardType): bool
     {
         $userDashboard = $this->getDashboardRoute($user);
-        
+
         if (!$userDashboard) {
             return false;
         }
-        
+
         // Extract the dashboard type from route name
         $userDashboardType = explode('.', $userDashboard)[0] ?? '';
-        
+
         return $userDashboardType === $dashboardType;
     }
 
@@ -307,7 +383,7 @@ class RoleRedirectionService
     public function hasValidDashboard(User $user): bool
     {
         $routeName = $this->getDashboardRoute($user);
-        
+
         return $routeName && Route::has($routeName);
     }
 
@@ -326,47 +402,47 @@ class RoleRedirectionService
     {
         $available = [];
         $seenRoutes = [];
-        
+
         // Check by roles
         foreach ($user->roles as $role) {
             if (isset($this->roleSlugMap[$role->slug])) {
                 $routeName = $this->roleSlugMap[$role->slug];
                 if (Route::has($routeName) && !in_array($routeName, $seenRoutes)) {
                     $available[] = [
-                        'role' => $role->slug,
-                        'role_name' => $role->display_name ?? $role->name,
-                        'route' => $routeName,
-                        'url' => route($routeName),
-                        'priority' => $this->rolePriority[$role->slug] ?? 0,
+                        'role'       => $role->slug,
+                        'role_name'  => $role->display_name ?? $role->name,
+                        'route'      => $routeName,
+                        'url'        => route($routeName),
+                        'priority'   => $this->rolePriority[$role->slug] ?? 0,
                         'is_primary' => $role->id === $user->getPrimaryRoleAttribute()?->id,
                     ];
                     $seenRoutes[] = $routeName;
                 }
             }
         }
-        
+
         // Check by legacy type
         $userType = $user->getRawOriginal('type');
         if (isset($this->redirectMap[$userType])) {
             $routeName = $this->redirectMap[$userType];
             if (Route::has($routeName) && !in_array($routeName, $seenRoutes)) {
                 $available[] = [
-                    'role' => 'legacy',
-                    'role_name' => $this->typeNames[$userType] ?? 'Legacy User',
-                    'route' => $routeName,
-                    'url' => route($routeName),
-                    'priority' => 0,
+                    'role'       => 'legacy',
+                    'role_name'  => $this->typeNames[$userType] ?? 'Legacy User',
+                    'route'      => $routeName,
+                    'url'        => route($routeName),
+                    'priority'   => 0,
                     'is_primary' => empty($available),
                 ];
                 $seenRoutes[] = $routeName;
             }
         }
-        
+
         // Sort by priority (highest first)
-        usort($available, function($a, $b) {
+        usort($available, function ($a, $b) {
             return $b['priority'] - $a['priority'];
         });
-        
+
         return $available;
     }
 
@@ -395,7 +471,7 @@ class RoleRedirectionService
         if (!isset($this->roleSlugMap[$roleSlug])) {
             return false;
         }
-        
+
         return Route::has($this->roleSlugMap[$roleSlug]);
     }
 
@@ -405,25 +481,27 @@ class RoleRedirectionService
     public function getRolesWithDashboards(): array
     {
         $roles = [];
-        
+
         foreach ($this->roleSlugMap as $slug => $route) {
             if (Route::has($route)) {
                 $roles[] = $slug;
             }
         }
-        
+
         return $roles;
     }
 
     /**
      * Redirect to login with error (helper method)
+     *
+     * ✅ Session ops are safe on both web and API contexts.
      */
     protected function redirectToLoginWithError(string $error): RedirectResponse
     {
         auth()->logout();
-        session()->invalidate();
-        session()->regenerateToken();
-        
+        $this->invalidateSession();
+        $this->regenerateSessionToken();
+
         return redirect()->route('login')
             ->withErrors(['login' => $error]);
     }
@@ -434,11 +512,11 @@ class RoleRedirectionService
     public function getPrimaryDashboard(User $user): ?array
     {
         $available = $this->getAvailableDashboards($user);
-        
+
         if (empty($available)) {
             return null;
         }
-        
+
         // Return the first one (already sorted by priority)
         return $available[0];
     }
@@ -450,10 +528,10 @@ class RoleRedirectionService
     {
         $available = $this->getAvailableDashboards($user);
         $primary = $this->getPrimaryDashboard($user);
-        
+
         return [
-            'primary' => $primary,
-            'available' => $available,
+            'primary'    => $primary,
+            'available'  => $available,
             'can_switch' => count($available) > 1,
         ];
     }
@@ -466,40 +544,40 @@ class RoleRedirectionService
         if (!isset($this->roleSlugMap[$roleSlug])) {
             Log::warning('RoleRedirectionService: Unknown role slug', [
                 'role_slug' => $roleSlug,
-                'user_id' => $user->id,
+                'user_id'   => $user->id,
             ]);
             return null;
         }
-        
+
         $routeName = $this->roleSlugMap[$roleSlug];
-        
+
         if (!Route::has($routeName)) {
             Log::error('RoleRedirectionService: Route not found for role slug', [
                 'role_slug' => $roleSlug,
-                'route' => $routeName,
-                'user_id' => $user->id,
+                'route'     => $routeName,
+                'user_id'   => $user->id,
             ]);
             return null;
         }
-        
+
         // Check if user has this role
         if (!$user->hasRole($roleSlug)) {
             Log::warning('RoleRedirectionService: User does not have role', [
-                'role_slug' => $roleSlug,
-                'user_id' => $user->id,
+                'role_slug'  => $roleSlug,
+                'user_id'    => $user->id,
                 'user_roles' => $user->roles->pluck('slug')->toArray(),
             ]);
             return null;
         }
-        
-        session()->save();
-        
+
+        $this->saveSession();
+
         Log::info('RoleRedirectionService: Redirecting to specific role dashboard', [
-            'user_id' => $user->id,
+            'user_id'   => $user->id,
             'role_slug' => $roleSlug,
-            'route' => $routeName,
+            'route'     => $routeName,
         ]);
-        
+
         return redirect()->route($routeName);
     }
 }

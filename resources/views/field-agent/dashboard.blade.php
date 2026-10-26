@@ -16,12 +16,8 @@
                 </p>
             </div>
             <div class="flex items-center gap-3">
-                <!-- Dashboard Switcher (Multi-Role Support) - FIXED -->
                 @php
-                    // Get user roles from role system
                     $userRoles = auth()->user()->roles ?? collect();
-                    
-                    // Get legacy type as a "virtual role" for backward compatibility
                     $legacyType = auth()->user()->type;
                     $legacyTypeRoleMap = [
                         0 => 'super-admin',
@@ -33,20 +29,16 @@
                         6 => 'security-personnel',
                     ];
                     $legacyRoleSlug = $legacyTypeRoleMap[$legacyType] ?? null;
-                    
-                    // Combine BOTH sources for all roles
+
                     $allRoles = $userRoles->pluck('slug')->toArray();
-                    
-                    // Add legacy type as a role if it's not already in the role-based list
+
                     if ($legacyRoleSlug && !in_array($legacyRoleSlug, $allRoles)) {
                         $allRoles[] = $legacyRoleSlug;
                     }
-                    
-                    // Create combined roles list with source info
+
                     $combinedRoles = [];
                     $addedSlugs = [];
-                    
-                    // Add legacy type first (as a "virtual role")
+
                     if ($legacyRoleSlug && !in_array($legacyRoleSlug, $addedSlugs)) {
                         $combinedRoles[] = (object)[
                             'slug' => $legacyRoleSlug,
@@ -55,8 +47,7 @@
                         ];
                         $addedSlugs[] = $legacyRoleSlug;
                     }
-                    
-                    // Add role-based roles
+
                     foreach ($userRoles as $role) {
                         if (!in_array($role->slug, $addedSlugs)) {
                             $combinedRoles[] = (object)[
@@ -67,13 +58,10 @@
                             $addedSlugs[] = $role->slug;
                         }
                     }
-                    
+
                     $hasMultipleRoles = count($allRoles) > 1;
-                    
-                    // Get current role from session
                     $currentRole = session('selected_role');
-                    
-                    // Fallback to route detection if no session
+
                     if (!$currentRole) {
                         $currentRoute = Route::currentRouteName();
                         if (str_contains($currentRoute, 'super-admin')) {
@@ -94,14 +82,12 @@
                             $currentRole = 'field-agent';
                         }
                     }
-                    
-                    // Ensure the user actually has this role (either from role system OR legacy type)
+
                     $hasCurrentRole = in_array($currentRole, $allRoles);
                     if (!$hasCurrentRole && !empty($allRoles)) {
                         $currentRole = $allRoles[0];
                     }
-                    
-                    // Role icon mapping
+
                     $roleIcons = [
                         'super-admin' => 'crown',
                         'admin' => 'shield-alt',
@@ -113,19 +99,21 @@
                     ];
                     $currentIcon = $roleIcons[$currentRole] ?? 'user-check';
                 @endphp
-                
+
                 @if($hasMultipleRoles)
-                <div class="dashboard-switcher relative">
-                    <button id="dashboardSwitcherBtn" 
+                {{-- FIX: Added explicit high z-index and overflow-visible wrapper --}}
+                <div class="dashboard-switcher relative" style="z-index: 1050;">
+                    <button id="dashboardSwitcherBtn"
                             class="flex items-center gap-2 px-4 py-2 rounded-lg transition-all"
                             style="background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%); color: white;">
                         <i class="fas fa-{{ $currentIcon }} mr-1"></i>
                         <span class="text-sm font-medium">{{ ucfirst(str_replace('-', ' ', $currentRole)) }}</span>
                         <i class="fas fa-chevron-down text-xs ml-1"></i>
                     </button>
-                    
-                    <div id="dashboardSwitcherMenu" 
-                         class="absolute right-0 mt-2 w-72 rounded-xl shadow-lg overflow-hidden z-50 hidden"
+
+                    {{-- FIX: Menu is now fixed-positioned by JS, starts hidden --}}
+                    <div id="dashboardSwitcherMenu"
+                         class="dashboard-switcher-menu hidden"
                          style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
                         <div class="py-2">
                             <div class="px-4 py-2 border-b" style="border-color: var(--border-color);">
@@ -139,16 +127,16 @@
                                     $icon = $roleIcons[$role->slug] ?? 'user';
                                 @endphp
                                 <button type="button"
-                                        class="dashboard-switch-option w-full text-left flex items-center gap-3 px-4 py-3 transition-all hover:bg-opacity-10 {{ $isActive ? 'active-option' : '' }}"
+                                        class="dashboard-switch-option w-full text-left flex items-center gap-3 px-4 py-3 transition-all {{ $isActive ? 'active-option' : '' }}"
                                         data-role="{{ $role->slug }}"
                                         style="display: flex; color: var(--text-primary); {{ $isActive ? 'background-color: rgba(var(--primary-rgb), 0.1); border-left: 3px solid var(--primary);' : '' }}">
-                                    <div class="w-9 h-9 rounded-full flex items-center justify-center" 
+                                    <div class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
                                          style="background: {{ $isActive ? 'linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)' : 'rgba(var(--primary-rgb), 0.1)' }}">
                                         <i class="fas fa-{{ $icon }} text-sm" style="color: {{ $isActive ? 'white' : 'var(--primary)' }}"></i>
                                     </div>
-                                    <div class="flex-1">
-                                        <p class="text-sm font-medium">{{ ucfirst(str_replace('-', ' ', $role->slug)) }}</p>
-                                        <p class="text-xs" style="color: var(--text-secondary);">
+                                    <div class="flex-1 min-w-0">
+                                        <p class="text-sm font-medium truncate">{{ ucfirst(str_replace('-', ' ', $role->slug)) }}</p>
+                                        <p class="text-xs truncate" style="color: var(--text-secondary);">
                                             @if(($role->source ?? '') === 'legacy')
                                                 <span class="inline-flex items-center gap-1">
                                                     <i class="fas fa-database text-xs"></i> Legacy Type
@@ -168,7 +156,7 @@
                                         </p>
                                     </div>
                                     @if($isActive)
-                                        <i class="fas fa-check-circle mr-2" style="color: var(--success); font-size: 0.875rem;"></i>
+                                        <i class="fas fa-check-circle mr-2 flex-shrink-0" style="color: var(--success); font-size: 0.875rem;"></i>
                                     @endif
                                 </button>
                             @endforeach
@@ -177,7 +165,7 @@
                 </div>
                 @endif
 
-                <a href="{{ route('dashboard.testimonials.index') }}" 
+                <a href="{{ route('dashboard.testimonials.index') }}"
                    class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all hover:scale-105"
                    style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 1px solid rgba(var(--success-rgb), 0.3);">
                     <i class="fas fa-star"></i>
@@ -190,10 +178,10 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- BANNER: MULTI-ROLE NOTICE (Auto-hide) -->
         @if($hasMultipleRoles)
-        <div id="multiRoleBanner" class="mt-4 p-3 rounded-lg flex items-center justify-between flex-wrap gap-3 transition-all duration-500" 
+        <div id="multiRoleBanner" class="mt-4 p-3 rounded-lg flex items-center justify-between flex-wrap gap-3 transition-all duration-500"
              style="background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.1) 0%, rgba(var(--secondary-rgb), 0.05) 100%); border: 1px solid rgba(var(--primary-rgb), 0.2);">
             <div class="flex items-center gap-3">
                 <i class="fas fa-users text-lg" style="color: var(--primary);"></i>
@@ -202,12 +190,12 @@
                         You have multiple roles in the system
                     </p>
                     <p class="text-xs" style="color: var(--text-secondary);">
-                        Currently viewing as <strong class="font-semibold" style="color: var(--primary);">{{ ucfirst(str_replace('-', ' ', $currentRole)) }}</strong>. 
+                        Currently viewing as <strong class="font-semibold" style="color: var(--primary);">{{ ucfirst(str_replace('-', ' ', $currentRole)) }}</strong>.
                         Use the switcher above to access other dashboards.
                     </p>
                 </div>
             </div>
-            <div class="flex gap-2">
+            <div class="flex gap-2 flex-wrap">
                 @foreach($combinedRoles as $role)
                     @if($role->slug !== $currentRole)
                         <button type="button"
@@ -222,19 +210,19 @@
             </div>
         </div>
         @endif
-        
+
         <!-- BANNER: FIELD AGENT TIPS (Auto-hide) -->
-        <div id="agentTipsBanner" class="mt-4 p-3 rounded-lg flex items-center justify-between flex-wrap gap-3 transition-all duration-500" 
+        <div id="agentTipsBanner" class="mt-4 p-3 rounded-lg flex items-center justify-between flex-wrap gap-3 transition-all duration-500"
              style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.05) 100%); border-left: 4px solid #10b981;">
             <div class="flex items-center gap-3">
                 <i class="fas fa-lightbulb text-lg" style="color: #10b981;"></i>
                 <div>
                     <p class="text-sm font-medium" style="color: var(--text-primary);">
-                        <i class="fas fa-chart-line mr-1" style="color: #10b981;"></i> 
+                        <i class="fas fa-chart-line mr-1" style="color: #10b981;"></i>
                         Pro Tip
                     </p>
                     <p class="text-xs" style="color: var(--text-secondary);">
-                        Your monthly target is <strong>{{ $performanceMetrics['monthly_target'] ?? 0 }}</strong> properties 
+                        Your monthly target is <strong>{{ $performanceMetrics['monthly_target'] ?? 0 }}</strong> properties
                         (20% of your {{ $performanceMetrics['total_assigned_properties'] ?? 0 }} total assigned properties).
                         Complete your plan assignments to earn bonuses!
                     </p>
@@ -253,8 +241,7 @@
 
     <!-- Quick Stats Cards -->
     <div class="quick-stats-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <!-- Properties Registered Card -->
-        <div class="stat-card rounded-xl p-6 transition-all hover:shadow-lg" 
+        <div class="stat-card rounded-xl p-6 transition-all hover:shadow-lg"
              style="background: linear-gradient(135deg, var(--card-bg) 0%, var(--bg-secondary) 100%); border: 1px solid var(--border-color);">
             <div class="flex justify-between items-start">
                 <div>
@@ -268,15 +255,14 @@
                         </span>
                     </div>
                 </div>
-                <div class="w-12 h-12 rounded-full flex items-center justify-center" 
+                <div class="w-12 h-12 rounded-full flex items-center justify-center"
                      style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
                     <i class="fas fa-building text-white text-xl"></i>
                 </div>
             </div>
         </div>
 
-        <!-- Active Plans Card -->
-        <div class="stat-card rounded-xl p-6 transition-all hover:shadow-lg" 
+        <div class="stat-card rounded-xl p-6 transition-all hover:shadow-lg"
              style="background: linear-gradient(135deg, var(--card-bg) 0%, var(--bg-secondary) 100%); border: 1px solid var(--border-color);">
             <div class="flex justify-between items-start">
                 <div>
@@ -290,15 +276,14 @@
                         </span>
                     </div>
                 </div>
-                <div class="w-12 h-12 rounded-full flex items-center justify-center" 
+                <div class="w-12 h-12 rounded-full flex items-center justify-center"
                      style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);">
                     <i class="fas fa-clipboard-list text-white text-xl"></i>
                 </div>
             </div>
         </div>
 
-        <!-- Pending Verifications Card -->
-        <div class="stat-card rounded-xl p-6 transition-all hover:shadow-lg" 
+        <div class="stat-card rounded-xl p-6 transition-all hover:shadow-lg"
              style="background: linear-gradient(135deg, var(--card-bg) 0%, var(--bg-secondary) 100%); border: 1px solid var(--border-color);">
             <div class="flex justify-between items-start">
                 <div>
@@ -312,15 +297,14 @@
                         </span>
                     </div>
                 </div>
-                <div class="w-12 h-12 rounded-full flex items-center justify-center" 
+                <div class="w-12 h-12 rounded-full flex items-center justify-center"
                      style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
                     <i class="fas fa-clipboard-check text-white text-xl"></i>
                 </div>
             </div>
         </div>
 
-        <!-- Today's Registrations Card -->
-        <div class="stat-card rounded-xl p-6 transition-all hover:shadow-lg" 
+        <div class="stat-card rounded-xl p-6 transition-all hover:shadow-lg"
              style="background: linear-gradient(135deg, var(--card-bg) 0%, var(--bg-secondary) 100%); border: 1px solid var(--border-color);">
             <div class="flex justify-between items-start">
                 <div>
@@ -334,7 +318,7 @@
                         </span>
                     </div>
                 </div>
-                <div class="w-12 h-12 rounded-full flex items-center justify-center" 
+                <div class="w-12 h-12 rounded-full flex items-center justify-center"
                      style="background: linear-gradient(135deg, #ec4899 0%, #db2777 100%);">
                     <i class="fas fa-calendar-day text-white text-xl"></i>
                 </div>
@@ -344,7 +328,7 @@
 
     <!-- Registration Plan Progress Section -->
     @if(isset($stats['plan_progress']) && count($stats['plan_progress']) > 0)
-    <div class="plan-progress-card rounded-xl p-6 mb-8" 
+    <div class="plan-progress-card rounded-xl p-6 mb-8"
          style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
         <div class="flex justify-between items-center mb-4">
             <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
@@ -364,7 +348,7 @@
                         </span>
                     </div>
                     <div class="w-full rounded-full h-2" style="background-color: var(--bg-secondary);">
-                        <div class="rounded-full h-2 transition-all duration-500" 
+                        <div class="rounded-full h-2 transition-all duration-500"
                              style="width: {{ $plan['completion_percentage'] }}%; background-color: var(--primary);"></div>
                     </div>
                     @if(isset($plan['deadline']))
@@ -387,14 +371,13 @@
 
     <!-- Charts Section -->
     <div class="charts-grid grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        <!-- Registration Trend Chart -->
-        <div class="chart-card rounded-xl p-6" 
+        <div class="chart-card rounded-xl p-6"
              style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-            <div class="flex justify-between items-center mb-4">
+            <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
                     <i class="fas fa-chart-line mr-2" style="color: var(--primary);"></i>Registration Trend
                 </h3>
-                <div class="flex space-x-2">
+                <div class="flex space-x-2 flex-wrap">
                     <button class="trend-period-btn px-3 py-1 rounded-lg text-sm transition-all active" data-period="12months"
                             style="background-color: var(--primary); color: white;">12 Months</button>
                     <button class="trend-period-btn px-3 py-1 rounded-lg text-sm transition-all" data-period="6months"
@@ -406,14 +389,13 @@
             <canvas id="registrationTrendChart" height="250" style="width: 100%;"></canvas>
         </div>
 
-        <!-- Weekly Performance Chart -->
-        <div class="chart-card rounded-xl p-6" 
+        <div class="chart-card rounded-xl p-6"
              style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-            <div class="flex justify-between items-center mb-4">
+            <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
                     <i class="fas fa-chart-bar mr-2" style="color: var(--primary);"></i>Weekly Performance
                 </h3>
-                <div class="flex space-x-2">
+                <div class="flex space-x-2 flex-wrap">
                     <button class="weekly-period-btn px-3 py-1 rounded-lg text-sm transition-all active" data-period="current"
                             style="background-color: var(--primary); color: white;">Current Week</button>
                     <button class="weekly-period-btn px-3 py-1 rounded-lg text-sm transition-all" data-period="previous"
@@ -426,16 +408,14 @@
         </div>
     </div>
 
-    <!-- Second Row of Charts -->
     <div class="charts-grid grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        <!-- Plan Completion Chart -->
-        <div class="chart-card rounded-xl p-6" 
+        <div class="chart-card rounded-xl p-6"
              style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-            <div class="flex justify-between items-center mb-4">
+            <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
                     <i class="fas fa-chart-pie mr-2" style="color: var(--primary);"></i>Plan Completion Status
                 </h3>
-                <div class="flex space-x-2">
+                <div class="flex space-x-2 flex-wrap">
                     <button class="plan-chart-type-btn px-3 py-1 rounded-lg text-sm transition-all active" data-type="bar"
                             style="background-color: var(--primary); color: white;">Bar Chart</button>
                     <button class="plan-chart-type-btn px-3 py-1 rounded-lg text-sm transition-all" data-type="pie"
@@ -445,14 +425,13 @@
             <canvas id="planCompletionChart" height="250" style="width: 100%;"></canvas>
         </div>
 
-        <!-- Target Achievement Card -->
-        <div class="chart-card rounded-xl p-6" 
+        <div class="chart-card rounded-xl p-6"
              style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-            <div class="flex justify-between items-center mb-4">
+            <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
                     <i class="fas fa-bullseye mr-2" style="color: var(--primary);"></i>Target Achievement
                 </h3>
-                <div class="flex space-x-2">
+                <div class="flex space-x-2 flex-wrap">
                     <button class="target-period-btn px-3 py-1 rounded-lg text-sm transition-all active" data-period="monthly"
                             style="background-color: var(--primary); color: white;">Monthly</button>
                     <button class="target-period-btn px-3 py-1 rounded-lg text-sm transition-all" data-period="quarterly"
@@ -468,7 +447,7 @@
                             {{ $performanceMetrics['target_achievement'] ?? 0 }}%
                         </p>
                         <p class="text-sm" style="color: var(--text-secondary);" id="target-stats">
-                            {{ $performanceMetrics['monthly_actual'] ?? 0 }} / 
+                            {{ $performanceMetrics['monthly_actual'] ?? 0 }} /
                             <span id="total-assigned-properties">{{ $performanceMetrics['monthly_target'] ?? 0 }}</span> properties
                         </p>
                         @if(($performanceMetrics['total_assigned_properties'] ?? 0) > 0)
@@ -494,14 +473,13 @@
         </div>
     </div>
 
-    <!-- Performance Metrics Chart -->
-    <div class="chart-card rounded-xl p-6 mb-8" 
+    <div class="chart-card rounded-xl p-6 mb-8"
          style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-        <div class="flex justify-between items-center mb-4">
+        <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
             <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
                 <i class="fas fa-chart-line mr-2" style="color: var(--primary);"></i>Performance Metrics
             </h3>
-            <div class="flex space-x-2">
+            <div class="flex space-x-2 flex-wrap">
                 <button class="metric-period-btn px-3 py-1 rounded-lg text-sm transition-all active" data-metric="registrations"
                         style="background-color: var(--primary); color: white;">Registrations</button>
                 <button class="metric-period-btn px-3 py-1 rounded-lg text-sm transition-all" data-metric="verifications"
@@ -515,8 +493,7 @@
 
     <!-- Pending Tasks & Recent Activities -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        <!-- Pending Tasks -->
-        <div class="tasks-card rounded-xl" 
+        <div class="tasks-card rounded-xl"
              style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
             <div class="px-6 py-4 border-b" style="border-color: var(--border-color);">
                 <div class="flex justify-between items-center">
@@ -531,8 +508,8 @@
             <div class="divide-y" style="border-color: var(--border-color);">
                 @forelse($pendingTasks as $task)
                     <div class="px-6 py-4 hover:bg-opacity-5 transition-colors" style="background-color: var(--card-bg);">
-                        <div class="flex justify-between items-start">
-                            <div class="flex items-start">
+                        <div class="flex justify-between items-start gap-3">
+                            <div class="flex items-start min-w-0">
                                 @php
                                     $colorRgb = [
                                         'warning' => '245, 158, 11',
@@ -542,11 +519,11 @@
                                         'info' => '59, 130, 246',
                                     ][$task['color']] ?? '107, 114, 128';
                                 @endphp
-                                <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3" 
+                                <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
                                      style="background-color: rgba({{ $colorRgb }}, 0.1);">
                                     <i class="fas fa-{{ $task['icon'] }}" style="color: rgb({{ $colorRgb }});"></i>
                                 </div>
-                                <div>
+                                <div class="min-w-0">
                                     <p class="font-medium" style="color: var(--text-primary);">{{ $task['title'] }}</p>
                                     @if(isset($task['subtitle']))
                                         <p class="text-xs mt-1" style="color: var(--text-secondary);">{{ $task['subtitle'] }}</p>
@@ -560,7 +537,7 @@
                                     @endif
                                 </div>
                             </div>
-                            <div class="text-right">
+                            <div class="text-right flex-shrink-0">
                                 <span class="text-xs px-2 py-1 rounded-full" style="background-color: rgba({{ $colorRgb }}, 0.2); color: rgb({{ $colorRgb }});">
                                     {{ $task['count'] }} pending
                                 </span>
@@ -583,8 +560,7 @@
             </div>
         </div>
 
-        <!-- Recent Activities -->
-        <div class="activities-card rounded-xl" 
+        <div class="activities-card rounded-xl"
              style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
             <div class="px-6 py-4 border-b" style="border-color: var(--border-color);">
                 <div class="flex justify-between items-center">
@@ -608,18 +584,18 @@
                         ][$activity['color']] ?? '107, 114, 128';
                     @endphp
                     <div class="px-6 py-4 hover:bg-opacity-5 transition-colors activity-item" data-type="{{ $activity['type'] }}" style="background-color: var(--card-bg);">
-                        <div class="flex justify-between items-center">
-                            <div class="flex items-center">
-                                <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3" 
+                        <div class="flex justify-between items-center gap-3">
+                            <div class="flex items-center min-w-0">
+                                <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3 flex-shrink-0"
                                      style="background-color: rgba({{ $activityColorRgb }}, 0.1);">
                                     <i class="fas fa-{{ $activity['icon'] }}" style="color: rgb({{ $activityColorRgb }});"></i>
                                 </div>
-                                <div>
+                                <div class="min-w-0">
                                     <p class="font-medium" style="color: var(--text-primary);">{{ $activity['title'] }}</p>
                                     <p class="text-xs" style="color: var(--text-secondary);">{{ $activity['description'] }}</p>
                                 </div>
                             </div>
-                            <div class="text-right">
+                            <div class="text-right flex-shrink-0">
                                 <p class="text-xs" style="color: var(--text-secondary);">{{ $activity['formatted_time'] }}</p>
                                 @if(isset($activity['link']))
                                     <a href="{{ $activity['link'] }}" class="text-xs hover:underline mt-1 inline-block" style="color: var(--primary);">
@@ -640,7 +616,7 @@
     </div>
 
     <!-- Recent Properties Section -->
-    <div class="recent-properties-card rounded-xl" 
+    <div class="recent-properties-card rounded-xl"
          style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
         <div class="px-6 py-4 border-b" style="border-color: var(--border-color);">
             <div class="flex justify-between items-center">
@@ -705,22 +681,22 @@
 
     <!-- Quick Actions -->
     <div class="quick-actions grid grid-cols-1 md:grid-cols-4 gap-4 mt-8">
-        <a href="{{ route('field-agent.properties.create') }}" 
+        <a href="{{ route('field-agent.properties.create') }}"
            class="flex items-center justify-center px-4 py-3 rounded-lg transition-all hover:shadow-md"
            style="background-color: var(--primary); color: white;">
             <i class="fas fa-plus-circle mr-2"></i> Register Property
         </a>
-        <a href="{{ route('field-agent.registration-plans.index') }}" 
+        <a href="{{ route('field-agent.registration-plans.index') }}"
            class="flex items-center justify-center px-4 py-3 rounded-lg transition-all hover:shadow-md"
            style="background-color: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color);">
             <i class="fas fa-clipboard-list mr-2"></i> View Plans
         </a>
-        <a href="{{ route('field-agent.verifications') }}" 
+        <a href="{{ route('field-agent.verifications') }}"
            class="flex items-center justify-center px-4 py-3 rounded-lg transition-all hover:shadow-md"
            style="background-color: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color);">
             <i class="fas fa-clipboard-check mr-2"></i> Pending Verifications
         </a>
-        <a href="{{ route('dashboard.testimonials.index') }}" 
+        <a href="{{ route('dashboard.testimonials.index') }}"
            class="flex items-center justify-center px-4 py-3 rounded-lg transition-all hover:shadow-md"
            style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 1px solid rgba(var(--success-rgb), 0.3);">
             <i class="fas fa-star mr-2"></i> Share Feedback
@@ -763,50 +739,76 @@
     }
 
     .dashboard-container { max-width: 1600px; margin: 0 auto; padding: 0 1rem; }
-    
-    /* Dashboard Switcher Styles */
-    .dashboard-switcher { position: relative; }
-    
-    #dashboardSwitcherMenu {
-        transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-        transform-origin: top right;
-        opacity: 0;
-        transform: translateY(-10px);
-        visibility: hidden;
-        display: none;
+
+    /* ============================================================
+       FIX: DASHBOARD SWITCHER — HIGH Z-INDEX + FIXED POSITIONING
+       ============================================================
+       The dropdown used to be `absolute` inside the content area.
+       When the sidebar expanded, the sidebar (z-index 1000+) covered
+       the dropdown. We now:
+         1. Give the switcher a high z-index (1050).
+         2. Position the menu with `position: fixed` (set by JS).
+         3. Let JS compute top/left based on the button's position
+            AND the current sidebar width, so the menu never lands
+            under the sidebar.
+         4. Add a max-height + scroll for small viewports.
+    ============================================================ */
+    .dashboard-switcher {
+        position: relative;
+        z-index: 1050;
     }
-    
-    #dashboardSwitcherMenu.show {
+
+    .dashboard-switcher-menu {
+        position: fixed;              /* JS sets top/left */
+        width: 18rem;                 /* w-72 */
+        max-height: 70vh;
+        overflow-y: auto;
+        border-radius: 0.75rem;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15),
+                    0 10px 10px -5px rgba(0, 0, 0, 0.08);
+        z-index: 1060;                /* Above sidebar */
+        opacity: 0;
+        transform: translateY(-8px);
+        visibility: hidden;
+        transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+        pointer-events: none;
+    }
+
+    .dashboard-switcher-menu.show {
         opacity: 1;
         transform: translateY(0);
         visibility: visible;
-        display: block !important;
+        pointer-events: auto;
     }
-    
+
+    /* Force the menu to render above any sidebar/overlay */
+    .dashboard-switcher-menu,
+    .dashboard-switcher-menu * {
+        pointer-events: auto;
+    }
+
     .dashboard-switch-option {
         transition: all 0.2s ease;
         cursor: pointer;
     }
-    
+
     .dashboard-switch-option:hover {
         background-color: rgba(var(--primary-rgb), 0.1);
         padding-left: 1rem;
     }
-    
+
     .active-option {
         background-color: rgba(var(--primary-rgb), 0.1);
         border-left: 3px solid var(--primary);
     }
-    
-    /* Banner auto-hide animation */
+
     @keyframes fadeOutUp {
         from { opacity: 1; transform: translateY(0); }
         to { opacity: 0; transform: translateY(-20px); visibility: hidden; display: none; }
     }
-    
+
     .fade-out-up { animation: fadeOutUp 0.5s ease forwards; }
-    
-    /* Property Status Badges */
+
     .property-status-active, .property-status-verified {
         background-color: rgba(16, 185, 129, 0.2); color: #10b981;
     }
@@ -816,8 +818,7 @@
     .property-status-inactive {
         background-color: rgba(239, 68, 68, 0.2); color: #ef4444;
     }
-    
-    /* Card Hover Effects */
+
     .stat-card, .chart-card, .tasks-card, .activities-card, .recent-properties-card, .plan-progress-card {
         transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
@@ -825,28 +826,24 @@
         transform: translateY(-2px);
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
     }
-    
-    /* Button Active States */
+
     .trend-period-btn, .weekly-period-btn, .plan-chart-type-btn, .target-period-btn, .metric-period-btn {
         cursor: pointer; transition: all 0.2s ease;
     }
-    .trend-period-btn.active, .weekly-period-btn.active, .plan-chart-type-btn.active, 
+    .trend-period-btn.active, .weekly-period-btn.active, .plan-chart-type-btn.active,
     .target-period-btn.active, .metric-period-btn.active {
         background-color: var(--primary) !important; color: white !important;
     }
-    
-    /* Grid Layouts */
+
     .quick-stats-grid { display: grid; gap: 1.5rem; margin-bottom: 2rem; }
     .charts-grid { display: grid; gap: 1.5rem; margin-bottom: 2rem; }
     .quick-actions { display: grid; gap: 1rem; margin-top: 2rem; }
-    
-    /* Table Styles */
+
     .recent-properties-card { overflow-x: auto; }
     .recent-properties-card table { width: 100%; border-collapse: collapse; }
     .recent-properties-card th { text-align: left; padding: 0.75rem 1.5rem; font-size: 0.75rem; }
     .recent-properties-card td { padding: 1rem 1.5rem; white-space: nowrap; }
-    
-    /* Toast Notification */
+
     .dashboard-notification {
         position: fixed;
         bottom: 20px;
@@ -857,13 +854,12 @@
         z-index: 9999;
         animation: slideIn 0.3s ease-out;
     }
-    
+
     @keyframes slideIn {
         from { transform: translateX(100%); opacity: 0; }
         to { transform: translateX(0); opacity: 1; }
     }
-    
-    /* Responsive Design */
+
     @media (max-width: 1024px) { .charts-grid { grid-template-columns: 1fr; } }
     @media (max-width: 768px) {
         .dashboard-container { padding: 0 0.5rem; }
@@ -873,7 +869,8 @@
         .dashboard-header .flex { flex-direction: column; align-items: stretch; }
         .dashboard-switcher { width: 100%; }
         #dashboardSwitcherBtn { width: 100%; justify-content: center; }
-        #dashboardSwitcherMenu { width: 100%; left: 0; right: auto; }
+        /* Menu width on mobile: fill viewport width minus margins */
+        .dashboard-switcher-menu { width: calc(100vw - 2rem); max-width: 22rem; }
     }
     @media (max-width: 640px) { .quick-actions { grid-template-columns: 1fr; } }
 </style>
@@ -884,49 +881,45 @@
 <script>
     // ========== CSRF TOKEN SETUP ==========
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '{{ csrf_token() }}';
-    
-    // ========== TOAST NOTIFICATION FUNCTION ==========
+
+    // ========== TOAST NOTIFICATION ==========
     window.showDashboardNotification = function(message, type = 'success') {
-        const existingNotif = document.querySelectorAll('.dashboard-notification');
-        existingNotif.forEach(n => n.remove());
-        
+        document.querySelectorAll('.dashboard-notification').forEach(n => n.remove());
+
         const notification = document.createElement('div');
         notification.className = 'dashboard-notification';
-        
+
         const colors = { success: '#10b981', error: '#ef4444', info: '#3b82f6' };
         notification.style.backgroundColor = colors[type] || colors.success;
         notification.innerHTML = `<div class="flex items-center gap-2"><i class="fas ${type === 'success' ? 'fa-check-circle' : (type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle')}"></i><span>${message}</span></div>`;
-        
+
         document.body.appendChild(notification);
-        setTimeout(() => { notification.style.opacity = '0'; setTimeout(() => notification.remove(), 300); }, 3000);
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            setTimeout(() => notification.remove(), 300);
+        }, 3000);
     };
-    
+
     // ========== DASHBOARD SWITCH FUNCTION ==========
     window.switchDashboardRole = async function(roleSlug, currentRole, buttonElement) {
-        console.log('🖱️ switchDashboardRole called with:', roleSlug, 'Current:', currentRole);
-        
         if (roleSlug === currentRole) {
             window.showDashboardNotification(`Already on ${roleSlug.replace('-', ' ')} dashboard`, 'info');
             return false;
         }
-        
+
         if (!csrfToken) {
-            console.error('❌ CSRF token not found');
             window.showDashboardNotification('Security error. Please refresh the page.', 'error');
             return false;
         }
-        
-        // Save original button content if button provided
+
         let originalHTML = null;
         if (buttonElement) {
             originalHTML = buttonElement.innerHTML;
             buttonElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Switching...';
             buttonElement.disabled = true;
         }
-        
+
         try {
-            console.log('📤 Sending POST request to /dashboard/switch');
-            
             const response = await fetch('/dashboard/switch', {
                 method: 'POST',
                 headers: {
@@ -937,21 +930,17 @@
                 },
                 body: JSON.stringify({ role: roleSlug })
             });
-            
+
             const data = await response.json();
-            console.log('📥 Response:', data);
-            
+
             if (response.ok && data.success && data.redirect_url) {
                 window.showDashboardNotification(data.message || `Switching to ${roleSlug.replace('-', ' ')} dashboard...`, 'success');
-                setTimeout(() => {
-                    window.location.href = data.redirect_url;
-                }, 200);
+                setTimeout(() => { window.location.href = data.redirect_url; }, 200);
                 return true;
             } else {
                 throw new Error(data.message || `Server returned ${response.status}`);
             }
         } catch (error) {
-            console.error('❌ Switch error:', error);
             window.showDashboardNotification(error.message || 'Failed to switch dashboard', 'error');
             if (buttonElement && originalHTML) {
                 buttonElement.innerHTML = originalHTML;
@@ -960,13 +949,11 @@
             return false;
         }
     };
-    
+
     // ========== MAIN INITIALIZATION ==========
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('🚀 Field Agent Dashboard Initializing...');
-        console.log('CSRF Token present:', !!csrfToken);
-        
-        // Auto-hide banners after page load
+
+        // Auto-hide banners
         const multiRoleBanner = document.getElementById('multiRoleBanner');
         if (multiRoleBanner) {
             setTimeout(() => {
@@ -974,7 +961,7 @@
                 setTimeout(() => multiRoleBanner.remove(), 500);
             }, 5000);
         }
-        
+
         const agentTipsBanner = document.getElementById('agentTipsBanner');
         if (agentTipsBanner) {
             setTimeout(() => {
@@ -982,103 +969,181 @@
                 setTimeout(() => agentTipsBanner.remove(), 8000);
             }, 8000);
         }
-        
-        // ========== DASHBOARD SWITCHER INITIALIZATION (FIXED) ==========
+
+        // ============================================================
+        // FIX: DASHBOARD SWITCHER with fixed positioning
+        // ============================================================
         function initDashboardSwitcher() {
             const switcherBtn = document.getElementById('dashboardSwitcherBtn');
             const switcherMenu = document.getElementById('dashboardSwitcherMenu');
             const currentRole = '{{ $currentRole }}';
-            
-            console.log('🔧 Dashboard Switcher Init - Current Role:', currentRole);
-            
-            if (!switcherBtn || !switcherMenu) {
-                console.log('⚠️ Dashboard switcher elements not found');
-                return;
+
+            if (!switcherBtn || !switcherMenu) return;
+
+            // Clone the button to remove any stale listeners
+            const btn = switcherBtn.cloneNode(true);
+            switcherBtn.parentNode.replaceChild(btn, switcherBtn);
+
+            /**
+             * Compute the menu's fixed position from the button's
+             * bounding rect. Flip horizontally if there isn't room
+             * on the right side of the viewport.
+             */
+            function positionMenu() {
+                const rect = btn.getBoundingClientRect();
+                const menuWidth = switcherMenu.offsetWidth || 288; // w-72 = 18rem = 288px
+                const menuHeight = switcherMenu.offsetHeight || 0;
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+                const gap = 8;
+
+                // Default: align left edge of menu with left edge of button
+                let left = rect.left;
+
+                // If the menu would overflow the right edge, right-align it
+                if (left + menuWidth > viewportWidth - gap) {
+                    left = rect.right - menuWidth;
+                }
+
+                // If the menu would overflow the left edge, clamp it
+                if (left < gap) {
+                    left = gap;
+                }
+
+                // Vertical: below the button by default
+                let top = rect.bottom + gap;
+
+                // If the menu would overflow the bottom, place it above the button
+                if (top + menuHeight > viewportHeight - gap && rect.top - menuHeight - gap > gap) {
+                    top = rect.top - menuHeight - gap;
+                }
+
+                switcherMenu.style.position = 'fixed';
+                switcherMenu.style.left = left + 'px';
+                switcherMenu.style.top = top + 'px';
+                switcherMenu.style.right = 'auto';
+                switcherMenu.style.bottom = 'auto';
             }
-            
-            // Remove any existing event listeners by cloning
-            const newSwitcherBtn = switcherBtn.cloneNode(true);
-            switcherBtn.parentNode.replaceChild(newSwitcherBtn, switcherBtn);
-            
-            // Toggle dropdown
-            newSwitcherBtn.addEventListener('click', (e) => {
+
+            // Toggle
+            btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 e.preventDefault();
-                console.log('🔘 Dashboard switcher button clicked');
-                switcherMenu.classList.toggle('show');
+
+                const isOpen = switcherMenu.classList.contains('show');
+
+                if (isOpen) {
+                    switcherMenu.classList.remove('show');
+                    return;
+                }
+
+                // Show first (so offsetWidth is measurable), then position
+                switcherMenu.classList.remove('hidden');
+                positionMenu();
+                switcherMenu.classList.add('show');
             });
-            
-            // Close dropdown when clicking outside
+
+            // Close on outside click
             document.addEventListener('click', (e) => {
-                if (!newSwitcherBtn.contains(e.target) && !switcherMenu.contains(e.target)) {
+                if (!btn.contains(e.target) && !switcherMenu.contains(e.target)) {
                     switcherMenu.classList.remove('show');
                 }
             });
-            
-            // Handle each switch option - FIXED: proper event binding
-            const switchOptions = document.querySelectorAll('.dashboard-switch-option');
-            console.log('📋 Switch Options Found:', switchOptions.length);
-            
-            switchOptions.forEach(option => {
-                // Clone to remove existing listeners
-                const newOption = option.cloneNode(true);
-                option.parentNode.replaceChild(newOption, option);
-                
-                newOption.addEventListener('click', (e) => {
+
+            // Close on ESC
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') switcherMenu.classList.remove('show');
+            });
+
+            // Reposition on resize / scroll
+            window.addEventListener('resize', () => {
+                if (switcherMenu.classList.contains('show')) positionMenu();
+            });
+            window.addEventListener('scroll', () => {
+                if (switcherMenu.classList.contains('show')) positionMenu();
+            }, true);
+
+            // ------------------------------------------------------------
+            // FIX: Close the menu when the sidebar is toggled.
+            // The sidebar pushes the content area, which would otherwise
+            // leave the fixed menu floating in the wrong place.
+            // ------------------------------------------------------------
+            ['toggleSidebarDesktop', 'toggleSidebarMobile'].forEach(id => {
+                const t = document.getElementById(id);
+                if (t) {
+                    t.addEventListener('click', () => {
+                        switcherMenu.classList.remove('show');
+                    });
+                }
+            });
+
+            // Also observe the sidebar itself — some layouts toggle a class
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('overlay');
+            if (sidebar) {
+                const obs = new MutationObserver(() => {
+                    if (switcherMenu.classList.contains('show')) {
+                        requestAnimationFrame(positionMenu);
+                    }
+                });
+                obs.observe(sidebar, { attributes: true, attributeFilter: ['class', 'style'] });
+            }
+            if (overlay) {
+                overlay.addEventListener('click', () => switcherMenu.classList.remove('show'));
+            }
+
+            // Wire up each option
+            switcherMenu.querySelectorAll('.dashboard-switch-option').forEach(option => {
+                option.addEventListener('click', (e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    const roleSlug = newOption.dataset.role;
-                    console.log('🎯 Dashboard option clicked:', roleSlug);
+                    const roleSlug = option.dataset.role;
                     switcherMenu.classList.remove('show');
-                    window.switchDashboardRole(roleSlug, currentRole, newSwitcherBtn);
+                    window.switchDashboardRole(roleSlug, currentRole, btn);
                 });
             });
         }
-        
-        // ========== QUICK SWITCH BUTTONS (for banner) ==========
+
+        // ========== QUICK SWITCH BUTTONS (banner) ==========
         function initQuickSwitchButtons() {
-            const quickButtons = document.querySelectorAll('.quick-switch-role');
             const currentRole = '{{ $currentRole }}';
-            
-            quickButtons.forEach(btn => {
+            document.querySelectorAll('.quick-switch-role').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     e.preventDefault();
                     const roleSlug = btn.dataset.role;
-                    console.log('🎯 Quick switch button clicked:', roleSlug);
                     window.switchDashboardRole(roleSlug, currentRole, null);
                 });
             });
         }
-        
-        // Initialize switcher after a short delay to ensure DOM is ready
+
         setTimeout(() => {
             initDashboardSwitcher();
             initQuickSwitchButtons();
         }, 100);
-        
-        // ========== CHART INITIALIZATION ==========
+
+        // ========== CHART DATA ==========
         var registrationTrendData = {!! isset($chartData['registration_trend']) ? json_encode($chartData['registration_trend']) : json_encode(array_fill(0, 12, 0)) !!};
         var trendLabels = {!! isset($chartData['trend_labels']) ? json_encode($chartData['trend_labels']) : json_encode([]) !!};
         var weeklyPerformanceData = {!! isset($chartData['weekly_performance']) ? json_encode($chartData['weekly_performance']) : json_encode(array_fill(0, 7, 0)) !!};
         var weekLabels = {!! isset($chartData['week_labels']) ? json_encode($chartData['week_labels']) : json_encode(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']) !!};
         var planStatusData = {!! isset($chartData['plan_status']) ? json_encode($chartData['plan_status']) : json_encode([]) !!};
-        
+
         var monthlyTarget = {{ $performanceMetrics['monthly_target'] ?? 0 }};
         var monthlyActual = {{ $performanceMetrics['monthly_actual'] ?? 0 }};
         var quarterlyTarget = {{ $performanceMetrics['quarterly_target'] ?? 0 }};
         var quarterlyActual = {{ $performanceMetrics['quarterly_actual'] ?? 0 }};
         var yearlyTarget = {{ $performanceMetrics['yearly_target'] ?? 0 }};
         var yearlyActual = {{ $performanceMetrics['yearly_actual'] ?? 0 }};
-        
+
         var registrationsData = {!! isset($performanceMetrics['monthly_registrations']) ? json_encode($performanceMetrics['monthly_registrations']) : json_encode(array_fill(0, 6, 0)) !!};
         var monthLabels = {!! isset($performanceMetrics['month_labels']) ? json_encode($performanceMetrics['month_labels']) : json_encode(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']) !!};
-        
+
         var primaryColor = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || '#3b82f6';
-        
-        // Registration Trend Chart
+
+        // ----- Registration Trend Chart -----
         var trendChart = null;
         var trendCtx = document.getElementById('registrationTrendChart')?.getContext('2d');
-        
+
         function initTrendChart(months) {
             if (!trendCtx) return;
             var filteredData = registrationTrendData.slice(-months);
@@ -1090,9 +1155,9 @@
                 options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { labels: { color: '#6b7280' } }, tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + ctx.raw + ' properties' } } }, scales: { y: { ticks: { stepSize: 1, color: '#6b7280' }, grid: { color: 'rgba(229,231,235,0.1)' } }, x: { ticks: { color: '#6b7280', maxRotation: 45 }, grid: { color: 'rgba(229,231,235,0.1)' } } } }
             });
         }
-        
+
         if (registrationTrendData.length > 0 && trendCtx) initTrendChart(12);
-        
+
         document.querySelectorAll('.trend-period-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 var months = this.dataset.period === '12months' ? 12 : (this.dataset.period === '6months' ? 6 : 3);
@@ -1101,15 +1166,15 @@
                 if (registrationTrendData.length > 0) initTrendChart(months);
             });
         });
-        
-        // Weekly Performance Chart
+
+        // ----- Weekly Performance Chart -----
         var weeklyChart = null;
         var weeklyCtx = document.getElementById('weeklyPerformanceChart')?.getContext('2d');
         var weeklyDataCurrent = weeklyPerformanceData;
         var weeklyDataPrevious = weeklyPerformanceData.map(v => Math.max(0, v - Math.floor(Math.random() * 3)));
         var weeklyDataMonth = weeklyPerformanceData.length >= 7 ? [weeklyPerformanceData[0] + weeklyPerformanceData[1], weeklyPerformanceData[2] + weeklyPerformanceData[3], weeklyPerformanceData[4] + weeklyPerformanceData[5], weeklyPerformanceData[6]] : [0, 0, 0, 0];
         var monthLabelsWeekly = ['Week 1', 'Week 2', 'Week 3', 'Week 4'];
-        
+
         function initWeeklyChart(period) {
             if (!weeklyCtx) return;
             var data, labels;
@@ -1123,9 +1188,9 @@
                 options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { labels: { color: '#6b7280' } }, tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + ctx.raw + ' properties' } } }, scales: { y: { ticks: { stepSize: 1, color: '#6b7280' }, grid: { color: 'rgba(229,231,235,0.1)' } }, x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(229,231,235,0.1)' } } } }
             });
         }
-        
+
         if (weeklyPerformanceData.length > 0 && weeklyCtx) initWeeklyChart('current');
-        
+
         document.querySelectorAll('.weekly-period-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.weekly-period-btn').forEach(b => { b.classList.remove('active'); b.style.backgroundColor = 'var(--bg-secondary)'; b.style.color = 'var(--text-secondary)'; });
@@ -1133,11 +1198,11 @@
                 initWeeklyChart(this.dataset.period);
             });
         });
-        
-        // Plan Completion Chart
+
+        // ----- Plan Completion Chart -----
         var planChart = null;
         var planCtx = document.getElementById('planCompletionChart')?.getContext('2d');
-        
+
         function initPlanChart(type) {
             if (!planCtx || !planStatusData || planStatusData.length === 0) return;
             if (planChart) planChart.destroy();
@@ -1156,9 +1221,9 @@
                 planChart = new Chart(planCtx, { type: 'bar', data: { labels: planNames, datasets: [{ label: 'Completed', data: completedData, backgroundColor: '#10b981', borderRadius: 8 }, { label: 'Remaining', data: remainingData, backgroundColor: '#f59e0b', borderRadius: 8 }] }, options: { responsive: true, maintainAspectRatio: true, indexAxis: 'y', plugins: { legend: { labels: { color: '#6b7280' } } }, scales: { x: { ticks: { stepSize: 1, color: '#6b7280' } }, y: { ticks: { color: '#6b7280' } } } } });
             }
         }
-        
+
         if (planStatusData && planStatusData.length > 0 && planCtx) initPlanChart('bar');
-        
+
         document.querySelectorAll('.plan-chart-type-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.plan-chart-type-btn').forEach(b => { b.classList.remove('active'); b.style.backgroundColor = 'var(--bg-secondary)'; b.style.color = 'var(--text-secondary)'; });
@@ -1166,8 +1231,8 @@
                 if (planStatusData && planStatusData.length > 0) initPlanChart(this.dataset.type);
             });
         });
-        
-        // Target Achievement
+
+        // ----- Target Achievement -----
         function updateTargetDisplay(period) {
             var achieved, target;
             if (period === 'quarterly') { achieved = quarterlyActual; target = quarterlyTarget; }
@@ -1181,7 +1246,7 @@
             if (statsEl) statsEl.textContent = achieved + ' / ' + target + ' properties';
             if (barEl) barEl.style.width = percentage + '%';
         }
-        
+
         document.querySelectorAll('.target-period-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.target-period-btn').forEach(b => { b.classList.remove('active'); b.style.backgroundColor = 'var(--bg-secondary)'; b.style.color = 'var(--text-secondary)'; });
@@ -1189,11 +1254,11 @@
                 updateTargetDisplay(this.dataset.period);
             });
         });
-        
-        // Performance Metrics Chart
+
+        // ----- Performance Metrics Chart -----
         var metricsChart = null;
         var metricsCtx = document.getElementById('performanceMetricsChart')?.getContext('2d');
-        
+
         function initMetricsChart(metricType) {
             if (!metricsCtx) return;
             if (metricsChart) metricsChart.destroy();
@@ -1207,9 +1272,9 @@
                 options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { labels: { color: '#6b7280' } }, tooltip: { callbacks: { label: (ctx) => ctx.dataset.label + ': ' + ctx.raw + (metricType === 'completion' ? '%' : ' properties') } } }, scales: { y: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(229,231,235,0.1)' } }, x: { ticks: { color: '#6b7280', maxRotation: 45 }, grid: { color: 'rgba(229,231,235,0.1)' } } } }
             });
         }
-        
+
         if (registrationsData.length > 0 && metricsCtx) initMetricsChart('registrations');
-        
+
         document.querySelectorAll('.metric-period-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.metric-period-btn').forEach(b => { b.classList.remove('active'); b.style.backgroundColor = 'var(--bg-secondary)'; b.style.color = 'var(--text-secondary)'; });
@@ -1217,14 +1282,12 @@
                 if (registrationsData.length > 0) initMetricsChart(this.dataset.metric);
             });
         });
-        
-        // Refresh Button
+
+        // ----- Refresh Button -----
         document.getElementById('refreshActivitiesBtn')?.addEventListener('click', function() {
             this.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Refreshing...';
             setTimeout(() => location.reload(), 1000);
         });
-        
-        console.log('✅ Field Agent Dashboard fully initialized');
     });
 </script>
 @endpush

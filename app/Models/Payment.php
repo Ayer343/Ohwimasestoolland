@@ -68,6 +68,7 @@ class Payment extends Model
         'processed_by',
         'refunded_by',
         'created_by',
+        'ad_campaign_id',
         'updated_by'
     ];
 

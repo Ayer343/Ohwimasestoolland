@@ -7,6 +7,7 @@ use App\Models\PropertyType;
 use App\Models\User;
 use App\Models\RegistrationPlan;
 use App\Models\PropertyPhoto;
+use App\Models\Role;                          // ✅ ADDED
 use App\Models\SystemSetting;
 use App\Services\PropertyRegistrationService;
 use App\Services\GoogleMapsService;
@@ -38,17 +39,109 @@ class PropertyController extends Controller
     }
 
     // ================================================================
-    //  CHANNEL STATUS RESOLUTION
+    //  ROLE ASSIGNMENT HELPERS (NEW)
     // ================================================================
 
     /**
-     * Resolve the system-ready flags for SMS, WhatsApp, and Email.
+     * Ensure a role row exists for the given slug; create it if missing.
+     *
+     * This is the safety net for environments where roles were never
+     * seeded. Returning the Role instance lets callers sync its ID
+     * without another query.
      */
+    protected function ensureRoleExists(string $slug): ?Role
+    {
+        try {
+            $role = Role::where('slug', $slug)->first();
+            if ($role) {
+                return $role;
+            }
+
+            $labels = [
+                'landlord' => 'Landlord',
+                'tenant'   => 'Tenant',
+                'admin'    => 'Administrator',
+            ];
+
+            $label = $labels[$slug] ?? ucfirst($slug);
+
+            $role = Role::create([
+                'name'         => $label,
+                'display_name' => $label,
+                'slug'         => $slug,
+                'description'  => "Auto-created {$label} role",
+                'priority'     => 50,
+                'is_system'    => false,
+                'is_default'   => false,
+            ]);
+
+            Log::info('Auto-created missing role', [
+                'slug' => $slug,
+                'id'   => $role->id,
+            ]);
+
+            return $role;
+        } catch (\Throwable $e) {
+            Log::error('Failed to ensure role exists', [
+                'slug'  => $slug,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Attach a Spatie role to a user, creating the role row if needed.
+     *
+     * Handles both `$user->assignRole($roleObject)` and the pivot-metadata
+     * variant used by the `HasRoles` trait, without assuming either.
+     */
+    protected function assignRoleSafely(User $user, string $slug): void
+    {
+        if (!$user || !$user->exists) {
+            return;
+        }
+
+        try {
+            $role = $this->ensureRoleExists($slug);
+            if (!$role) {
+                Log::warning('Skipping role assignment — role row unavailable', [
+                    'user_id' => $user->id,
+                    'slug'    => $slug,
+                ]);
+                return;
+            }
+
+            // Already has it? Skip without a second write.
+            if (method_exists($user, 'hasRole') && $user->hasRole($slug)) {
+                return;
+            }
+
+            // Use syncWithoutDetaching on the relationship — safest and
+            // compatible with pure Spatie plus this codebase's trait.
+            $user->roles()->syncWithoutDetaching([$role->id]);
+
+            Log::info('Role assigned to user', [
+                'user_id' => $user->id,
+                'slug'    => $slug,
+                'role_id' => $role->id,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to assign role to user', [
+                'user_id' => $user->id ?? null,
+                'slug'    => $slug,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+    }
+
+    // ================================================================
+    //  CHANNEL STATUS RESOLUTION
+    // ================================================================
+
     protected function resolveChannelStatuses(): array
     {
-        // --------------------------------------------------------------
-        // SMS
-        // --------------------------------------------------------------
+        // ---------- SMS ----------
         $smsStatus = ['system_ready' => false, 'health' => 'unknown', 'message' => 'SMS service unavailable'];
 
         try {
@@ -83,9 +176,7 @@ class PropertyController extends Controller
                 : 'SMS service is not configured or not ready';
         }
 
-        // --------------------------------------------------------------
-        // WhatsApp
-        // --------------------------------------------------------------
+        // ---------- WhatsApp ----------
         $whatsappStatus = ['system_ready' => false, 'health' => 'unknown', 'message' => 'WhatsApp service unavailable'];
 
         try {
@@ -127,9 +218,7 @@ class PropertyController extends Controller
                 : 'WhatsApp service is not configured';
         }
 
-        // --------------------------------------------------------------
-        // Email
-        // --------------------------------------------------------------
+        // ---------- Email ----------
         $emailStatus = ['system_ready' => false, 'health' => 'unknown', 'message' => 'Email service unavailable'];
 
         try {
@@ -228,15 +317,40 @@ class PropertyController extends Controller
     }
 
     // ================================================================
-    //  ✅ NEW: COORDINATE HELPERS
+    //  REGION / AREA HELPERS
     // ================================================================
 
-    /**
-     * Get the Google Maps browser API key for the map picker.
-     *
-     * Prefers `services.google_maps.browser_key` (restricted key meant
-     * for browser use), falls back to `services.google_maps.key`.
-     */
+    protected function getAvailableRegions(): array
+    {
+        $regions = config('ghana.regions');
+
+        if (is_array($regions) && !empty($regions)) {
+            return $regions;
+        }
+
+        return [
+            'Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern',
+            'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah',
+            'Upper East', 'Upper West', 'Volta', 'Western', 'Western North',
+        ];
+    }
+
+    protected function buildDuplicateCheckData(Request $request, ?Property $existing = null): array
+    {
+        return [
+            'property_name'   => $request->property_name   ?? $existing?->property_name,
+            'street_name'     => $request->street_name     ?? $existing?->street_name,
+            'house_number'    => $request->house_number    ?? $existing?->house_number,
+            'digital_address' => $request->digital_address ?? $existing?->digital_address,
+            'region'          => $request->region          ?? $existing?->region,
+            'area'            => $request->area            ?? $existing?->area,
+        ];
+    }
+
+    // ================================================================
+    //  COORDINATE HELPERS
+    // ================================================================
+
     protected function getGoogleMapsBrowserKey(): ?string
     {
         $key = config('services.google_maps.browser_key')
@@ -245,26 +359,15 @@ class PropertyController extends Controller
         return is_string($key) && $key !== '' ? $key : null;
     }
 
-    /**
-     * ✅ NEW: Attach coordinates to the given property data array.
-     *
-     * Priority:
-     *   1. Coordinates already in the payload (map picker / hidden inputs).
-     *   2. Server-side geocoding via GoogleMapsService using the digital address.
-     *
-     * Returns the same array with `latitude`, `longitude`, `city` set when possible.
-     */
     protected function resolveCoordinates(array $data, bool $onlyIfMissing = false): array
     {
         $hasLat = isset($data['latitude'])  && $data['latitude']  !== '' && $data['latitude']  !== null;
         $hasLng = isset($data['longitude']) && $data['longitude'] !== '' && $data['longitude'] !== null;
 
-        // If both exist and we only care about missing values, do nothing.
         if ($onlyIfMissing && $hasLat && $hasLng) {
             return $data;
         }
 
-        // If neither is provided but digital address is, try to geocode.
         $needsGeocoding = (!$hasLat || !$hasLng);
 
         if ($needsGeocoding && !empty($data['digital_address'])) {
@@ -288,7 +391,6 @@ class PropertyController extends Controller
             }
         }
 
-        // Normalize empty strings to null so the model's mutators behave.
         foreach (['latitude', 'longitude'] as $field) {
             if (array_key_exists($field, $data) && ($data[$field] === '' || $data[$field] === null)) {
                 $data[$field] = null;
@@ -298,22 +400,20 @@ class PropertyController extends Controller
         return $data;
     }
 
-    /**
-     * Display a listing of properties
-     */
+    // ================================================================
+    //  INDEX
+    // ================================================================
+
     public function index(Request $request)
     {
         $query = Property::with(['landlord', 'registrationPlan', 'registeredBy', 'propertyType', 'tenants', 'photos']);
 
-        // Apply filters
         $this->applyFilters($query, $request);
 
-        // Add photo count to the query
         $query->withCount('photos');
 
         $properties = $query->latest()->paginate(20);
 
-        // Get data for filter dropdowns
         $registrationPlans = RegistrationPlan::whereNull('deleted_at')->get();
         $landlords = User::where(function($query) {
             $query->where('type', User::TYPE_LANDLORD)
@@ -323,6 +423,8 @@ class PropertyController extends Controller
         })->get();
         $propertyTypes = PropertyType::active()->ordered()->get();
 
+        $regions = $this->getAvailableRegions();
+
         if ($request->expectsJson()) {
             return response()->json([
                 'success' => true,
@@ -331,12 +433,15 @@ class PropertyController extends Controller
             ]);
         }
 
-        return view($this->getView('properties.index'), compact('properties', 'registrationPlans', 'landlords', 'propertyTypes'));
+        return view($this->getView('properties.index'), compact(
+            'properties',
+            'registrationPlans',
+            'landlords',
+            'propertyTypes',
+            'regions'
+        ));
     }
 
-    /**
-     * Show the form for creating a new property
-     */
     public function create()
     {
         $landlords = User::where(function($query) {
@@ -352,15 +457,13 @@ class PropertyController extends Controller
 
         $propertyTypes = PropertyType::active()->ordered()->get();
 
-        // Resolve channel readiness so the view can correctly gate the
-        // invitation channels (SMS / WhatsApp / Email).
         $channelStatuses = $this->resolveChannelStatuses();
         $smsStatus      = $channelStatuses['smsStatus'];
         $whatsappStatus = $channelStatuses['whatsappStatus'];
         $emailStatus    = $channelStatuses['emailStatus'];
 
-        // ✅ NEW: Google Maps browser key for the coordinate picker
         $googleMapsKey = $this->getGoogleMapsBrowserKey();
+        $regions = $this->getAvailableRegions();
 
         return view($this->getView('properties.create'), compact(
             'landlords',
@@ -369,34 +472,33 @@ class PropertyController extends Controller
             'smsStatus',
             'whatsappStatus',
             'emailStatus',
-            'googleMapsKey'
+            'googleMapsKey',
+            'regions'
         ));
     }
 
     /**
-     * Store a newly created property
+     * Store a newly created property.
      */
     public function store(Request $request)
     {
-        // Validate authorization
         if (!$this->canCreateProperty($request)) {
             return $this->unauthorizedResponse($request, 'Only administrators can register site allocations.');
         }
 
-        // Validate request
         $validator = $this->validatePropertyCreation($request);
         if ($validator->fails()) {
             return $this->validationErrorResponse($request, $validator);
         }
 
-        // Determine if we're dealing with existing or new landlord
         $landlordId = $request->landlord_id;
         $isNewLandlord = empty($landlordId) && !empty($request->landlord_phones);
 
         try {
             DB::beginTransaction();
 
-            // Handle new landlord creation first if needed
+            $landlordTempPassword = null;
+
             if ($isNewLandlord) {
                 $landlordResult = $this->createOrGetLandlord($request);
                 if (!$landlordResult['success']) {
@@ -405,74 +507,102 @@ class PropertyController extends Controller
                 $landlordId = $landlordResult['landlord_id'];
                 $request->merge(['landlord_id' => $landlordId]);
 
-                // After creating/finding landlord, check for duplicates
-                $propertyData = [
-                    'property_name' => $request->property_name,
-                    'street_name' => $request->street_name,
-                    'house_number' => $request->house_number,
-                    'digital_address' => $request->digital_address,
-                ];
+                if (!empty($landlordResult['temporary_password'])) {
+                    $landlordTempPassword = $landlordResult['temporary_password'];
+                }
 
-                if ($this->isDuplicateProperty($landlordId, $propertyData)) {
+                $propertyData = $this->buildDuplicateCheckData($request);
+                $duplicate    = $this->findDuplicateProperty($landlordId, $propertyData);
+
+                if ($duplicate) {
                     $similarProperties = $this->getSimilarProperties($landlordId, $propertyData);
 
                     DB::rollBack();
 
+                    $duplicatePayload = [
+                        'id'              => $duplicate->id,
+                        'property_name'   => $duplicate->property_name,
+                        'street_name'     => $duplicate->street_name,
+                        'house_number'    => $duplicate->house_number,
+                        'digital_address' => $duplicate->digital_address,
+                        'region'          => $duplicate->region,
+                        'area'            => $duplicate->area,
+                        'match_reason'    => $duplicate->_match_reason ?? 'unknown',
+                    ];
+
                     if ($request->expectsJson()) {
                         return response()->json([
-                            'success' => false,
-                            'message' => 'This property already exists for this landlord. Duplicate prevented.',
-                            'similar_properties' => $similarProperties,
-                            'duplicate_prevention' => true
+                            'success'              => false,
+                            'message'              => 'This property already exists for this landlord. Duplicate prevented.',
+                            'similar_properties'   => $similarProperties,
+                            'duplicate_property'   => $duplicatePayload,
+                            'duplicate_prevention' => true,
                         ], 409);
                     }
 
                     return redirect()->back()
                         ->with('error', 'This property already exists for this landlord. Please check the properties below:')
+                        ->with('duplicate_property', $duplicatePayload)
                         ->with('similar_properties', $similarProperties)
                         ->withInput();
                 }
             } else {
-                // Check for duplicates with existing landlord BEFORE creation
-                $propertyData = [
-                    'property_name' => $request->property_name,
-                    'street_name' => $request->street_name,
-                    'house_number' => $request->house_number,
-                    'digital_address' => $request->digital_address,
-                ];
+                $propertyData = $this->buildDuplicateCheckData($request);
+                $duplicate    = $this->findDuplicateProperty($landlordId, $propertyData);
 
-                if ($this->isDuplicateProperty($landlordId, $propertyData)) {
+                if ($duplicate) {
                     $similarProperties = $this->getSimilarProperties($landlordId, $propertyData);
+
+                    $duplicatePayload = [
+                        'id'              => $duplicate->id,
+                        'property_name'   => $duplicate->property_name,
+                        'street_name'     => $duplicate->street_name,
+                        'house_number'    => $duplicate->house_number,
+                        'digital_address' => $duplicate->digital_address,
+                        'region'          => $duplicate->region,
+                        'area'            => $duplicate->area,
+                        'match_reason'    => $duplicate->_match_reason ?? 'unknown',
+                    ];
 
                     if ($request->expectsJson()) {
                         return response()->json([
-                            'success' => false,
-                            'message' => 'This property may already exist for this landlord.',
-                            'similar_properties' => $similarProperties,
-                            'duplicate_prevention' => true
+                            'success'              => false,
+                            'message'              => 'This property may already exist for this landlord.',
+                            'similar_properties'   => $similarProperties,
+                            'duplicate_property'   => $duplicatePayload,
+                            'duplicate_prevention' => true,
                         ], 409);
                     }
 
                     return redirect()->back()
                         ->with('error', 'This property appears to already exist. Please check the properties below:')
+                        ->with('duplicate_property', $duplicatePayload)
                         ->with('similar_properties', $similarProperties)
                         ->withInput();
                 }
             }
 
-            // ✅ NEW: resolve coordinates BEFORE handing off to the service
             $payload = $request->all();
-            $payload = $this->resolveCoordinates($payload, /* onlyIfMissing */ false);
+            $payload = $this->resolveCoordinates($payload, false);
 
-            // Use registration service to create property
+            if (empty($payload['region']) || empty($payload['area'])) {
+                $plan = RegistrationPlan::find($payload['registration_plan_id'] ?? null);
+                if ($plan) {
+                    if (empty($payload['region']) && !empty($plan->region)) {
+                        $payload['region'] = $plan->region;
+                    }
+                    if (empty($payload['area']) && !empty($plan->area)) {
+                        $payload['area'] = $plan->area;
+                    }
+                }
+            }
+
             $result = $this->registrationService->createProperty(
                 $payload,
                 auth()->user()
             );
 
             if ($result['success']) {
-                // ✅ Safety net: ensure coordinates persisted even if the service
-                // did not whitelist them. Only writes if the column is empty.
                 $createdProperty = Property::find($result['site_allocation']['id'] ?? null);
 
                 if ($createdProperty && $createdProperty->has_coordinates === false) {
@@ -481,7 +611,7 @@ class PropertyController extends Controller
                         'latitude'        => $payload['latitude']  ?? null,
                         'longitude'       => $payload['longitude'] ?? null,
                         'city'            => $payload['city']      ?? null,
-                    ], /* onlyIfMissing */ true);
+                    ], true);
 
                     $coordUpdate = array_filter([
                         'latitude'  => $patched['latitude']  ?? null,
@@ -494,7 +624,37 @@ class PropertyController extends Controller
                     }
                 }
 
-                // Handle photo uploads if present
+                if ($createdProperty) {
+                    $regionAreaUpdate = array_filter([
+                        'region' => $payload['region'] ?? null,
+                        'area'   => $payload['area']   ?? null,
+                    ], fn ($v) => $v !== null && $v !== '');
+
+                    if (!empty($regionAreaUpdate)) {
+                        $createdProperty->update($regionAreaUpdate);
+                    }
+                }
+
+                if ($createdProperty && $request->has('is_rented')) {
+                    $createdProperty->update([
+                        'is_rented' => $request->boolean('is_rented'),
+                    ]);
+                }
+
+                if (
+                    $createdProperty
+                    && $request->boolean('is_rented')
+                    && $request->filled('has_tenants')
+                ) {
+                    $createdTenants = $this->attachTenantsToProperty($request, $createdProperty);
+
+                    Log::info('Tenants attached during property registration', [
+                        'property_id'  => $createdProperty->id,
+                        'tenant_count' => count($createdTenants),
+                        'tenant_ids'   => array_map(fn ($t) => $t->id, $createdTenants),
+                    ]);
+                }
+
                 if ($request->hasFile('property_photos')) {
                     $property = $createdProperty ?? Property::find($result['site_allocation']['id']);
                     if ($property) {
@@ -503,6 +663,26 @@ class PropertyController extends Controller
                 }
 
                 DB::commit();
+
+                if (!empty($landlordTempPassword)) {
+                    session()->flash('landlord_temp_password', $landlordTempPassword);
+                    session()->flash('landlord_temp_password_for', $landlordId);
+                }
+
+                try {
+                    $pivotCount = DB::table('property_tenants')
+                        ->where('property_id', $result['site_allocation']['id'] ?? 0)
+                        ->count();
+                } catch (\Throwable $e) {
+                    $pivotCount = -1;
+                }
+                Log::emergency('[properties.store] SUCCESS — about to redirect', [
+                    'property_id'        => $result['site_allocation']['id'] ?? null,
+                    'pivot_tenant_count' => $pivotCount,
+                    'is_rented'          => $request->boolean('is_rented'),
+                    'has_tenants'        => $request->filled('has_tenants'),
+                ]);
+
                 return $this->successResponse($request, $result);
             } else {
                 throw new \Exception($result['message'] ?? 'Failed to create property');
@@ -520,17 +700,17 @@ class PropertyController extends Controller
         }
     }
 
-    /**
-     * Display the specified property
-     */
     public function show(Property $property, Request $request)
     {
-        // Authorization check
+        $user = auth()->user();
+
         if (!$this->canViewProperty($property)) {
-            return $this->unauthorizedResponse($request, 'Unauthorized to view this site allocation.');
+            return $this->unauthorizedResponse($request, 'Unauthorized to view this property.');
         }
 
-        // Load relationships including units
+        $isOwned = (int) $property->landlord_id === (int) $user->id;
+        $property->is_owned = $isOwned;
+
         $property->load([
             'landlord',
             'registrationPlan.continuedFromPlan',
@@ -538,19 +718,16 @@ class PropertyController extends Controller
             'propertyType',
             'tenants',
             'photos',
-            'units'
+            'units',
         ]);
 
-        // Get all tenants (direct + through units)
         $allTenants = $this->getAllTenantsForProperty($property);
 
-        // Also get pending tenant assignments for this property
         $pendingAssignments = \App\Models\PropertyUnit::where('property_id', $property->id)
             ->where('tenant_status', 'pending_approval')
             ->with(['tenant', 'requestedBy'])
             ->get();
 
-        // Get all unit assignments with tenant info for this property
         $unitAssignments = \App\Models\PropertyUnit::where('property_id', $property->id)
             ->whereNotNull('tenant_id')
             ->with(['tenant', 'approvedBy', 'requestedBy'])
@@ -558,12 +735,13 @@ class PropertyController extends Controller
 
         if ($request->expectsJson()) {
             return response()->json([
-                'success' => true,
-                'site_allocation' => $property,
-                'all_tenants' => $allTenants,
+                'success'             => true,
+                'site_allocation'     => $property,
+                'all_tenants'         => $allTenants,
                 'pending_assignments' => $pendingAssignments,
-                'unit_assignments' => $unitAssignments,
-                'message' => 'Site allocation details retrieved successfully'
+                'unit_assignments'    => $unitAssignments,
+                'is_owned'            => $isOwned,
+                'message'             => 'Property details retrieved successfully',
             ]);
         }
 
@@ -575,9 +753,25 @@ class PropertyController extends Controller
         ));
     }
 
-    /**
-     * Get all tenants for a property (direct + through units)
-     */
+    protected function canViewProperty(Property $property): bool
+    {
+        $user = auth()->user();
+
+        if (!$user) {
+            return false;
+        }
+
+        if ((int) $property->landlord_id === (int) $user->id) {
+            return true;
+        }
+
+        return \App\Models\PropertyFamilyLink::query()
+            ->where('property_id', $property->id)
+            ->where('linked_user_id', $user->id)
+            ->where('status', \App\Models\PropertyFamilyLink::STATUS_APPROVED)
+            ->exists();
+    }
+
     private function getAllTenantsForProperty(Property $property)
     {
         $directTenants = $property->tenants;
@@ -604,14 +798,9 @@ class PropertyController extends Controller
             $pendingTenants = \App\Models\User::whereIn('id', $pendingUnitTenantIds)->get();
         }
 
-        $allTenants = $directTenants->merge($unitTenants)->merge($pendingTenants)->unique('id');
-
-        return $allTenants;
+        return $directTenants->merge($unitTenants)->merge($pendingTenants)->unique('id');
     }
 
-    /**
-     * Show the form for editing the specified property
-     */
     public function edit(Property $property)
     {
         if (!$this->canUpdateProperty($property)) {
@@ -634,15 +823,13 @@ class PropertyController extends Controller
 
         $property->load('photos');
 
-        // Resolve channel readiness so the edit view can also gate
-        // invitation channels if it uses them.
         $channelStatuses = $this->resolveChannelStatuses();
         $smsStatus      = $channelStatuses['smsStatus'];
         $whatsappStatus = $channelStatuses['whatsappStatus'];
         $emailStatus    = $channelStatuses['emailStatus'];
 
-        // ✅ NEW: Google Maps browser key for the coordinate picker
         $googleMapsKey = $this->getGoogleMapsBrowserKey();
+        $regions = $this->getAvailableRegions();
 
         return view($this->getView('properties.edit'), compact(
             'property',
@@ -653,15 +840,11 @@ class PropertyController extends Controller
             'smsStatus',
             'whatsappStatus',
             'emailStatus',
-            'googleMapsKey'
+            'googleMapsKey',
+            'regions'
         ));
     }
 
-    /**
-     * Update the specified property
-     * ✅ FIXED: Added support for construction status
-     * ✅ NEW: Preserves/updates coordinates
-     */
     public function update(Request $request, Property $property)
     {
         if (!$this->canUpdateProperty($property)) {
@@ -674,14 +857,9 @@ class PropertyController extends Controller
         }
 
         if ($request->landlord_id != $property->landlord_id) {
-            $propertyData = [
-                'property_name' => $request->property_name ?? $property->property_name,
-                'street_name' => $request->street_name ?? $property->street_name,
-                'house_number' => $request->house_number ?? $property->house_number,
-                'digital_address' => $request->digital_address ?? $property->digital_address,
-            ];
+            $propertyData = $this->buildDuplicateCheckData($request, $property);
 
-            if ($this->isDuplicateProperty($request->landlord_id, $propertyData)) {
+            if ($this->isDuplicateProperty($request->landlord_id, $propertyData, $property->id)) {
                 $similarProperties = $this->getSimilarProperties($request->landlord_id, $propertyData);
 
                 if ($request->expectsJson()) {
@@ -705,6 +883,13 @@ class PropertyController extends Controller
         try {
             $updateData = $validator->validated();
 
+            if ($request->has('region')) {
+                $updateData['region'] = $request->region;
+            }
+            if ($request->has('area')) {
+                $updateData['area'] = $request->area;
+            }
+
             $customType = PropertyType::where('slug', 'custom')->first();
             if ($request->property_type_id == ($customType->id ?? null)) {
                 $updateData['custom_property_type'] = $request->custom_property_type;
@@ -712,11 +897,6 @@ class PropertyController extends Controller
                 $updateData['custom_property_type'] = null;
             }
 
-            // ✅ NEW: coordinate resolution for updates
-            //   1. If the form submitted coordinates, honour them.
-            //   2. If the digital address changed and no coordinates were
-            //      submitted, re-geocode.
-            //   3. If neither, leave the existing coordinates untouched.
             $hasSubmittedCoords = $request->filled('latitude') && $request->filled('longitude');
             $digitalChanged     = $request->filled('digital_address')
                 && $request->digital_address !== $property->digital_address;
@@ -732,7 +912,7 @@ class PropertyController extends Controller
                     'digital_address' => $request->digital_address,
                     'latitude'        => null,
                     'longitude'       => null,
-                ], /* onlyIfMissing */ true);
+                ], true);
 
                 if (!empty($patched['latitude']) && !empty($patched['longitude'])) {
                     $updateData['latitude']  = $patched['latitude'];
@@ -742,12 +922,11 @@ class PropertyController extends Controller
                     }
                 }
             } elseif ($digitalChanged && $property->has_coordinates) {
-                // Digital address changed, existing coordinates present — refresh silently
                 $patched = $this->resolveCoordinates([
                     'digital_address' => $request->digital_address,
                     'latitude'        => null,
                     'longitude'       => null,
-                ], /* onlyIfMissing */ false);
+                ], false);
 
                 if (!empty($patched['latitude']) && !empty($patched['longitude'])) {
                     $updateData['latitude']  = $patched['latitude'];
@@ -758,7 +937,6 @@ class PropertyController extends Controller
                 }
             }
 
-            // ✅ FIXED: Handle construction status if provided
             if ($request->has('construction_status')) {
                 $updateData['construction_status'] = $request->construction_status;
 
@@ -773,7 +951,21 @@ class PropertyController extends Controller
                 }
             }
 
+            if ($request->has('is_rented')) {
+                $updateData['is_rented'] = $request->boolean('is_rented');
+            }
+
             $property->update($updateData);
+
+            if ($request->boolean('is_rented') && $request->filled('has_tenants')) {
+                $attached = $this->attachTenantsToProperty($request, $property);
+
+                Log::info('Tenants synced during property update', [
+                    'property_id'  => $property->id,
+                    'tenant_count' => count($attached),
+                ]);
+            }
+
             $this->handlePhotoManagement($request, $property);
 
             DB::commit();
@@ -796,15 +988,6 @@ class PropertyController extends Controller
         }
     }
 
-    /**
-     * ✅ NEW: Update coordinates only (admin / backfill endpoint)
-     *
-     * Accepts:
-     *   PUT/POST /properties/{property}/coordinates
-     *   { latitude, longitude, city? }
-     *
-     * Falls back to geocoding via the digital address if coords are omitted.
-     */
     public function updateCoordinates(Request $request, Property $property)
     {
         if (!auth()->user()->isAdmin() && !auth()->user()->isSuperAdmin()) {
@@ -824,12 +1007,11 @@ class PropertyController extends Controller
         try {
             $data = $validator->validated();
 
-            // If coordinates were omitted, attempt geocoding from digital address.
             $patched = $this->resolveCoordinates(
                 array_merge([
                     'digital_address' => $property->digital_address,
                 ], $data),
-                /* onlyIfMissing */ true
+                true
             );
 
             $updatePayload = array_filter([
@@ -872,9 +1054,6 @@ class PropertyController extends Controller
         }
     }
 
-    /**
-     * Remove the specified property (soft delete)
-     */
     public function destroy(Property $property, Request $request)
     {
         if (!auth()->user()->isSuperAdmin() && !auth()->user()->isAdmin()) {
@@ -908,98 +1087,48 @@ class PropertyController extends Controller
         }
     }
 
-    // ================================================================
-    // ⭐⭐⭐ myProperties with Statistics ⭐⭐⭐
-    // ================================================================
-
     public function myProperties(Request $request)
     {
         $user = auth()->user();
 
-        $allProperties = Property::with(['registrationPlan', 'propertyType', 'tenants', 'photos'])
-            ->where('landlord_id', $user->id)
+        $allProperties = Property::accessibleBy($user)
+            ->with(['registrationPlan', 'propertyType', 'tenants', 'photos'])
             ->get();
 
-        $stats = [
-            'total' => $allProperties->count(),
-            'active' => $allProperties->where('status', 'active')->count(),
+        $stats = $this->computeMyPropertyStats($allProperties);
 
-            'under_construction' => $allProperties->filter(function($property) {
-                return $property->status === 'under_construction' ||
-                       $property->construction_status === 'under_construction';
-            })->count(),
-
-            'vacant_land' => $allProperties->filter(function($property) {
-                return $property->status === 'vacant' || empty($property->status);
-            })->count(),
-
-            'vacant_land_with_plans' => $allProperties->filter(function($property) {
-                $isVacant = $property->status === 'vacant' || empty($property->status);
-
-                $hasPropertyType = $property->property_type_id !== null && $property->property_type_id != 0;
-                $hasConstructionStatus = $property->construction_status !== null &&
-                                         $property->construction_status !== '' &&
-                                         $property->construction_status !== 'vacant';
-                $hasPlans = $property->has_plans === true ||
-                            $property->has_plans === 1 ||
-                            $property->has_plans === '1' ||
-                            $property->has_plans === 'yes';
-                $hasConstructionDocs = $property->construction_documents &&
-                                       is_array($property->construction_documents) &&
-                                       count($property->construction_documents) > 0;
-                $hasConstructionDetails = $hasPropertyType || $hasConstructionStatus || $hasPlans || $hasConstructionDocs;
-
-                return $isVacant && $hasConstructionDetails;
-            })->count(),
-
-            'vacant_land_no_plans' => $allProperties->filter(function($property) {
-                $isVacant = $property->status === 'vacant' || empty($property->status);
-
-                $hasPropertyType = $property->property_type_id !== null && $property->property_type_id != 0;
-                $hasConstructionStatus = $property->construction_status !== null &&
-                                         $property->construction_status !== '' &&
-                                         $property->construction_status !== 'vacant';
-                $hasPlans = $property->has_plans === true ||
-                            $property->has_plans === 1 ||
-                            $property->has_plans === '1' ||
-                            $property->has_plans === 'yes';
-                $hasConstructionDocs = $property->construction_documents &&
-                                       is_array($property->construction_documents) &&
-                                       count($property->construction_documents) > 0;
-                $hasConstructionDetails = $hasPropertyType || $hasConstructionStatus || $hasPlans || $hasConstructionDocs;
-
-                return $isVacant && !$hasConstructionDetails;
-            })->count(),
-
-            'with_plans' => $allProperties->filter(function($property) {
-                return $property->has_plans === true ||
-                       ($property->construction_documents && count($property->construction_documents) > 0);
-            })->count(),
-
-            'with_digital_address' => $allProperties->whereNotNull('digital_address')->count(),
-
-            // ✅ NEW: coordinate coverage stats
-            'with_coordinates'     => $allProperties->filter(fn ($p) => $p->has_coordinates)->count(),
-            'without_coordinates'  => $allProperties->filter(fn ($p) => !$p->has_coordinates)->count(),
-
-            'rented' => $allProperties->where('is_rented', true)->count(),
-        ];
-
-        $query = Property::with(['registrationPlan', 'propertyType', 'tenants', 'photos'])
-            ->where('landlord_id', $user->id)
+        $query = Property::accessibleBy($user)
+            ->with(['registrationPlan', 'propertyType', 'tenants', 'photos'])
             ->withCount('photos');
 
         $this->applyFilters($query, $request);
+
         $properties = $query->latest()->paginate(20);
 
+        $pageIds = $properties->pluck('id')->all();
+
+        $ownedIds = Property::query()
+            ->where('landlord_id', $user->id)
+            ->whereIn('id', $pageIds)
+            ->pluck('id')
+            ->all();
+
+        $ownedSet = array_flip($ownedIds);
+
+        foreach ($properties as $property) {
+            $property->is_owned = isset($ownedSet[$property->id]);
+        }
+
         $registrationPlans = RegistrationPlan::active()->get();
-        $propertyTypes = PropertyType::active()->ordered()->get();
+        $propertyTypes     = PropertyType::active()->ordered()->get();
+        $regions           = $this->getAvailableRegions();
 
         return view('landlord.properties.my-properties', compact(
             'properties',
             'stats',
             'registrationPlans',
-            'propertyTypes'
+            'propertyTypes',
+            'regions'
         ));
     }
 
@@ -1046,7 +1175,6 @@ class PropertyController extends Controller
 
             'with_digital_address' => $properties->whereNotNull('digital_address')->count(),
 
-            // ✅ NEW: coordinate coverage stats
             'with_coordinates'     => $properties->filter(fn ($p) => $p->has_coordinates)->count(),
             'without_coordinates'  => $properties->filter(fn ($p) => !$p->has_coordinates)->count(),
 
@@ -1056,6 +1184,7 @@ class PropertyController extends Controller
         $registrationPlans = RegistrationPlan::active()->get();
         $propertyTypes = PropertyType::active()->ordered()->get();
         $userRoles = $user->roles->pluck('name')->toArray();
+        $regions   = $this->getAvailableRegions();
 
         if ($request->expectsJson()) {
             return response()->json([
@@ -1072,7 +1201,8 @@ class PropertyController extends Controller
             'stats',
             'registrationPlans',
             'propertyTypes',
-            'userRoles'
+            'userRoles',
+            'regions'
         ));
     }
 
@@ -1130,14 +1260,9 @@ class PropertyController extends Controller
             return $this->unauthorizedResponse($request, 'The selected user does not have landlord privileges.');
         }
 
-        $propertyData = [
-            'property_name' => $property->property_name,
-            'street_name' => $property->street_name,
-            'house_number' => $property->house_number,
-            'digital_address' => $property->digital_address,
-        ];
+        $propertyData = $this->buildDuplicateCheckData($request, $property);
 
-        if ($this->isDuplicateProperty($newLandlord->id, $propertyData)) {
+        if ($this->isDuplicateProperty($newLandlord->id, $propertyData, $property->id)) {
             $similarProperties = $this->getSimilarProperties($newLandlord->id, $propertyData);
 
             if ($request->expectsJson()) {
@@ -1210,6 +1335,8 @@ class PropertyController extends Controller
             'street_name' => 'nullable|string|max:255',
             'house_number' => 'nullable|string|max:50',
             'digital_address' => 'nullable|string|max:255',
+            'region' => 'nullable|string|max:100',
+            'area'   => 'nullable|string|max:150',
         ]);
 
         if ($validator->fails()) {
@@ -1219,12 +1346,7 @@ class PropertyController extends Controller
             ], 422);
         }
 
-        $propertyData = [
-            'property_name' => $request->property_name,
-            'street_name' => $request->street_name,
-            'house_number' => $request->house_number,
-            'digital_address' => $request->digital_address,
-        ];
+        $propertyData = $this->buildDuplicateCheckData($request);
 
         $isDuplicate = $this->isDuplicateProperty($request->landlord_id, $propertyData);
         $similarProperties = [];
@@ -1242,7 +1364,7 @@ class PropertyController extends Controller
     }
 
     // ================================================================
-    // ⭐⭐⭐ CONSTRUCTION DETAILS UPDATE METHODS ⭐⭐⭐
+    // CONSTRUCTION DETAILS UPDATE METHODS
     // ================================================================
 
     public function updateConstruction(Request $request)
@@ -2005,6 +2127,131 @@ class PropertyController extends Controller
         }
     }
 
+    public function landlordUpdateDigitalAddress(Request $request, Property $property)
+    {
+        if ((int) $property->landlord_id !== (int) auth()->id()) {
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You do not own this property.',
+                ], 403);
+            }
+            return redirect()->back()->with('error', 'You do not own this property.');
+        }
+
+        $validator = Validator::make($request->all(), [
+            'digital_address' => 'required|string|max:255',
+            'latitude'        => 'nullable|numeric|between:-90,90',
+            'longitude'       => 'nullable|numeric|between:-180,180',
+            'city'            => 'nullable|string|max:100',
+        ]);
+
+        if ($validator->fails()) {
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed.',
+                    'errors'  => $validator->errors(),
+                ], 422);
+            }
+            return redirect()->back()->withErrors($validator)->withInput();
+        }
+
+        $data = $validator->validated();
+        $newAddress = trim($data['digital_address']);
+
+        $addressChanged = $newAddress !== (string) $property->digital_address;
+
+        if (!$addressChanged) {
+            return $request->expectsJson()
+                ? response()->json([
+                    'success' => true,
+                    'message' => 'Digital address is unchanged.',
+                    'property' => $property->fresh(),
+                ])
+                : redirect()->back()->with('info', 'Digital address is unchanged.');
+        }
+
+        try {
+            $updatePayload = ['digital_address' => $newAddress];
+
+            $hasSubmittedCoords = $request->filled('latitude') && $request->filled('longitude');
+
+            if ($hasSubmittedCoords) {
+                $updatePayload['latitude']  = (float) $data['latitude'];
+                $updatePayload['longitude'] = (float) $data['longitude'];
+                if (!empty($data['city'])) {
+                    $updatePayload['city'] = $data['city'];
+                }
+            } else {
+                $patched = $this->resolveCoordinates([
+                    'digital_address' => $newAddress,
+                    'latitude'        => null,
+                    'longitude'       => null,
+                ], true);
+
+                if (!empty($patched['latitude']) && !empty($patched['longitude'])) {
+                    $updatePayload['latitude']  = $patched['latitude'];
+                    $updatePayload['longitude'] = $patched['longitude'];
+                    if (!empty($patched['city']) && empty($property->city)) {
+                        $updatePayload['city'] = $patched['city'];
+                    }
+                } else {
+                    Log::warning('Digital address updated but geocoding failed', [
+                        'property_id' => $property->id,
+                        'new_address' => $newAddress,
+                    ]);
+                }
+            }
+
+            $oldAddress = $property->digital_address;
+
+            $property->update($updatePayload);
+
+            if (method_exists($property, 'logActivity')) {
+                $property->logActivity(
+                    'digital_address_updated',
+                    'Digital address updated by: ' . auth()->user()->name
+                        . ' | From: ' . ($oldAddress ?: 'N/A')
+                        . ' | To: ' . $newAddress
+                );
+            }
+
+            Log::info('Landlord updated digital address', [
+                'property_id'   => $property->id,
+                'landlord_id'   => auth()->id(),
+                'old_address'   => $oldAddress,
+                'new_address'   => $newAddress,
+                'has_coords'    => $property->fresh()->has_coordinates,
+            ]);
+
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success'  => true,
+                    'message'  => 'Digital address updated successfully.',
+                    'property' => $property->fresh(),
+                    'geocoded' => !empty($updatePayload['latitude']),
+                ]);
+            }
+
+            return redirect()->back()->with('success', 'Digital address updated successfully.');
+
+        } catch (\Throwable $e) {
+            Log::error('Failed to update digital address: ' . $e->getMessage(), [
+                'property_id' => $property->id,
+                'landlord_id' => auth()->id(),
+            ]);
+
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Failed to update digital address. Please try again.',
+                ], 500);
+            }
+            return redirect()->back()->with('error', 'Failed to update digital address. Please try again.');
+        }
+    }
+
     // ==================== HELPER METHODS ====================
 
     private function applyFilters($query, Request $request)
@@ -2013,6 +2260,9 @@ class PropertyController extends Controller
             'street_name' => 'like',
             'landlord_id' => 'exact',
             'zone' => 'like',
+            'section' => 'like',
+            'region' => 'exact',
+            'area'   => 'like',
             'status' => 'exact',
             'digital_address' => 'like',
             'registration_plan_id' => 'exact',
@@ -2056,12 +2306,21 @@ class PropertyController extends Controller
             }
         }
 
-        // ✅ NEW: coordinate filters
         if ($request->has('has_coordinates') && $request->has_coordinates !== '') {
             if ($request->has_coordinates === '1') {
                 $query->hasCoordinates();
             } elseif ($request->has_coordinates === '0') {
                 $query->missingCoordinates();
+            }
+        }
+
+        if ($request->has('has_region') && $request->has_region !== '') {
+            if ($request->has_region === '1') {
+                $query->whereNotNull('region')->where('region', '!=', '');
+            } elseif ($request->has_region === '0') {
+                $query->where(function ($q) {
+                    $q->whereNull('region')->orWhere('region', '');
+                });
             }
         }
     }
@@ -2084,7 +2343,8 @@ class PropertyController extends Controller
             'digital_address' => 'nullable|string|max:255',
             'zone' => 'nullable|string|max:100',
             'section' => 'nullable|string|max:100',
-            // ✅ NEW: coordinates + city
+            'region' => 'required|string|max:100',
+            'area'   => 'required|string|max:150',
             'latitude'  => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'city'      => 'nullable|string|max:100',
@@ -2092,6 +2352,17 @@ class PropertyController extends Controller
             'status' => 'sometimes|in:active,inactive,under_maintenance,vacant',
             'registration_date' => 'required|date',
             'property_photos' => 'nullable|array|max:10',
+
+            'is_rented'   => 'sometimes|boolean',
+            'has_tenants' => 'sometimes|boolean',
+            'tenants'     => 'nullable|array|max:10',
+            'tenants.*.name'     => 'required_with:tenants|string|max:255',
+            'tenants.*.phone'    => 'required_with:tenants|string|max:20',
+            'tenants.*.email'    => 'nullable|email|max:255',
+            'tenants.*.gender'   => 'nullable|in:male,female,other',
+            'tenants.*.notes'    => 'nullable|string|max:1000',
+            'tenants.*.channels'   => 'required_with:tenants|array|min:1',
+            'tenants.*.channels.*' => 'in:sms,whatsapp,email',
         ];
 
         $messages = [
@@ -2109,6 +2380,12 @@ class PropertyController extends Controller
             'landlord_phones.*.max' => 'Each phone number must not exceed 15 characters.',
             'latitude.between' => 'Latitude must be between -90 and 90.',
             'longitude.between' => 'Longitude must be between -180 and 180.',
+            'region.required' => 'Please select the region where the property is located.',
+            'area.required'   => 'Please enter the area/neighbourhood of the property.',
+            'tenants.*.name.required_with'     => 'Each tenant needs a name.',
+            'tenants.*.phone.required_with'    => 'Each tenant needs a phone number.',
+            'tenants.*.channels.required_with' => 'Each tenant needs at least one invitation channel.',
+            'tenants.*.channels.min'           => 'Each tenant needs at least one invitation channel.',
         ];
 
         $validator = Validator::make($request->all(), $rules, $messages);
@@ -2153,6 +2430,21 @@ class PropertyController extends Controller
                     }
                 }
             }
+
+            if ($request->filled('has_tenants') && is_array($request->input('tenants'))) {
+                foreach ($request->input('tenants') as $i => $tenant) {
+                    if (!is_array($tenant)) {
+                        continue;
+                    }
+                    $clean = preg_replace('/\D/', '', (string) ($tenant['phone'] ?? ''));
+                    if (!empty($tenant['phone']) && strlen($clean) < 10) {
+                        $validator->errors()->add(
+                            "tenants.{$i}.phone",
+                            'Each tenant phone number must contain at least 10 digits.'
+                        );
+                    }
+                }
+            }
         });
 
         return $validator;
@@ -2172,7 +2464,8 @@ class PropertyController extends Controller
             'digital_address' => 'nullable|string|max:255',
             'zone' => 'nullable|string|max:100',
             'section' => 'nullable|string|max:100',
-            // ✅ NEW: coordinates + city
+            'region' => 'required|string|max:100',
+            'area'   => 'required|string|max:150',
             'latitude'  => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'city'      => 'nullable|string|max:100',
@@ -2186,7 +2479,175 @@ class PropertyController extends Controller
             'property_photos.*' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
             'delete_photos' => 'nullable|string',
             'primary_photo_id' => 'nullable|exists:property_photos,id',
+
+            'is_rented'   => 'sometimes|boolean',
+            'has_tenants' => 'sometimes|boolean',
+            'tenants'     => 'nullable|array|max:10',
+            'tenants.*.name'     => 'required_with:tenants|string|max:255',
+            'tenants.*.phone'    => 'required_with:tenants|string|max:20',
+            'tenants.*.email'    => 'nullable|email|max:255',
+            'tenants.*.gender'   => 'nullable|in:male,female,other',
+            'tenants.*.notes'    => 'nullable|string|max:1000',
+            'tenants.*.channels'   => 'required_with:tenants|array|min:1',
+            'tenants.*.channels.*' => 'in:sms,whatsapp,email',
         ]);
+    }
+
+    /**
+     * ✅ FIXED: Create tenant users and attach them to the property.
+     *
+     * The tenant role is applied via `assignRoleSafely()`, which:
+     *   • ensures the role row exists (auto-creates if missing),
+     *   • uses `syncWithoutDetaching` so pre-existing roles are kept,
+     *   • logs success/failure for visibility.
+     */
+    private function attachTenantsToProperty(Request $request, Property $property): array
+    {
+        $rows = $request->input('tenants', []);
+        if (!is_array($rows) || empty($rows)) {
+            return [];
+        }
+
+        $attached = [];
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $name  = trim((string) ($row['name']  ?? ''));
+            $phone = preg_replace('/\D/', '', (string) ($row['phone'] ?? ''));
+
+            if ($name === '' || strlen($phone) < 10) {
+                continue;
+            }
+
+            $email    = isset($row['email'])  && $row['email']  !== '' ? $row['email']  : null;
+            $gender   = isset($row['gender']) && $row['gender'] !== '' ? $row['gender'] : null;
+            $notes    = isset($row['notes'])  && $row['notes']  !== '' ? $row['notes']  : null;
+            $channels = is_array($row['channels'] ?? null) ? array_values($row['channels']) : [];
+
+            $tenant = User::findByAnyPhoneFormat($phone);
+
+            if (!$tenant) {
+                $tenant = User::create([
+                    'name'              => $name,
+                    'phone'             => $phone,
+                    'email'             => $email,
+                    'gender'            => $gender,
+                    'type'              => defined(User::class . '::TYPE_TENANT') ? User::TYPE_TENANT : User::TYPE_LANDLORD,
+                    'status'            => User::STATUS_ACTIVE,
+                    'created_by'        => auth()->id(),
+                    'password'          => Hash::make(Str::random(16)),
+                    'email_verified_at' => $email ? now() : null,
+                    'phone_verified_at' => now(),
+                ]);
+
+                Log::info('Tenant user created during property registration', [
+                    'tenant_id'   => $tenant->id,
+                    'property_id' => $property->id,
+                    'name'        => $name,
+                    'phone'       => $phone,
+                    'has_email'   => !empty($email),
+                ]);
+
+                // ✅ FIX: use safe role assignment helper
+                $this->assignRoleSafely($tenant, 'tenant');
+            } else {
+                $tenantUpdates = [];
+                if ($name && $tenant->name !== $name) {
+                    $tenantUpdates['name'] = $name;
+                }
+                if ($gender && $tenant->gender !== $gender) {
+                    $tenantUpdates['gender'] = $gender;
+                }
+                if ($email && $tenant->email !== $email) {
+                    $tenantUpdates['email'] = $email;
+                }
+                if (!empty($tenantUpdates)) {
+                    $tenant->update($tenantUpdates);
+                }
+
+                // ✅ FIX: also make sure existing tenant users carry the role
+                $this->assignRoleSafely($tenant, 'tenant');
+            }
+
+            $property->tenants()->syncWithoutDetaching([$tenant->id]);
+
+            try {
+                if (method_exists($property->tenants(), 'updateExistingPivot')) {
+                    $property->tenants()->updateExistingPivot($tenant->id, [
+                        'channels' => json_encode($channels),
+                        'notes'    => $notes,
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                Log::debug('Tenant pivot metadata not stored', [
+                    'property_id' => $property->id,
+                    'tenant_id'   => $tenant->id,
+                    'error'       => $e->getMessage(),
+                ]);
+            }
+
+            $attached[] = $tenant;
+        }
+
+        return $attached;
+    }
+
+    private function findDuplicateProperty($landlordId, array $propertyData, ?int $ignorePropertyId = null): ?Property
+    {
+        if (!$landlordId) {
+            return null;
+        }
+
+        $baseQuery = Property::query()
+            ->where('landlord_id', $landlordId)
+            ->whereNull('deleted_at');
+
+        if ($ignorePropertyId) {
+            $baseQuery->where('id', '!=', $ignorePropertyId);
+        }
+
+        if (!empty($propertyData['property_name'])) {
+            $match = (clone $baseQuery)
+                ->where('property_name', $propertyData['property_name'])
+                ->first();
+            if ($match) {
+                $match->_match_reason = 'property_name';
+                return $match;
+            }
+        }
+
+        if (!empty($propertyData['digital_address']) && !empty($propertyData['house_number'])) {
+            $match = (clone $baseQuery)
+                ->where('digital_address', $propertyData['digital_address'])
+                ->where('house_number', $propertyData['house_number'])
+                ->first();
+            if ($match) {
+                $match->_match_reason = 'digital_address + house_number';
+                return $match;
+            }
+        }
+
+        if (!empty($propertyData['street_name']) && !empty($propertyData['house_number'])) {
+            $q = (clone $baseQuery)
+                ->where('street_name', $propertyData['street_name'])
+                ->where('house_number', $propertyData['house_number']);
+            if (!empty($propertyData['region'])) {
+                $q->where('region', $propertyData['region']);
+            }
+            if (!empty($propertyData['area'])) {
+                $q->where('area', $propertyData['area']);
+            }
+            $match = $q->first();
+            if ($match) {
+                $match->_match_reason = 'street_name + house_number + region/area';
+                return $match;
+            }
+        }
+
+        return null;
     }
 
     private function hasConstructionDetails(Property $property): bool
@@ -2214,31 +2675,66 @@ class PropertyController extends Controller
                ($property->construction_status === 'active' && $this->hasConstructionDetails($property));
     }
 
-    private function isDuplicateProperty($landlordId, array $propertyData): bool
+    private function isDuplicateProperty($landlordId, array $propertyData, ?int $ignorePropertyId = null): bool
     {
-        if (!$landlordId) return false;
+        if (!$landlordId) {
+            return false;
+        }
 
-        if (!empty($propertyData['digital_address'])) {
-            if (Property::where('digital_address', $propertyData['digital_address'])
-                ->where('landlord_id', $landlordId)
+        $baseQuery = Property::query()
+            ->where('landlord_id', $landlordId)
+            ->whereNull('deleted_at');
+
+        if ($ignorePropertyId) {
+            $baseQuery->where('id', '!=', $ignorePropertyId);
+        }
+
+        if (!empty($propertyData['property_name'])) {
+            if ((clone $baseQuery)
+                ->where('property_name', $propertyData['property_name'])
                 ->exists()) {
+                Log::emergency('[isDuplicateProperty] MATCH on property_name', [
+                    'landlord_id'   => $landlordId,
+                    'property_name' => $propertyData['property_name'],
+                ]);
                 return true;
             }
         }
 
-        if (!empty($propertyData['property_name'])) {
-            if (Property::where('property_name', $propertyData['property_name'])
-                ->where('landlord_id', $landlordId)
+        if (!empty($propertyData['digital_address']) && !empty($propertyData['house_number'])) {
+            if ((clone $baseQuery)
+                ->where('digital_address', $propertyData['digital_address'])
+                ->where('house_number', $propertyData['house_number'])
                 ->exists()) {
+                Log::emergency('[isDuplicateProperty] MATCH on digital_address + house_number', [
+                    'landlord_id'     => $landlordId,
+                    'digital_address' => $propertyData['digital_address'],
+                    'house_number'    => $propertyData['house_number'],
+                ]);
                 return true;
             }
         }
 
         if (!empty($propertyData['street_name']) && !empty($propertyData['house_number'])) {
-            if (Property::where('street_name', $propertyData['street_name'])
-                ->where('house_number', $propertyData['house_number'])
-                ->where('landlord_id', $landlordId)
-                ->exists()) {
+            $q = (clone $baseQuery)
+                ->where('street_name', $propertyData['street_name'])
+                ->where('house_number', $propertyData['house_number']);
+
+            if (!empty($propertyData['region'])) {
+                $q->where('region', $propertyData['region']);
+            }
+            if (!empty($propertyData['area'])) {
+                $q->where('area', $propertyData['area']);
+            }
+
+            if ($q->exists()) {
+                Log::emergency('[isDuplicateProperty] MATCH on street + house + region/area', [
+                    'landlord_id'   => $landlordId,
+                    'street_name'   => $propertyData['street_name'],
+                    'house_number'  => $propertyData['house_number'],
+                    'region'        => $propertyData['region'] ?? null,
+                    'area'          => $propertyData['area']   ?? null,
+                ]);
                 return true;
             }
         }
@@ -2272,6 +2768,8 @@ class PropertyController extends Controller
                     'digital_address' => $property->digital_address,
                     'street_name' => $property->street_name,
                     'house_number' => $property->house_number,
+                    'region' => $property->region,
+                    'area'   => $property->area,
                     'similarity' => round($similarity, 2),
                     'has_photo' => $property->has_photos,
                 ];
@@ -2285,6 +2783,9 @@ class PropertyController extends Controller
         return array_slice($similar, 0, 5);
     }
 
+    /**
+     * ✅ FIXED: Resolve or create a landlord, ALWAYS attach the landlord role.
+     */
     private function createOrGetLandlord(Request $request): array
     {
         $phone = $request->landlord_phones[0] ?? null;
@@ -2296,46 +2797,45 @@ class PropertyController extends Controller
         $existingLandlord = User::findByAnyPhoneFormat($phone);
 
         if ($existingLandlord) {
-            if (!$existingLandlord->isLandlord()) {
-                $existingLandlord->assignRole('landlord', [
-                    'assigned_by' => auth()->id(),
-                    'assignment_reason' => 'Auto-assigned during property registration',
-                    'assigned_at' => now(),
-                ]);
-            }
+            // ✅ ensure they carry the landlord role
+            $this->assignRoleSafely($existingLandlord, 'landlord');
 
             return [
-                'success' => true,
-                'landlord_id' => $existingLandlord->id,
-                'was_existing' => true
+                'success'      => true,
+                'landlord_id'  => $existingLandlord->id,
+                'was_existing' => true,
             ];
         }
 
         $temporaryPassword = Str::random(16);
 
         $landlord = User::create([
-            'name' => $request->landlord_name,
-            'phone' => $phone,
-            'email' => $request->landlord_email,
-            'type' => User::TYPE_LANDLORD,
-            'status' => User::STATUS_ACTIVE,
-            'created_by' => auth()->id(),
+            'name'              => $request->landlord_name,
+            'phone'             => $phone,
+            'email'             => $request->landlord_email,
+            'type'              => User::TYPE_LANDLORD,
+            'status'            => User::STATUS_ACTIVE,
+            'created_by'        => auth()->id(),
             'email_verified_at' => now(),
             'phone_verified_at' => now(),
-            'password' => Hash::make($temporaryPassword),
+            'password'          => Hash::make($temporaryPassword),
         ]);
 
-        $landlord->assignRole('landlord', [
-            'assigned_by' => auth()->id(),
-            'assignment_reason' => 'Created during property registration',
-            'assigned_at' => now(),
+        // ✅ safe role assignment
+        $this->assignRoleSafely($landlord, 'landlord');
+
+        Log::info('Landlord user created during property registration', [
+            'landlord_id' => $landlord->id,
+            'name'        => $request->landlord_name,
+            'phone'       => $phone,
+            'has_email'   => !empty($request->landlord_email),
         ]);
 
         return [
-            'success' => true,
-            'landlord_id' => $landlord->id,
-            'was_existing' => false,
-            'temporary_password' => $temporaryPassword
+            'success'            => true,
+            'landlord_id'        => $landlord->id,
+            'was_existing'       => false,
+            'temporary_password' => $temporaryPassword,
         ];
     }
 
@@ -2367,12 +2867,10 @@ class PropertyController extends Controller
             return response()->json($result, 201);
         }
 
-        $successMessage = 'Site allocation registered successfully!';
-
-        return back()
-            ->with('success', $successMessage)
-            ->with('new_property_id', $result['site_allocation']['id'] ?? null)
-            ->withInput();
+        return redirect()
+            ->route('properties.index')
+            ->with('success', 'Site allocation registered successfully!')
+            ->with('new_property_id', $result['site_allocation']['id'] ?? null);
     }
 
     private function errorResponse(Request $request, $message)
@@ -2449,39 +2947,128 @@ class PropertyController extends Controller
             ], 500);
         }
     }
+
     public function geocodeDigitalAddress(Request $request)
-{
-    $validator = Validator::make($request->all(), [
-        'digital_address' => 'required|string|max:255',
-    ]);
+    {
+        $validator = Validator::make($request->all(), [
+            'digital_address' => 'required|string|max:255',
+        ]);
 
-    if ($validator->fails()) {
-        return response()->json(['success' => false, 'message' => 'Invalid digital address.'], 422);
-    }
-
-    try {
-        $coords = app(\App\Services\GoogleMapsService::class)
-            ->geocodeDigitalAddress((string) $request->digital_address);
-
-        if ($coords && isset($coords['lat'], $coords['lng'])) {
-            return response()->json([
-                'success'   => true,
-                'latitude'  => $coords['lat'],
-                'longitude' => $coords['lng'],
-                'city'      => $coords['city'] ?? null,
-                'source'    => $coords['source'] ?? 'geocoder',
-            ]);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Invalid digital address.'], 422);
         }
 
-        return response()->json([
-            'success' => false,
-            'message' => 'Could not resolve the digital address. Please drag the pin manually.',
-        ], 422);
+        try {
+            $coords = app(\App\Services\GoogleMapsService::class)
+                ->geocodeDigitalAddress((string) $request->digital_address);
 
-    } catch (\Throwable $e) {
-        Log::warning('Geocode request failed', ['error' => $e->getMessage()]);
-        return response()->json(['success' => false, 'message' => 'Geocoding failed.'], 500);
+            if ($coords && isset($coords['lat'], $coords['lng'])) {
+                return response()->json([
+                    'success'   => true,
+                    'latitude'  => $coords['lat'],
+                    'longitude' => $coords['lng'],
+                    'city'      => $coords['city'] ?? null,
+                    'source'    => $coords['source'] ?? 'geocoder',
+                ]);
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Could not resolve the digital address. Please drag the pin manually.',
+            ], 422);
+
+        } catch (\Throwable $e) {
+            Log::warning('Geocode request failed', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Geocoding failed.'], 500);
+        }
     }
-}
 
+    protected function computeMyPropertyStats($properties): array
+    {
+        $stats = [
+            'total'                  => $properties->count(),
+            'active'                 => 0,
+            'under_construction'     => 0,
+            'vacant_land'            => 0,
+            'vacant_land_with_plans' => 0,
+            'vacant_land_no_plans'   => 0,
+            'with_plans'             => 0,
+            'with_digital_address'   => 0,
+            'with_coordinates'       => 0,
+            'without_coordinates'    => 0,
+            'rented'                 => 0,
+            'with_region'            => 0,
+            'without_region'         => 0,
+            'with_area'              => 0,
+        ];
+
+        foreach ($properties as $property) {
+            if ($property->status === 'active') {
+                $stats['active']++;
+            }
+
+            if ($property->status === 'under_construction'
+                || $property->construction_status === 'under_construction'
+            ) {
+                $stats['under_construction']++;
+            }
+
+            $isVacant = $property->status === 'vacant' || empty($property->status);
+
+            if ($isVacant) {
+                $stats['vacant_land']++;
+
+                if ($this->hasConstructionDetails($property)) {
+                    $stats['vacant_land_with_plans']++;
+                } else {
+                    $stats['vacant_land_no_plans']++;
+                }
+            }
+
+            if ($this->hasPlans($property)) {
+                $stats['with_plans']++;
+            }
+
+            if (!empty($property->digital_address)) {
+                $stats['with_digital_address']++;
+            }
+
+            if ($property->has_coordinates) {
+                $stats['with_coordinates']++;
+            } else {
+                $stats['without_coordinates']++;
+            }
+
+            if (!empty($property->region)) {
+                $stats['with_region']++;
+            } else {
+                $stats['without_region']++;
+            }
+
+            if (!empty($property->area)) {
+                $stats['with_area']++;
+            }
+
+            if ($property->is_rented) {
+                $stats['rented']++;
+            }
+        }
+
+        return $stats;
+    }
+
+    protected function hasPlans($property): bool
+    {
+        if ($property->has_plans === true
+            || $property->has_plans === 1
+            || $property->has_plans === '1'
+            || $property->has_plans === 'yes'
+        ) {
+            return true;
+        }
+
+        $docs = $property->construction_documents ?? null;
+
+        return is_array($docs) && count($docs) > 0;
+    }
 }

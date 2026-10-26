@@ -7,11 +7,6 @@
      |--------------------------------------------------------------------------
      | Communication-channel availability
      |--------------------------------------------------------------------------
-     | Priority for each channel:
-     |   1. The status array passed by the controller (preferred).
-     |   2. A live service call, if the variable wasn't passed.
-     |   3. A per-service fallback key (e.g. `configured`) when
-     |      `system_ready` is missing or null.
      */
 
     // ---------- SMS ----------
@@ -99,11 +94,93 @@
     $tenantInvitationResult   = session('tenant_invitation_result');
 
     // ============================================================
-    // ✅ NEW: Google Maps key for the coordinate picker
+    // ✅ Duplicate-prevention payload
+    // ============================================================
+    // The controller may deliver this several ways:
+    //   1. session('duplicate_property')           (normal flash)
+    //   2. session()->get('duplicate_property')    (retrieved flash)
+    //   3. $errors->first('duplicate_property')    (if it was ever validated)
+    //   4. legacy: session('error') containing "duplicate"
+    //
+    // We try each, normalize to an array, and only render the banner
+    // if we actually have something meaningful to show.
+    $duplicateProperty = session('duplicate_property')
+        ?? session()->get('duplicate_property')
+        ?? null;
+
+    // Defensive: if it came back as a JSON string, decode it.
+    if (is_string($duplicateProperty) && $duplicateProperty !== '') {
+        $decoded = json_decode($duplicateProperty, true);
+        if (is_array($decoded)) {
+            $duplicateProperty = $decoded;
+        }
+    }
+
+    // If nothing landed in session, look for it in the validation error bag.
+    if (empty($duplicateProperty) && isset($errors) && $errors->has('duplicate_property')) {
+        $raw = $errors->first('duplicate_property');
+        $decoded = is_string($raw) ? json_decode($raw, true) : null;
+        if (is_array($decoded)) {
+            $duplicateProperty = $decoded;
+        }
+    }
+
+    $similarProperties = session('similar_properties')
+        ?? session()->get('similar_properties')
+        ?? [];
+    if (!is_array($similarProperties)) {
+        $similarProperties = [];
+    }
+
+    // Normalize: ensure `id` + at least a name exist before rendering.
+    $hasDuplicateBanner = is_array($duplicateProperty)
+        && (!empty($duplicateProperty['id']) || !empty($duplicateProperty['property_name']));
+
+    // Fallback: if the controller only flashed a plain error string that
+    // mentions "duplicate", show a lightweight banner so the user isn't
+    // left wondering why the save failed.
+    $plainDuplicateError = null;
+    if (!$hasDuplicateBanner) {
+        $err = session('error');
+        if (is_string($err) && $err !== '' && stripos($err, 'duplicate') !== false) {
+            $plainDuplicateError = $err;
+            $hasDuplicateBanner  = true;
+        }
+    }
+
+    // ============================================================
+    // ✅ Google Maps key for the coordinate picker
     // ============================================================
     $googleMapsKey = $googleMapsKey
         ?? config('services.google_maps.browser_key')
         ?? config('services.google_maps.key');
+
+    // ============================================================
+    // ✅ Region list for the region picker
+    // ============================================================
+    if (!isset($regions) || !is_array($regions)) {
+        $regions = config('ghana.regions', [
+            'Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern',
+            'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah',
+            'Upper East', 'Upper West', 'Volta', 'Western', 'Western North',
+        ]);
+    }
+
+    // ============================================================
+    // ✅ Landlord mode — decides which block is visible on first paint
+    // ============================================================
+    $oldLandlordPhones = old('landlord_phones', []);
+    if (!is_array($oldLandlordPhones)) {
+        $oldLandlordPhones = [];
+    }
+    $oldLandlordPhones = array_values(array_filter($oldLandlordPhones, fn ($v) => $v !== null && $v !== ''));
+
+    $initialLandlordMode = 'choose';
+    if (!empty(old('landlord_id'))) {
+        $initialLandlordMode = 'existing';
+    } elseif (!empty($oldLandlordPhones) || old('landlord_name') || old('landlord_email')) {
+        $initialLandlordMode = 'new';
+    }
 @endphp
 
 @section('content')
@@ -133,8 +210,8 @@
     </div>
     @endif
 
-    <!-- Error Message for Duplicate Pattern -->
-    @if(session('error'))
+    <!-- Error Message -->
+    @if(session('error') && !$hasDuplicateBanner)
     <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
         <strong class="font-bold">Error!</strong>
         <span class="block sm:inline">{{ session('error') }}</span>
@@ -142,6 +219,136 @@
             <i class="fas fa-times"></i>
         </button>
     </div>
+    @endif
+
+    {{-- ============================================================ --}}
+    {{-- ✅ DUPLICATE PROPERTY BANNER                                 --}}
+    {{-- Renders whenever PropertyController::store() redirects back   --}}
+    {{-- with `duplicate_property` + `similar_properties` in session.  --}}
+    {{-- Falls back to a lightweight banner if only an `error` string  --}}
+    {{-- mentioning "duplicate" was flashed.                           --}}
+    {{-- ============================================================ --}}
+    @if($hasDuplicateBanner)
+        <div id="duplicate-property-banner"
+             class="border-2 rounded-lg p-5 mb-4"
+             style="background-color: rgba(var(--danger-rgb, 239, 68, 68), 0.08); border-color: var(--danger, #ef4444);"
+             role="alert">
+            <div class="flex items-start gap-3">
+                <div class="flex-shrink-0 mt-0.5">
+                    <i class="fas fa-exclamation-triangle text-2xl" style="color: var(--danger, #ef4444);"></i>
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-base font-semibold mb-1" style="color: var(--text-primary);">
+                        Duplicate property prevented
+                    </h3>
+
+                    @if($plainDuplicateError)
+                        <p class="text-sm mb-3" style="color: var(--text-secondary);">
+                            {{ $plainDuplicateError }}
+                        </p>
+                        <p class="text-sm mb-3" style="color: var(--text-secondary);">
+                            The new record was <strong>not</strong> created. Your previously-entered
+                            form data has been restored below.
+                        </p>
+                    @else
+                        <p class="text-sm mb-3" style="color: var(--text-secondary);">
+                            A property matching this landlord already exists. The new record was
+                            <strong>not</strong> created. Review the match below before trying again.
+                        </p>
+
+                        {{-- Matched property card --}}
+                        <div class="rounded-lg p-4 mb-3"
+                             style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2 mb-1 flex-wrap">
+                                        <span class="font-semibold" style="color: var(--text-primary);">
+                                            {{ $duplicateProperty['property_name'] ?? 'Unnamed property' }}
+                                        </span>
+                                        <span class="text-xs px-2 py-0.5 rounded-full"
+                                              style="background-color: rgba(var(--danger-rgb, 239, 68, 68), 0.15); color: var(--danger, #ef4444);">
+                                            <i class="fas fa-copy mr-1"></i>
+                                            Match: {{ str_replace('_', ' ', $duplicateProperty['match_reason'] ?? 'unknown') }}
+                                        </span>
+                                    </div>
+                                    <div class="text-sm space-y-0.5" style="color: var(--text-secondary);">
+                                        @if(!empty($duplicateProperty['digital_address']))
+                                            <div><i class="fas fa-map-pin mr-1 w-4 text-center"></i>{{ $duplicateProperty['digital_address'] }}</div>
+                                        @endif
+                                        @if(!empty($duplicateProperty['street_name']) || !empty($duplicateProperty['house_number']))
+                                            <div>
+                                                <i class="fas fa-road mr-1 w-4 text-center"></i>
+                                                {{ trim(($duplicateProperty['house_number'] ?? '') . ' ' . ($duplicateProperty['street_name'] ?? '')) }}
+                                            </div>
+                                        @endif
+                                        @if(!empty($duplicateProperty['area']) || !empty($duplicateProperty['region']))
+                                            <div>
+                                                <i class="fas fa-location-dot mr-1 w-4 text-center"></i>
+                                                {{ trim(($duplicateProperty['area'] ?? '') . ', ' . ($duplicateProperty['region'] ?? ''), ', ') }}
+                                            </div>
+                                        @endif
+                                    </div>
+                                </div>
+                                @if(!empty($duplicateProperty['id']))
+                                <a href="{{ route('properties.show', $duplicateProperty['id']) }}"
+                                   target="_blank"
+                                   class="btn-secondary text-sm flex items-center whitespace-nowrap">
+                                    <i class="fas fa-external-link-alt mr-1"></i> View property
+                                </a>
+                                @endif
+                            </div>
+                        </div>
+
+                        {{-- Similar properties (fuzzy matches) --}}
+                        @if(!empty($similarProperties))
+                            <details class="mt-2">
+                                <summary class="text-sm cursor-pointer font-medium" style="color: var(--text-primary);">
+                                    <i class="fas fa-list mr-1"></i>
+                                    {{ count($similarProperties) }} similar propert{{ count($similarProperties) === 1 ? 'y' : 'ies' }} found
+                                </summary>
+                                <ul class="mt-2 space-y-1 text-sm" style="color: var(--text-secondary);">
+                                    @foreach($similarProperties as $similar)
+                                        <li class="flex items-center justify-between gap-2 py-1 border-b"
+                                            style="border-color: var(--border-color);">
+                                            <span>
+                                                {{ $similar['property_name'] ?? 'Unnamed' }}
+                                                @if(!empty($similar['area']) || !empty($similar['region']))
+                                                    — <em>{{ trim(($similar['area'] ?? '') . ', ' . ($similar['region'] ?? ''), ', ') }}</em>
+                                                @endif
+                                            </span>
+                                            @if(!empty($similar['id']))
+                                                <a href="{{ route('properties.show', $similar['id']) }}"
+                                                   target="_blank"
+                                                   class="text-xs underline"
+                                                   style="color: var(--primary);">
+                                                    Open
+                                                    @if(!empty($similar['similarity']))
+                                                        ({{ $similar['similarity'] }}% match)
+                                                    @endif
+                                                </a>
+                                            @endif
+                                        </li>
+                                    @endforeach
+                                </ul>
+                            </details>
+                        @endif
+
+                        <p class="text-xs mt-3" style="color: var(--text-secondary);">
+                            <i class="fas fa-lightbulb mr-1"></i>
+                            If this is genuinely a different property, change the property name or house number
+                            (or pick a different landlord) and resubmit. All previously-entered form data has been
+                            restored below.
+                        </p>
+                    @endif
+                </div>
+                <button type="button"
+                        class="text-gray-400 hover:text-gray-600"
+                        onclick="document.getElementById('duplicate-property-banner').style.display='none'"
+                        aria-label="Dismiss">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
     @endif
 
     <!-- Invitation Result Message -->
@@ -214,6 +421,8 @@
                                         data-next-available="{{ $plan->next_available_name ?? $plan->starting_point }}"
                                         data-zone="{{ $plan->zone }}"
                                         data-section="{{ $plan->section }}"
+                                        data-region="{{ $plan->region ?? '' }}"
+                                        data-area="{{ $plan->area ?? '' }}"
                                         data-estimated-houses="{{ $plan->estimated_houses }}"
                                         data-registered-houses="{{ $plan->houses_registered ?? 0 }}"
                                         data-plan-status="{{ $plan->status }}"
@@ -534,10 +743,56 @@
                         </div>
                     </div>
 
+                    {{-- Regional Location --}}
+                    <div class="border rounded p-4" style="border-color: var(--border-color); background-color: var(--bg-secondary);">
+                        <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
+                            <i class="fas fa-globe-africa mr-1" style="color: var(--primary);"></i>
+                            Regional Location
+                            <span class="text-xs font-normal text-gray-500 ml-1">(where the property sits in the region)</span>
+                        </h4>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label for="region" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Region *</label>
+                                <select name="region" id="region"
+                                        class="w-full p-2 border rounded"
+                                        style="background-color: var(--bg-tertiary); color: var(--text-primary); border-color: var(--border-color);"
+                                        required>
+                                    <option value="">Select Region</option>
+                                    @foreach($regions as $regionOption)
+                                        <option value="{{ $regionOption }}" {{ old('region') == $regionOption ? 'selected' : '' }}>
+                                            {{ $regionOption }}
+                                        </option>
+                                    @endforeach
+                                </select>
+                                @error('region')
+                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+
+                            <div>
+                                <label for="area" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Area / Neighbourhood *</label>
+                                <input type="text" name="area" id="area"
+                                       class="w-full p-2 border rounded"
+                                       style="background-color: var(--bg-tertiary); color: var(--text-primary); border-color: var(--border-color);"
+                                       value="{{ old('area') }}"
+                                       placeholder="e.g., Madina, East Legon, Tema Community 5"
+                                       maxlength="150"
+                                       required>
+                                <p class="text-xs text-gray-500 mt-1">The neighbourhood or suburb within the region where the property is located.</p>
+                                @error('area')
+                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Auto-filled Zone and Section -->
                     <div id="auto-filled-fields">
                         <div class="mb-4">
-                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Zone</label>
+                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                Zone <span class="text-xs font-normal text-gray-500">(community-level)</span>
+                            </label>
                             <div class="p-2 border rounded bg-gray-50" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                                 <span id="zone-display" class="text-gray-500">Select a registration plan</span>
                                 <input type="hidden" name="zone" id="zone" value="{{ old('zone') }}">
@@ -545,7 +800,9 @@
                         </div>
 
                         <div class="mb-4">
-                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Section</label>
+                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                Section <span class="text-xs font-normal text-gray-500">(community-level)</span>
+                            </label>
                             <div class="p-2 border rounded bg-gray-50" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                                 <span id="section-display" class="text-gray-500">Select a registration plan</span>
                                 <input type="hidden" name="section" id="section" value="{{ old('section') }}">
@@ -590,9 +847,7 @@
                         @enderror
                     </div>
 
-                    {{-- ============================================================ --}}
-                    {{-- ✅ NEW: COORDINATE PICKER                                    --}}
-                    {{-- ============================================================ --}}
+                    {{-- Coordinate Picker --}}
                     <div class="border-2 rounded-lg p-4" style="border-color: var(--border-color); background-color: var(--bg-secondary);">
                         <div class="flex items-center justify-between mb-3">
                             <div>
@@ -608,18 +863,15 @@
                         </div>
 
                         @if($googleMapsKey)
-                            {{-- Hidden inputs that carry coordinates into the form --}}
                             <input type="hidden" name="latitude"  id="latitude"  value="{{ old('latitude',  '') }}">
                             <input type="hidden" name="longitude" id="longitude" value="{{ old('longitude', '') }}">
                             <input type="hidden" name="city"      id="city"      value="{{ old('city',      '') }}">
 
-                            {{-- Map container --}}
                             <div id="property-map"
                                  class="rounded-lg overflow-hidden border"
                                  style="height: 280px; border-color: var(--border-color); background-color: var(--bg-tertiary);">
                             </div>
 
-                            {{-- Map action bar --}}
                             <div class="flex flex-wrap gap-2 mt-3">
                                 <button type="button"
                                         onclick="findDigitalAddressOnMap()"
@@ -643,7 +895,6 @@
                                 </span>
                             </div>
 
-                            {{-- Read-only coordinate readout --}}
                             <div id="coordinate-readout" class="hidden mt-2 text-xs font-mono p-2 rounded"
                                  style="background-color: var(--bg-tertiary); color: var(--text-secondary);">
                                 <i class="fas fa-crosshairs mr-1"></i>
@@ -651,7 +902,6 @@
                                 Lng: <span id="readout-lng">—</span>
                             </div>
 
-                            {{-- Google Maps loader --}}
                             <script async
                                 src="https://maps.googleapis.com/maps/api/js?key={{ $googleMapsKey }}&callback=initPropertyCoordinatePicker">
                             </script>
@@ -673,7 +923,6 @@
                             </div>
                         @endif
                     </div>
-                    {{-- ============================================================ --}}
 
                     <div>
                         <label for="registration_date" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Registration Date *</label>
@@ -731,97 +980,145 @@
                 </div>
             </div>
 
-            <!-- Landlord Information Section -->
+            <!-- ============================================================ -->
+            <!-- ✅ LANDLORD INFORMATION — mutually-exclusive blocks          -->
+            <!-- ============================================================ -->
             <div class="mt-6">
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">Landlord Information</h3>
 
                 <div class="border rounded p-4" style="border-color: var(--border-color);">
-                    <div class="mb-4">
-                        <label for="landlord_id" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Select Existing Landlord</label>
-                        <select name="landlord_id" id="landlord_id" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
-                            <option value="">Select Existing Landlord</option>
-                            @foreach($landlords as $landlord)
-                                <option value="{{ $landlord->id }}"
-                                        data-phones="{{ $landlord->phones ? $landlord->phones->pluck('phone_number')->implode(',') : '' }}"
-                                        data-email="{{ $landlord->email }}"
-                                        data-has-phone="{{ !empty($landlord->phone) ? '1' : '0' }}"
-                                        data-has-email="{{ !empty($landlord->email) && filter_var($landlord->email, FILTER_VALIDATE_EMAIL) ? '1' : '0' }}"
-                                        {{ old('landlord_id') == $landlord->id ? 'selected' : '' }}>
-                                    {{ $landlord->name }}
-                                    @if($landlord->phones && $landlord->phones->count() > 0)
-                                        - {{ $landlord->phones->first()->phone_number }}
-                                        @if($landlord->phones->count() > 1)
-                                            +{{ $landlord->phones->count() - 1 }} more
+
+                    {{-- Existing landlord block --}}
+                    <div id="existing-landlord-block"
+                         class="{{ $initialLandlordMode === 'new' ? 'hidden' : '' }}">
+                        <div class="mb-2">
+                            <label for="landlord_id" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Select Existing Landlord</label>
+                            <select name="landlord_id" id="landlord_id" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);">
+                                <option value="">Select Existing Landlord</option>
+                                @foreach($landlords as $landlord)
+                                    <option value="{{ $landlord->id }}"
+                                            data-phones="{{ $landlord->phones ? $landlord->phones->pluck('phone_number')->implode(',') : '' }}"
+                                            data-email="{{ $landlord->email }}"
+                                            data-has-phone="{{ !empty($landlord->phone) ? '1' : '0' }}"
+                                            data-has-email="{{ !empty($landlord->email) && filter_var($landlord->email, FILTER_VALIDATE_EMAIL) ? '1' : '0' }}"
+                                            {{ old('landlord_id') == $landlord->id ? 'selected' : '' }}>
+                                        {{ $landlord->name }}
+                                        @if($landlord->phones && $landlord->phones->count() > 0)
+                                            - {{ $landlord->phones->first()->phone_number }}
+                                            @if($landlord->phones->count() > 1)
+                                                +{{ $landlord->phones->count() - 1 }} more
+                                            @endif
                                         @endif
-                                    @endif
-                                    - {{ $landlord->email }}
-                                </option>
-                            @endforeach
-                        </select>
-                        @error('landlord_id')
-                            <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
-                        @enderror
-                    </div>
-
-                    <div class="flex items-center my-6">
-                        <div class="flex-1 border-t" style="border-color: var(--border-color);"></div>
-                        <span class="px-3 text-sm font-medium" style="color: var(--text-secondary);">OR CREATE NEW LANDLORD</span>
-                        <div class="flex-1 border-t" style="border-color: var(--border-color);"></div>
-                    </div>
-
-                    <div class="space-y-4">
-                        <div>
-                            <label for="landlord_name" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Full Name *</label>
-                            <input type="text" name="landlord_name" id="landlord_name" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);" placeholder="Enter full name" value="{{ old('landlord_name') }}">
-                            @error('landlord_name')
+                                        - {{ $landlord->email }}
+                                    </option>
+                                @endforeach
+                            </select>
+                            @error('landlord_id')
                                 <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                             @enderror
                         </div>
 
-                        <div>
-                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
-                                Phone Numbers *
-                                <span class="text-xs font-normal text-gray-500 ml-1">(At least one phone number is required)</span>
-                            </label>
+                        <div class="flex items-center my-4">
+                            <div class="flex-1 border-t" style="border-color: var(--border-color);"></div>
+                            <span class="px-3 text-xs font-medium" style="color: var(--text-secondary);">OR</span>
+                            <div class="flex-1 border-t" style="border-color: var(--border-color);"></div>
+                        </div>
 
-                            <div id="phone-numbers-container" class="space-y-3">
-                                <div class="phone-number-group">
-                                    <div class="flex items-center space-x-2">
-                                        <input type="text"
-                                               name="landlord_phones[]"
-                                               class="w-full p-2 border rounded phone-input"
-                                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
-                                               placeholder="e.g., 024 123 4567 (Primary)"
-                                               value="{{ old('landlord_phones.0') }}"
-                                               data-index="0">
-                                        <button type="button" class="remove-phone-btn text-red-500 hover:text-red-700 p-2 hidden" title="Remove phone number">
-                                            <i class="fas fa-times"></i>
-                                        </button>
-                                    </div>
-                                </div>
+                        <button type="button"
+                                id="switch-to-new-landlord"
+                                class="btn-secondary w-full flex items-center justify-center"
+                                onclick="setLandlordMode('new')">
+                            <i class="fas fa-user-plus mr-2"></i>
+                            Create a New Landlord Instead
+                        </button>
+                    </div>
+
+                    {{-- New landlord block --}}
+                    <div id="new-landlord-block"
+                         class="{{ $initialLandlordMode === 'new' ? '' : 'hidden' }}">
+
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center gap-2">
+                                <span class="inline-flex items-center justify-center w-8 h-8 rounded-full"
+                                      style="background-color: rgba(var(--primary-rgb, 114, 103, 240), 0.15); color: var(--primary);">
+                                    <i class="fas fa-user-plus text-sm"></i>
+                                </span>
+                                <span class="text-sm font-semibold" style="color: var(--text-primary);">
+                                    Create New Landlord
+                                </span>
                             </div>
 
-                            <button type="button" id="add-phone-btn" class="mt-2 text-blue-600 hover:text-blue-800 text-sm flex items-center">
-                                <i class="fas fa-plus-circle mr-1"></i> Add Another Phone Number
-                            </button>
-
-                            <p class="text-xs text-gray-500 mt-2">Enter at least one phone number. You can add multiple numbers for the same landlord.</p>
-                            @error('landlord_phones')
-                                <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
-                            @enderror
-                            @error('landlord_phones.*')
-                                <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
-                            @enderror
+                            @if($landlords->isNotEmpty())
+                                <button type="button"
+                                        class="text-sm text-blue-600 hover:text-blue-800 flex items-center"
+                                        onclick="setLandlordMode('existing')">
+                                    <i class="fas fa-arrow-left mr-1"></i>
+                                    Use an Existing Landlord
+                                </button>
+                            @endif
                         </div>
 
-                        <div>
-                            <label for="landlord_email" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Email Address</label>
-                            <input type="email" name="landlord_email" id="landlord_email" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);" placeholder="e.g., landlord@example.com" value="{{ old('landlord_email') }}">
-                            @error('landlord_email')
-                                <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
-                            @enderror
+                        <div class="space-y-4">
+                            <div>
+                                <label for="landlord_name" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Full Name *</label>
+                                <input type="text" name="landlord_name" id="landlord_name" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);" placeholder="Enter full name" value="{{ old('landlord_name') }}">
+                                @error('landlord_name')
+                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                    Phone Numbers *
+                                    <span class="text-xs font-normal text-gray-500 ml-1">(At least one phone number is required)</span>
+                                </label>
+
+                                <div id="phone-numbers-container" class="space-y-3">
+                                    <div class="phone-number-group">
+                                        <div class="flex items-center space-x-2">
+                                            <input type="text"
+                                                   name="landlord_phones[]"
+                                                   class="w-full p-2 border rounded phone-input"
+                                                   style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                                                   placeholder="e.g., 024 123 4567 (Primary)"
+                                                   value="{{ old('landlord_phones.0') }}"
+                                                   data-index="0">
+                                            <button type="button" class="remove-phone-btn text-red-500 hover:text-red-700 p-2 hidden" title="Remove phone number">
+                                                <i class="fas fa-times"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button type="button" id="add-phone-btn" class="mt-2 text-blue-600 hover:text-blue-800 text-sm flex items-center">
+                                    <i class="fas fa-plus-circle mr-1"></i> Add Another Phone Number
+                                </button>
+
+                                <p class="text-xs text-gray-500 mt-2">Enter at least one phone number. You can add multiple numbers for the same landlord.</p>
+                                @error('landlord_phones')
+                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                                @enderror
+                                @error('landlord_phones.*')
+                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+
+                            <div>
+                                <label for="landlord_email" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Email Address</label>
+                                <input type="email" name="landlord_email" id="landlord_email" class="w-full p-2 border rounded" style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);" placeholder="e.g., landlord@example.com" value="{{ old('landlord_email') }}">
+                                @error('landlord_email')
+                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
                         </div>
                     </div>
+
+                    {{-- Helper hint shown in "choose" mode --}}
+                    <p id="landlord-mode-hint"
+                       class="text-xs text-gray-500 mt-4 {{ $initialLandlordMode === 'choose' ? '' : 'hidden' }}">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        Pick an existing landlord, or click <strong>Create a New Landlord</strong> to add one.
+                    </p>
                 </div>
             </div>
 
@@ -1046,16 +1343,6 @@
                             <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
                         @enderror
                     </div>
-
-                    <div id="invitation-preview" class="hidden mt-4 p-4 rounded border"
-                         style="background-color: rgba(var(--info-rgb), 0.1); border-color: rgba(var(--info-rgb), 0.3);">
-                        <h4 class="font-medium mb-2" style="color: var(--text-primary);">Invitation Preview</h4>
-                        <div class="text-sm whitespace-pre-wrap" id="invitation-message-preview" style="color: var(--text-secondary);"></div>
-                        <div class="mt-3 text-xs" style="color: var(--text-secondary);">
-                            <i class="fas fa-info-circle mr-1"></i>
-                            Landlord will receive a secure invitation link to set their password and access the landlord portal.
-                        </div>
-                    </div>
                 </div>
             </div>
 
@@ -1218,6 +1505,8 @@ const WHATSAPP_SYSTEM_READY = {{ $whatsappReady ? 'true' : 'false' }};
 const EMAIL_SYSTEM_READY    = {{ $emailReady ? 'true' : 'false' }};
 const ANY_CHANNEL_READY     = SMS_SYSTEM_READY || WHATSAPP_SYSTEM_READY || EMAIL_SYSTEM_READY;
 
+const INITIAL_LANDLORD_MODE = @json($initialLandlordMode);
+
 function isChannelGloballyReady(channel) {
     if (channel === 'sms')      return SMS_SYSTEM_READY;
     if (channel === 'whatsapp') return WHATSAPP_SYSTEM_READY;
@@ -1225,22 +1514,77 @@ function isChannelGloballyReady(channel) {
     return false;
 }
 
-// ==================== ✅ NEW: PROPERTY COORDINATE PICKER ====================
+// ============================================================
+// ✅ LANDLORD MODE — mutually-exclusive blocks
+// ============================================================
 
-// Fallback centre — Accra, Ghana
+function setLandlordMode(mode, opts = {}) {
+    const { clearOther = true } = opts;
+
+    const existingBlock = document.getElementById('existing-landlord-block');
+    const newBlock      = document.getElementById('new-landlord-block');
+    const hint          = document.getElementById('landlord-mode-hint');
+    const landlordSelect = document.getElementById('landlord_id');
+
+    if (!existingBlock || !newBlock) return;
+
+    if (mode === 'new') {
+        existingBlock.classList.add('hidden');
+        newBlock.classList.remove('hidden');
+        if (hint) hint.classList.add('hidden');
+
+        if (clearOther && landlordSelect) {
+            landlordSelect.value = '';
+            if (typeof checkAvailableChannels === 'function') checkAvailableChannels();
+        }
+
+        const first = document.getElementById('landlord_name');
+        if (first && !first.value) setTimeout(() => first.focus(), 50);
+    } else {
+        existingBlock.classList.remove('hidden');
+        newBlock.classList.add('hidden');
+
+        if (hint) {
+            if (mode === 'choose') hint.classList.remove('hidden');
+            else hint.classList.add('hidden');
+        }
+
+        if (clearOther && mode === 'existing') {
+            const nameInput  = document.getElementById('landlord_name');
+            const emailInput = document.getElementById('landlord_email');
+            if (nameInput)  nameInput.value  = '';
+            if (emailInput) emailInput.value = '';
+
+            const phoneContainer = document.getElementById('phone-numbers-container');
+            if (phoneContainer) {
+                const groups = phoneContainer.querySelectorAll('.phone-number-group');
+                groups.forEach((group, index) => {
+                    if (index > 0) group.remove();
+                    else {
+                        const input = group.querySelector('.phone-input');
+                        if (input) input.value = '';
+                    }
+                });
+                if (typeof phoneCounter !== 'undefined') phoneCounter = 1;
+                if (typeof updateRemoveButtons === 'function') updateRemoveButtons();
+            }
+
+            if (typeof checkAvailableChannels === 'function') checkAvailableChannels();
+        }
+    }
+}
+
+// ==================== ✅ PROPERTY COORDINATE PICKER ====================
+
 const DEFAULT_MAP_CENTER = { lat: 5.6037, lng: -0.1870 };
 let propertyMap        = null;
 let propertyMarker     = null;
 let currentCoordinates = { lat: null, lng: null };
 
-/**
- * Initialised by the Google Maps script callback.
- */
 function initPropertyCoordinatePicker() {
     const container = document.getElementById('property-map');
     if (!container || typeof google === 'undefined') return;
 
-    // Existing values (old input on validation failure)
     const latInput = document.getElementById('latitude');
     const lngInput = document.getElementById('longitude');
     const startLat = parseFloat(latInput?.value || '') || DEFAULT_MAP_CENTER.lat;
@@ -1264,14 +1608,12 @@ function initPropertyCoordinatePicker() {
         title: 'Drag to adjust the exact property location',
     });
 
-    // Click to place the pin
     propertyMap.addListener('click', (event) => {
         propertyMarker.setPosition(event.latLng);
         propertyMarker.setVisible(true);
         syncCoordinatesFromMarker();
     });
 
-    // Drag to adjust
     propertyMarker.addListener('dragend', () => {
         syncCoordinatesFromMarker();
     });
@@ -1282,9 +1624,6 @@ function initPropertyCoordinatePicker() {
     }
 }
 
-/**
- * Read the pin position and write it into the hidden inputs.
- */
 function syncCoordinatesFromMarker() {
     if (!propertyMarker) return;
 
@@ -1302,9 +1641,6 @@ function syncCoordinatesFromMarker() {
     updateCoordinateUI(true);
 }
 
-/**
- * Toggle the visual "confirmed" state and update readouts.
- */
 function updateCoordinateUI(hasCoordinates) {
     const statusEl   = document.getElementById('coordinate-status');
     const statusText = document.getElementById('coordinate-status-text');
@@ -1328,13 +1664,6 @@ function updateCoordinateUI(hasCoordinates) {
     }
 }
 
-/**
- * Try to locate the current digital address on the map.
- *
- * Priority:
- *   1. Server-side geocoding endpoint (uses Ghana Post API + Google fallback).
- *   2. Browser-side Google Geocoder (best-effort).
- */
 async function findDigitalAddressOnMap() {
     const digitalAddress = document.getElementById('digital_address')?.value?.trim();
     if (!digitalAddress) {
@@ -1347,7 +1676,6 @@ async function findDigitalAddressOnMap() {
         return;
     }
 
-    // Visual feedback
     const button = event?.currentTarget;
     const originalHtml = button?.innerHTML;
     if (button) {
@@ -1356,7 +1684,6 @@ async function findDigitalAddressOnMap() {
     }
 
     try {
-        // Server-side geocoding is preferred (has Ghana Post API + sane fallbacks)
         const geocodeUrl = document.getElementById('app-urls')?.dataset.geocodeUrl;
         if (geocodeUrl) {
             const url = new URL(geocodeUrl, window.location.origin);
@@ -1382,7 +1709,6 @@ async function findDigitalAddressOnMap() {
             }
         }
 
-        // Fallback: browser Geocoder (best effort)
         if (typeof google !== 'undefined' && google.maps && google.maps.Geocoder) {
             const geocoder = new google.maps.Geocoder();
             geocoder.geocode(
@@ -1423,9 +1749,6 @@ function placeMarkerAndSync(lat, lng) {
     syncCoordinatesFromMarker();
 }
 
-/**
- * Clear coordinates and hide the pin.
- */
 function clearCoordinateSelection() {
     currentCoordinates = { lat: null, lng: null };
 
@@ -1847,21 +2170,17 @@ function initializePropertyTypeSelection() {
 function toggleInvitationSection() {
     const sendInvitationYes = document.getElementById('send_invitation_yes');
     const channelsContainer = document.getElementById('invitation-channels-container');
-    const invitationPreview = document.getElementById('invitation-preview');
 
     if (sendInvitationYes && sendInvitationYes.checked) {
         if (channelsContainer) channelsContainer.classList.remove('hidden');
         checkAvailableChannels();
-        updateInvitationPreview();
     } else {
         if (channelsContainer) channelsContainer.classList.add('hidden');
-        if (invitationPreview) invitationPreview.classList.add('hidden');
     }
 }
 
 async function checkAvailableChannels() {
     const landlordId = document.getElementById('landlord_id')?.value;
-    const landlordName = document.getElementById('landlord_name')?.value;
     const availableChannelsInfo = document.getElementById('available-channels-info');
     const noChannelsWarning = document.getElementById('no-channels-warning');
     const availableChannelsList = document.getElementById('available-channels-list');
@@ -1963,36 +2282,6 @@ function updateChannelOptions(availableChannels) {
             option.classList.remove('modern-radio-option--checked');
         }
     });
-}
-
-function updateInvitationPreview() {
-    const invitationPreview = document.getElementById('invitation-preview');
-    const invitationMessage = document.getElementById('invitation-message-preview');
-
-    if (!invitationPreview || !invitationMessage) return;
-
-    const landlordName = document.getElementById('landlord_name')?.value ||
-                        document.querySelector('#landlord_id option:checked')?.text?.split(' - ')[0] ||
-                        'Landlord';
-
-    const propertyName = document.getElementById('property_name')?.value || 'Your Property';
-    const streetName = document.getElementById('street_name')?.value || 'Unknown Street';
-    const zone = document.getElementById('zone')?.value || document.getElementById('manual_zone')?.value || 'Unknown Zone';
-    const registrationPattern = document.getElementById('registration_pattern')?.value || 'Unknown Pattern';
-
-    const message = `Hello ${landlordName}!
-
-Your property has been registered in our system:
-🏠 Property: ${propertyName}
-📍 Location: ${streetName}, ${zone}
-🔢 Registration: ${registrationPattern}
-
-To complete your registration and access your landlord portal, please set your password using the link we've sent you.
-
-Thank you for registering with us!`;
-
-    invitationMessage.textContent = message;
-    invitationPreview.classList.remove('hidden');
 }
 
 function setupChannelOptions() {
@@ -2558,6 +2847,31 @@ function updateZoneAndSection(planOption) {
     if (sectionInput) sectionInput.value = sectionValue || '';
 }
 
+// ==================== REGION / AREA AUTO-FILL ====================
+
+function applyRegionAreaFromPlan(planOption) {
+    if (!planOption || !planOption.value) return;
+
+    const planRegion = (planOption.dataset.region || '').trim();
+    const planArea   = (planOption.dataset.area   || '').trim();
+
+    const regionSelect = document.getElementById('region');
+    const areaInput    = document.getElementById('area');
+
+    if (planRegion && regionSelect && !regionSelect.value) {
+        const match = Array.from(regionSelect.options).find(
+            opt => opt.value.toLowerCase() === planRegion.toLowerCase()
+        );
+        if (match) {
+            regionSelect.value = match.value;
+        }
+    }
+
+    if (planArea && areaInput && !areaInput.value) {
+        areaInput.value = planArea;
+    }
+}
+
 function updateSequenceTypeInfo(sequenceType) {
     const sequenceTypeInfo = document.getElementById('sequence-type-info');
     const sequenceTypeText = document.getElementById('sequence-type-text');
@@ -2626,11 +2940,19 @@ function resetFormFields() {
     const digitalAddressInput = document.getElementById('digital_address');
     if (digitalAddressInput) digitalAddressInput.value = '';
 
+    const regionSelect = document.getElementById('region');
+    if (regionSelect) regionSelect.value = '';
+
+    const areaInput = document.getElementById('area');
+    if (areaInput) areaInput.value = '';
+
     const descriptionInput = document.getElementById('description');
     if (descriptionInput) descriptionInput.value = '';
 
     const statusSelect = document.getElementById('status');
     if (statusSelect) statusSelect.value = 'active';
+
+    setLandlordMode('choose', { clearOther: true });
 
     const landlordIdSelect = document.getElementById('landlord_id');
     if (landlordIdSelect) landlordIdSelect.value = '';
@@ -2647,7 +2969,6 @@ function resetFormFields() {
     const registrationPatternInput = document.getElementById('registration_pattern');
     if (registrationPatternInput) registrationPatternInput.value = '';
 
-    // ✅ Reset coordinates
     clearCoordinateSelection();
 
     clearPropertyTypeSelection();
@@ -2836,10 +3157,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const sendInvitationYes = document.getElementById('send_invitation_yes');
     if (sendInvitationYes && sendInvitationYes.checked) {
-        setTimeout(() => {
-            checkAvailableChannels();
-            updateInvitationPreview();
-        }, 100);
+        setTimeout(() => checkAvailableChannels(), 100);
     }
 
     const landlordIdSelect = document.getElementById('landlord_id');
@@ -2848,9 +3166,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (landlordIdSelect) {
         landlordIdSelect.addEventListener('change', function() {
+            if (this.value) {
+                setLandlordMode('existing');
+            } else if (INITIAL_LANDLORD_MODE !== 'new') {
+                setLandlordMode('choose');
+            }
+
             if (sendInvitationYes && sendInvitationYes.checked) {
                 checkAvailableChannels();
-                updateInvitationPreview();
             }
             handleLandlordChange();
         });
@@ -2858,9 +3181,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (landlordNameInput) {
         landlordNameInput.addEventListener('input', function() {
+            if (this.value.trim()) {
+                setLandlordMode('new');
+            }
             if (sendInvitationYes && sendInvitationYes.checked) {
                 checkAvailableChannels();
-                updateInvitationPreview();
             }
             handleLandlordChange();
         });
@@ -2868,22 +3193,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (landlordEmailInput) {
         landlordEmailInput.addEventListener('input', function() {
+            if (this.value.trim()) {
+                setLandlordMode('new');
+            }
             if (sendInvitationYes && sendInvitationYes.checked) checkAvailableChannels();
         });
     }
 
     document.addEventListener('input', function(e) {
         if (e.target.classList && e.target.classList.contains('phone-input')) {
+            if (e.target.value.replace(/\D/g, '').length > 0) {
+                setLandlordMode('new');
+            }
             if (sendInvitationYes && sendInvitationYes.checked) checkAvailableChannels();
-        }
-    });
-
-    ['property_name', 'street_name', 'registration_pattern'].forEach(fieldId => {
-        const field = document.getElementById(fieldId);
-        if (field) {
-            field.addEventListener('input', function() {
-                if (sendInvitationYes && sendInvitationYes.checked) updateInvitationPreview();
-            });
         }
     });
 
@@ -2892,8 +3214,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (registrationPlanSelect) {
         registrationPlanSelect.addEventListener('change', function() {
-            if (sendInvitationYes && sendInvitationYes.checked) setTimeout(updateInvitationPreview, 100);
-
             const selectedOption = this.options[this.selectedIndex];
             if (selectedOption && selectedOption.value) {
                 const pattern = selectedOption.dataset.nextAvailable || selectedOption.dataset.startingPoint;
@@ -2907,6 +3227,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 updatePlanProgress(selectedOption);
                 updateZoneAndSection(selectedOption);
                 updateSequenceTypeInfo(selectedOption.dataset.sequenceType);
+
+                applyRegionAreaFromPlan(selectedOption);
             } else {
                 const registrationPatternInput = document.getElementById('registration_pattern');
                 const refreshPatternButton = document.getElementById('refresh-pattern');
@@ -2915,12 +3237,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (refreshPatternButton) refreshPatternButton.classList.add('hidden');
                 updateZoneAndSection(null);
             }
-        });
-    }
-
-    if (manualZoneInput) {
-        manualZoneInput.addEventListener('input', function() {
-            if (sendInvitationYes && sendInvitationYes.checked) updateInvitationPreview();
         });
     }
 
@@ -2955,12 +3271,13 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Initialize map if the container exists and the API has already loaded
     if (document.getElementById('property-map') && typeof google !== 'undefined' && google.maps) {
         initPropertyCoordinatePicker();
     }
 
-    // Form submit validation
+    setLandlordMode(INITIAL_LANDLORD_MODE || 'choose', { clearOther: false });
+
+    // ---- Submit validation ----
     const form = document.getElementById('property-form');
     const submitButton = document.getElementById('submit-button');
     const propertyTypeSelect = document.getElementById('property_type_id');
@@ -2994,7 +3311,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (!landlordId && !landlordName) {
                 e.preventDefault();
-                alert('Please either select an existing landlord or provide name for a new landlord.');
+                alert('Please either select an existing landlord or provide a name for a new landlord.');
                 return false;
             }
 
@@ -3016,6 +3333,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 return false;
             }
 
+            const regionSelect = document.getElementById('region');
+            const areaInput   = document.getElementById('area');
+
+            if (!regionSelect?.value) {
+                e.preventDefault();
+                alert('Please select the region where the property is located.');
+                if (regionSelect) regionSelect.focus();
+                return false;
+            }
+
+            if (!areaInput?.value?.trim()) {
+                e.preventDefault();
+                alert('Please enter the area/neighbourhood of the property.');
+                if (areaInput) areaInput.focus();
+                return false;
+            }
+
             const manualLocationContainerCheck = document.getElementById('manual-location-container');
             const zoneInputCheck = document.getElementById('zone');
             const manualZoneInputCheck = document.getElementById('manual_zone');
@@ -3034,7 +3368,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
-            // ✅ NEW: soft-warn if digital address has no coordinates (server will geocode)
             const digitalAddress = document.getElementById('digital_address')?.value?.trim();
             const hasCoords = !!(
                 document.getElementById('latitude')?.value &&
@@ -3125,18 +3458,9 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 @endsection
 
-{{-- ============================================================ --}}
-{{-- STYLES — moved OUT of @section('scripts') into @push('styles') --}}
-{{-- so they render in <head> via the layout's @stack('styles'),    --}}
-{{-- and don't leak into the header/sidebar.                        --}}
-{{-- The global `.hidden` rule has been scoped to only the elements --}}
-{{-- this page controls, and focus/transition rules are scoped to   --}}
-{{-- #property-form so they don't affect the header's search input. --}}
-{{-- ============================================================ --}}
 @push('styles')
 <style>
 /* ==================== PHOTO UPLOAD STYLES ==================== */
-
 .photo-upload-area { transition: all 0.3s ease; }
 .photo-upload-area:hover {
     border-color: var(--primary) !important;
@@ -3150,23 +3474,11 @@ document.addEventListener('DOMContentLoaded', function() {
 .photo-preview-item .remove-photo-btn:hover { transform: scale(1.05); }
 
 /* ==================== PROPERTY TYPE CARD STYLES ==================== */
-
-.property-type-card {
-    transition: all 0.3s ease;
-    border: 2px solid transparent;
-    cursor: pointer;
-}
-.property-type-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-.property-type-card.active {
-    border-color: var(--primary);
-    background-color: var(--primary) + '10';
-}
+.property-type-card { transition: all 0.3s ease; border: 2px solid transparent; cursor: pointer; }
+.property-type-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+.property-type-card.active { border-color: var(--primary); background-color: var(--primary) + '10'; }
 
 /* ==================== MODERN RADIO BUTTON STYLES ==================== */
-
 .modern-radio-option {
     position: relative;
     transition: all 0.3s ease;
@@ -3176,20 +3488,17 @@ document.addEventListener('DOMContentLoaded', function() {
     cursor: pointer;
     overflow: hidden;
 }
-
 .modern-radio-option:hover:not(.channel-disabled):not(.modern-radio-option--disabled) {
     transform: translateY(-2px);
     box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
     border-color: var(--primary);
 }
-
 .modern-radio-option--checked {
     border-color: var(--primary) !important;
     background: linear-gradient(135deg, rgba(114, 103, 240, 0.1), rgba(114, 103, 240, 0.05)) !important;
     box-shadow: 0 8px 25px rgba(114, 103, 240, 0.15) !important;
     transform: translateY(-2px);
 }
-
 .channel-disabled,
 .modern-radio-option--disabled {
     cursor: not-allowed !important;
@@ -3197,7 +3506,6 @@ document.addEventListener('DOMContentLoaded', function() {
     border-style: dashed !important;
     background-color: rgba(var(--secondary-rgb, 148, 163, 184), 0.08) !important;
 }
-
 .channel-disabled::after {
     content: "";
     position: absolute;
@@ -3212,12 +3520,8 @@ document.addEventListener('DOMContentLoaded', function() {
     pointer-events: none;
     border-radius: inherit;
 }
-
 .channel-disabled input,
-.modern-radio-option--disabled input {
-    cursor: not-allowed;
-}
-
+.modern-radio-option--disabled input { cursor: not-allowed; }
 .modern-radio-input { position: absolute; opacity: 0; width: 0; height: 0; }
 .modern-radio-label { display: block; cursor: pointer; padding: 0; margin: 0; }
 .modern-radio-content { display: flex; align-items: center; padding: 20px; position: relative; }
@@ -3250,81 +3554,64 @@ document.addEventListener('DOMContentLoaded', function() {
 .modern-radio-check i { font-size: 12px; opacity: 0; transition: opacity 0.3s ease; }
 .modern-radio-option--checked .modern-radio-check i { opacity: 1 !important; }
 
-/* ==================== ✅ NEW: MAP PICKER STYLES ==================== */
-
-#property-map {
-    background-color: var(--bg-tertiary);
-    border-radius: 0.5rem;
-}
-
-#coordinate-status {
-    transition: all 0.3s ease-in-out;
-}
-
-#coordinate-readout {
-    transition: all 0.3s ease-in-out;
-}
-
-#clear-coords-btn {
-    transition: all 0.2s ease;
-}
+/* ==================== MAP PICKER STYLES ==================== */
+#property-map { background-color: var(--bg-tertiary); border-radius: 0.5rem; }
+#coordinate-status { transition: all 0.3s ease-in-out; }
+#coordinate-readout { transition: all 0.3s ease-in-out; }
+#clear-coords-btn { transition: all 0.2s ease; }
 
 /* ==================== CUSTOM CONTAINER STYLES ==================== */
-
 #custom_property_type_container {
     border-left: 4px solid #6B7280;
     transition: all 0.3s ease-in-out;
     animation: slideDown 0.3s ease-out;
 }
-#selected-property-type {
-    border-left: 4px solid;
-    animation: slideDown 0.3s ease-out;
-}
+#selected-property-type { border-left: 4px solid; animation: slideDown 0.3s ease-out; }
 
 /* ==================== PHONE NUMBER STYLES ==================== */
-
 .phone-number-group { transition: all 0.3s ease; }
 .remove-phone-btn { transition: all 0.2s ease; }
-.remove-phone-btn:hover {
-    background-color: rgba(239, 68, 68, 0.1);
-    border-radius: 0.25rem;
-}
+.remove-phone-btn:hover { background-color: rgba(239, 68, 68, 0.1); border-radius: 0.25rem; }
 
 /* ==================== SECTION BORDER STYLES ==================== */
-
 #landlord-invitation-section { border-left: 4px solid #8B5CF6; }
 #invitation-channels-container { transition: all 0.3s ease-in-out; }
 #tenant-invitation-section { border-left: 4px solid #10B981; }
 #tenant-invitation-container { transition: all 0.3s ease-in-out; }
 #available-channels-info { border-left: 4px solid #3B82F6; }
 #no-channels-warning { border-left: 4px solid #F59E0B; }
-#invitation-preview {
-    border-left: 4px solid #3B82F6;
-    background-color: rgba(var(--info-rgb), 0.1) !important;
-    border-color: rgba(var(--info-rgb), 0.3) !important;
-}
 #naming-preview-container { border-left: 4px solid var(--primary); }
 #global-sequence-info { border-left: 4px solid #3b82f6; }
 
-/* ==================== ANIMATIONS ==================== */
+/* ==================== DUPLICATE BANNER ==================== */
+#duplicate-property-banner { animation: slideDown 0.3s ease-out; }
+#duplicate-property-banner summary { user-select: none; }
+#duplicate-property-banner summary::-webkit-details-marker { display: none; }
+#duplicate-property-banner summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform 0.2s ease;
+    margin-right: 0.25rem;
+}
+#duplicate-property-banner details[open] summary::before { transform: rotate(90deg); }
 
+/* ==================== LANDLORD BLOCK TRANSITIONS ==================== */
+#existing-landlord-block,
+#new-landlord-block { animation: slideDown 0.25s ease-out; }
+
+/* ==================== ANIMATIONS ==================== */
 @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
     to   { opacity: 1; transform: translateY(0); }
 }
-@keyframes spin {
-    0%   { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 .fa-spinner { animation: spin 1s linear infinite; }
 
 /* ==================== PROGRESS BAR STYLES ==================== */
-
 #progress-bar { transition: width 0.5s ease-in-out; }
 #custom-type-chars { transition: color 0.3s ease; }
 
 /* ==================== BUTTON STYLES ==================== */
-
 .btn-primary {
     background-color: var(--primary);
     color: white;
@@ -3334,11 +3621,7 @@ document.addEventListener('DOMContentLoaded', function() {
     transition: all 0.2s;
     border: none;
 }
-.btn-primary:hover:not(:disabled) {
-    opacity: 0.9;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
+.btn-primary:hover:not(:disabled) { opacity: 0.9; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
 
 .btn-secondary {
@@ -3350,61 +3633,27 @@ document.addEventListener('DOMContentLoaded', function() {
     border: 1px solid var(--border-color);
     transition: all 0.2s;
 }
-.btn-secondary:hover {
-    background-color: var(--bg-tertiary);
-    transform: translateY(-1px);
-}
+.btn-secondary:hover { background-color: var(--bg-tertiary); transform: translateY(-1px); }
 
 /* ==================== CARD STYLES ==================== */
-
-.card {
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-    border: 1px solid var(--border-color);
-    border-radius: 0.75rem;
-}
+.card { box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); border: 1px solid var(--border-color); border-radius: 0.75rem; }
 
 /* ==================== SECTION HEADER ==================== */
-
-h3 {
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 1.5rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 2px solid var(--primary);
-}
+h3 { font-weight: 600; color: var(--text-primary); margin-bottom: 1.5rem; padding-bottom: 0.75rem; border-bottom: 2px solid var(--primary); }
 
 /* ==================== MESSAGE STYLES ==================== */
-
-.bg-green-100 {
-    background-color: rgba(209, 250, 229, 0.9);
-    border-color: rgba(16, 185, 129, 0.3);
-}
-.bg-red-100 {
-    background-color: rgba(254, 226, 226, 0.9);
-    border-color: rgba(239, 68, 68, 0.3);
-}
+.bg-green-100 { background-color: rgba(209, 250, 229, 0.9); border-color: rgba(16, 185, 129, 0.3); }
+.bg-red-100 { background-color: rgba(254, 226, 226, 0.9); border-color: rgba(239, 68, 68, 0.3); }
 
 /* ==================== PLAN STATUS ALERT STYLES ==================== */
-
 #plan-status-alert .bg-yellow-50 { background-color: rgba(254, 252, 232, 0.9); border-color: rgba(250, 204, 21, 0.3); }
 #plan-status-alert .bg-red-50 { background-color: rgba(254, 242, 242, 0.9); border-color: rgba(248, 113, 113, 0.3); }
 #plan-status-alert .bg-blue-50 { background-color: rgba(239, 246, 255, 0.9); border-color: rgba(147, 197, 253, 0.3); }
 #plan-status-alert .bg-green-50 { background-color: rgba(240, 253, 244, 0.9); border-color: rgba(134, 239, 172, 0.3); }
 
 /* ==================== PATTERN STYLES ==================== */
-
-#registration_pattern {
-    font-weight: 600;
-    background-color: var(--bg-tertiary) !important;
-    letter-spacing: 0.5px;
-}
-#refresh-pattern {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 0.75rem;
-    transition: color 0.2s;
-}
+#registration_pattern { font-weight: 600; background-color: var(--bg-tertiary) !important; letter-spacing: 0.5px; }
+#refresh-pattern { background: none; border: none; cursor: pointer; font-size: 0.75rem; transition: color 0.2s; }
 #refresh-pattern:hover { color: var(--primary); }
 #pattern-status { transition: all 0.3s ease; }
 #pattern-validation { transition: all 0.3s ease; }
@@ -3413,11 +3662,8 @@ h3 {
 #global-sequence-badge { font-size: 0.7rem; font-weight: 600; }
 
 /* ==================== FOCUS STYLES ==================== */
-
 .property-type-card:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
 .modern-radio-option:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
-
-/* Scoped to this form so it doesn't affect the header's search input */
 #property-form input:focus,
 #property-form select:focus,
 #property-form textarea:focus {
@@ -3427,7 +3673,6 @@ h3 {
 }
 
 /* ==================== RESPONSIVE DESIGN ==================== */
-
 @media (max-width: 768px) {
     .modern-radio-content { padding: 16px; }
     .modern-radio-icon { width: 40px; height: 40px; font-size: 18px; margin-right: 12px; }
@@ -3435,32 +3680,22 @@ h3 {
     .modern-radio-description { font-size: 12px; }
     #property-map { height: 220px !important; }
 }
-
 @media (max-width: 640px) {
     #property-type-cards { grid-template-columns: 1fr; }
     .modern-radio-option { margin-bottom: 0.5rem; }
 }
 
 /* ==================== PRINT STYLES ==================== */
-
 @media print {
-    .btn-primary, .btn-secondary, #refresh-pattern, #toggle-location-override, #add-phone-btn, #property-map {
-        display: none !important;
-    }
+    .btn-primary, .btn-secondary, #refresh-pattern, #toggle-location-override, #add-phone-btn, #property-map { display: none !important; }
     .card { box-shadow: none; border: 1px solid #000; }
     .modern-radio-option { border: 1px solid #000 !important; }
 }
 
 /* ==================== SCOPED .hidden OVERRIDE ==================== */
-/* The previous GLOBAL `.hidden { display: none; }` rule was leaking
- * out of this view and hiding the header's search bar (and any other
- * .hidden-using component). Now scoped to only the IDs this page
- * controls. Tailwind's own .hidden still applies elsewhere. */
-
 #custom_property_type_container.hidden,
 #selected-property-type.hidden,
 #invitation-channels-container.hidden,
-#invitation-preview.hidden,
 #available-channels-info.hidden,
 #no-channels-warning.hidden,
 #tenant-invitation-container.hidden,
@@ -3488,16 +3723,18 @@ h3 {
 #refresh-pattern.hidden,
 #remove-phone-btn.hidden,
 .remove-phone-btn.hidden,
-.phone-number-group.hidden {
+.phone-number-group.hidden,
+#existing-landlord-block.hidden,
+#new-landlord-block.hidden,
+#landlord-mode-hint.hidden,
+#duplicate-property-banner.hidden {
     display: none !important;
 }
 
 /* ==================== UTILITY CLASSES ==================== */
-
 .form-group { margin-bottom: 1rem; }
 .required::after { content: " *"; color: var(--danger); }
 
-/* Scoped transition rule so we don't affect the header's elements */
 #property-form input,
 #property-form select,
 #property-form textarea,

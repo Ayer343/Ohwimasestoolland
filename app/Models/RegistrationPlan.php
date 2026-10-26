@@ -50,6 +50,18 @@ class RegistrationPlan extends Model
      */
     public bool $skipStatusAutoCorrection = false;
 
+    /**
+     * Re-entry guard for the `updated` → updateNextAvailableNameQuietly loop.
+     * @internal
+     */
+    protected bool $isRecalculatingNextName = false;
+
+    /**
+     * Memo for the active agent count to avoid 2–3 identical queries per
+     * render (can_assign_more_agents / max_agents_reached / summary).
+     */
+    private ?int $cachedActiveAgentsCount = null;
+
     protected $fillable = [
         'created_by',
         'zone',
@@ -91,6 +103,7 @@ class RegistrationPlan extends Model
         'last_used_pattern',
         'sequence_continuation_count',
         'total_sequence_properties',
+        'submission_token',
     ];
 
     protected $casts = [
@@ -261,12 +274,11 @@ class RegistrationPlan extends Model
             }
 
             // ============================================================
-            // ✅ FIXED: AUTO-STATUS SYNC — SAFE GUARDS
+            // AUTO-STATUS SYNC — SAFE GUARDS
             // ============================================================
             // Only auto-adjust status if the controller did NOT explicitly
             // tell us it already resolved the status correctly.
             if (empty($model->skipStatusAutoCorrection)) {
-
                 $hasActiveAgents = $model->assignedAgents()
                     ->where('is_active', true)
                     ->exists();
@@ -277,10 +289,9 @@ class RegistrationPlan extends Model
                 } elseif (
                     !$hasActiveAgents
                     && in_array($model->status, [self::STATUS_ASSIGNED, self::STATUS_IN_PROGRESS], true)
-                    && $model->isDirty('status')          // ← only fire if admin is EXPLICITLY changing status
+                    && $model->isDirty('status')
                 ) {
-                    // No agents + admin tried to set assigned/in_progress -> Draft
-                    //
+                    // No agents + admin tried to set assigned/in_progress -> Draft.
                     // Only null the dates/instructions here if the admin did
                     // NOT submit them. Otherwise the admin loses data.
                     if (!$model->isDirty('registration_start_date')) {
@@ -330,6 +341,7 @@ class RegistrationPlan extends Model
         });
 
         // Handle side effects AFTER the update has been persisted.
+        // Guarded against recursion via $isRecalculatingNextName.
         static::updated(function ($model) {
             if ($model->is_global_sequence && $model->properties()->count() > 0) {
                 $model->updateNextAvailableNameQuietly();
@@ -517,30 +529,47 @@ class RegistrationPlan extends Model
         return $this->properties()->count();
     }
 
+    /**
+     * Accessor shadows the `houses_registered` DB column with a live count.
+     * Kept intentionally — `houses_registered` is treated as a cache.
+     */
     public function getHousesRegisteredAttribute($value)
     {
         return $this->properties()->count();
     }
 
+    /**
+     * Accessor shadows the `properties_count` DB column with a live count.
+     */
     public function getPropertiesCountAttribute($value)
     {
         return $this->properties()->count();
     }
 
+    /**
+     * Days remaining until `registration_end_date`.
+     * Returns null when there is no end date, otherwise a non-negative int.
+     */
     public function getDaysRemainingAttribute(): ?int
     {
         if (!$this->registration_end_date) {
             return null;
         }
-        return max(0, now()->diffInDays($this->registration_end_date, false));
+        $diff = now()->diffInDays($this->registration_end_date, false);
+        return max(0, (int) $diff);
     }
 
+    /**
+     * Duration in days between start and end. Returns null when either
+     * date is missing, and 0 when the range is inverted.
+     */
     public function getDurationAttribute(): ?int
     {
         if (!$this->registration_start_date || !$this->registration_end_date) {
             return null;
         }
-        return $this->registration_start_date->diffInDays($this->registration_end_date);
+        $diff = $this->registration_start_date->diffInDays($this->registration_end_date, false);
+        return max(0, (int) $diff);
     }
 
     public function getHasActiveInvitationAttribute(): bool
@@ -569,8 +598,10 @@ class RegistrationPlan extends Model
 
         $chain = [];
         $currentPlan = $this;
+        $depth = 0;
 
-        while ($currentPlan->continuedFromPlan) {
+        // Depth cap protects against a corrupted cycle in the DB.
+        while ($currentPlan->continuedFromPlan && $depth < 50) {
             $chain[] = [
                 'id' => $currentPlan->continuedFromPlan->id,
                 'zone' => $currentPlan->continuedFromPlan->zone,
@@ -580,6 +611,7 @@ class RegistrationPlan extends Model
                 'status' => $currentPlan->continuedFromPlan->status,
             ];
             $currentPlan = $currentPlan->continuedFromPlan;
+            $depth++;
         }
 
         return array_reverse($chain);
@@ -675,12 +707,18 @@ class RegistrationPlan extends Model
                 'id' => $latestInvitation->id,
                 'status' => $latestInvitation->status,
                 'sent_via' => $latestInvitation->sent_via,
-                'sent_at' => $latestInvitation->created_at->format('M j, Y g:i A'),
-                'expires_at' => $latestInvitation->expires_at->format('M j, Y g:i A'),
+                'sent_at' => $latestInvitation->created_at?->format('M j, Y g:i A'),
+                'expires_at' => $latestInvitation->expires_at?->format('M j, Y g:i A'),
                 'accepted_at' => $latestInvitation->accepted_at?->format('M j, Y g:i A'),
-                'can_resend' => $latestInvitation->status === AgentInvitation::STATUS_SENT && $latestInvitation->expires_at > now(),
-                'is_expired' => $latestInvitation->expires_at <= now(),
-                'days_until_expiry' => $latestInvitation->expires_at->diffInDays(now()),
+                'can_resend' => $latestInvitation->status === AgentInvitation::STATUS_SENT
+                    && $latestInvitation->expires_at
+                    && $latestInvitation->expires_at > now(),
+                'is_expired' => $latestInvitation->expires_at
+                    ? $latestInvitation->expires_at <= now()
+                    : false,
+                'days_until_expiry' => $latestInvitation->expires_at
+                    ? max(0, (int) $latestInvitation->expires_at->diffInDays(now(), false))
+                    : null,
             ] : null,
             'total_invitations' => $this->invitations()->count(),
             'accepted_invitations' => $this->invitations()->where('status', AgentInvitation::STATUS_ACCEPTED)->count(),
@@ -793,17 +831,20 @@ class RegistrationPlan extends Model
 
     public function getActiveAgentsCountAttribute(): int
     {
-        return $this->activeAgents()->count();
+        if ($this->cachedActiveAgentsCount !== null) {
+            return $this->cachedActiveAgentsCount;
+        }
+        return $this->cachedActiveAgentsCount = $this->activeAgents()->count();
     }
 
     public function getHasAssignedAgentsAttribute(): bool
     {
-        return $this->assignedAgents()->where('is_active', true)->exists();
+        return $this->active_agents_count > 0;
     }
 
     public function getPrimaryAgentAttribute(): ?User
     {
-        return $this->activeAgents()->first()?->agent;
+        return $this->activeAgents()->with('agent')->first()?->agent;
     }
 
     public function getMultipleAgentsSummaryAttribute(): array
@@ -814,19 +855,21 @@ class RegistrationPlan extends Model
             'total_agents' => $agents->count(),
             'agents' => $agents->map(function ($assignment) {
                 return [
-                    'id' => $assignment->agent->id,
-                    'name' => $assignment->agent->name,
-                    'phone' => $assignment->agent->phone,
-                    'email' => $assignment->agent->email,
+                    'id' => $assignment->agent?->id,
+                    'name' => $assignment->agent?->name,
+                    'phone' => $assignment->agent?->phone,
+                    'email' => $assignment->agent?->email,
                     'assignment_id' => $assignment->id,
                     'properties_registered' => $assignment->properties_registered,
-                    'assigned_at' => $assignment->assigned_at->format('M j, Y'),
+                    'assigned_at' => $assignment->assigned_at?->format('M j, Y'),
                     'last_activity' => $assignment->last_activity_at?->format('M j, Y g:i A'),
                     'is_active' => $assignment->is_active,
                 ];
             })->toArray(),
             'total_properties_registered' => $agents->sum('properties_registered'),
-            'average_properties_per_agent' => $agents->count() > 0 ? round($agents->sum('properties_registered') / $agents->count(), 2) : 0,
+            'average_properties_per_agent' => $agents->count() > 0
+                ? round($agents->sum('properties_registered') / $agents->count(), 2)
+                : 0,
         ];
     }
 
@@ -881,15 +924,19 @@ class RegistrationPlan extends Model
     {
         $performance = [];
 
-        foreach ($this->activeAgents as $assignment) {
+        foreach ($this->activeAgents()->with('agent')->get() as $assignment) {
+            $days = $assignment->assigned_at
+                ? max(0, (int) $assignment->assigned_at->diffInDays(now()))
+                : 0;
+
             $performance[] = [
                 'agent' => $assignment->agent,
                 'assignment' => $assignment,
                 'properties_registered' => $assignment->properties_registered,
                 'last_activity' => $assignment->last_activity_at,
-                'assignment_duration' => $assignment->assigned_at->diffInDays(now()),
-                'productivity_rate' => $assignment->assigned_at->diffInDays(now()) > 0
-                    ? round($assignment->properties_registered / $assignment->assigned_at->diffInDays(now()), 2)
+                'assignment_duration' => $days,
+                'productivity_rate' => $days > 0
+                    ? round($assignment->properties_registered / $days, 2)
                     : 0,
             ];
         }
@@ -1145,8 +1192,11 @@ class RegistrationPlan extends Model
     }
 
     /**
-     * Same as updateNextAvailableName but bypasses model events —
-     * safe to call from the `updated` event without recursion.
+     * Same as updateNextAvailableName but bypasses model events — safe to
+     * call from the `updated` event without recursion.
+     *
+     * Uses a re-entry flag to avoid the (updateQuietly → updated) loop
+     * even if the underlying Eloquent version changes event suppression.
      */
     protected function updateNextAvailableNameQuietly(): void
     {
@@ -1154,15 +1204,33 @@ class RegistrationPlan extends Model
             return;
         }
 
-        $lastProperty = $this->properties()->latest()->first();
-        if ($lastProperty && $lastProperty->registration_pattern) {
-            $nextName = $this->generateNextName(
-                $lastProperty->registration_pattern,
-                $this->naming_pattern,
-                $this->sequence_type
-            );
+        if ($this->isRecalculatingNextName) {
+            return;
+        }
 
+        $lastProperty = $this->properties()->latest()->first();
+        if (!$lastProperty || !$lastProperty->registration_pattern) {
+            return;
+        }
+
+        $nextName = $this->generateNextName(
+            $lastProperty->registration_pattern,
+            $this->naming_pattern,
+            $this->sequence_type
+        );
+
+        // Skip if already correct — avoids pointless writes.
+        if ($this->next_available_name === $nextName) {
+            return;
+        }
+
+        $this->isRecalculatingNextName = true;
+        try {
             $this->updateQuietly(['next_available_name' => $nextName]);
+            $this->setAttribute('next_available_name', $nextName);
+            $this->syncOriginalAttribute('next_available_name');
+        } finally {
+            $this->isRecalculatingNextName = false;
         }
     }
 
@@ -1254,12 +1322,19 @@ class RegistrationPlan extends Model
             throw new \Exception('Agent is already assigned to this plan.');
         }
 
-        return PlanAgentAssignment::create([
+        $assignment = PlanAgentAssignment::create([
             'plan_id' => $this->id,
             'agent_id' => $agentId,
             'assigned_by' => $assignedBy ?: auth()->id(),
             'is_active' => true,
         ]);
+
+        // Invalidate the memo — next accessor call re-queries.
+        $this->cachedActiveAgentsCount = null;
+        $this->unsetRelation('activeAgents');
+        $this->unsetRelation('assignedAgents');
+
+        return $assignment;
     }
 
     public function removeAgent($agentId, $reason = null): bool
@@ -1273,7 +1348,13 @@ class RegistrationPlan extends Model
             return false;
         }
 
-        return $assignment->markAsInactive($reason);
+        $result = $assignment->markAsInactive($reason);
+
+        $this->cachedActiveAgentsCount = null;
+        $this->unsetRelation('activeAgents');
+        $this->unsetRelation('assignedAgents');
+
+        return $result;
     }
 
     public function isAgentAssigned($agentId): bool
@@ -1343,11 +1424,11 @@ class RegistrationPlan extends Model
             'agents' => $assignments->map(function ($assignment) {
                 return [
                     'agent_id' => $assignment->agent_id,
-                    'agent_name' => $assignment->agent->name,
-                    'agent_phone' => $assignment->agent->phone,
-                    'agent_email' => $assignment->agent->email,
+                    'agent_name' => $assignment->agent?->name,
+                    'agent_phone' => $assignment->agent?->phone,
+                    'agent_email' => $assignment->agent?->email,
                     'properties_registered' => $assignment->properties_registered,
-                    'assigned_at' => $assignment->assigned_at->format('Y-m-d H:i:s'),
+                    'assigned_at' => $assignment->assigned_at?->format('Y-m-d H:i:s'),
                     'last_activity' => $assignment->last_activity_at?->format('Y-m-d H:i:s'),
                     'assignment_id' => $assignment->id,
                 ];
@@ -1420,7 +1501,7 @@ class RegistrationPlan extends Model
                 'message' => 'Invitation created successfully',
             ];
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error("Failed to create invitation for agent {$agentId}: " . $e->getMessage());
+            Log::error("Failed to create invitation for agent {$agentId}: " . $e->getMessage());
 
             return [
                 'success' => false,
@@ -1446,11 +1527,13 @@ class RegistrationPlan extends Model
         $invitations = [];
         $errors = [];
 
+        $baseChannelData = is_array($data['channel_data'] ?? null) ? $data['channel_data'] : [];
+
         foreach ($channels as $channel) {
             $invitationData = array_merge($data, [
                 'channel' => $channel,
                 'master_token' => $masterToken,
-                'channel_data' => array_merge($data['channel_data'] ?? [], ['master_token' => $masterToken]),
+                'channel_data' => array_merge($baseChannelData, ['master_token' => $masterToken]),
             ]);
 
             $result = $this->createInvitationWithToken($agentId, $invitationData);
@@ -1467,9 +1550,9 @@ class RegistrationPlan extends Model
             'master_token' => $masterToken,
             'invitations' => $invitations,
             'errors' => $errors,
-            'message' => count($invitations) > 0 ?
-                'Multi-channel invitations created successfully' :
-                'Failed to create invitations: ' . implode(', ', $errors),
+            'message' => count($invitations) > 0
+                ? 'Multi-channel invitations created successfully'
+                : 'Failed to create invitations: ' . implode(', ', $errors),
         ];
     }
 
@@ -1497,8 +1580,7 @@ class RegistrationPlan extends Model
             if ($this->isAgentAssigned($agentId)) {
                 foreach ($channels as $channel) {
                     $invitationData = array_merge($data, ['channel' => $channel]);
-                    $result = $this->createInvitationWithToken($agentId, $invitationData);
-                    $results[] = $result;
+                    $results[] = $this->createInvitationWithToken($agentId, $invitationData);
                 }
             }
         }
@@ -1518,11 +1600,14 @@ class RegistrationPlan extends Model
         $channelStats = [];
         foreach ([self::CHANNEL_SMS, self::CHANNEL_WHATSAPP, self::CHANNEL_EMAIL] as $channel) {
             $channelInvitations = $this->invitations()->where('sent_via', $channel);
+            $channelTotal = (clone $channelInvitations)->count();
+            $channelAccepted = (clone $channelInvitations)->where('status', AgentInvitation::STATUS_ACCEPTED)->count();
+
             $channelStats[$channel] = [
-                'total' => $channelInvitations->count(),
-                'accepted' => $channelInvitations->where('status', AgentInvitation::STATUS_ACCEPTED)->count(),
-                'success_rate' => $channelInvitations->count() > 0
-                    ? round(($channelInvitations->where('status', AgentInvitation::STATUS_ACCEPTED)->count() / $channelInvitations->count()) * 100, 2)
+                'total' => $channelTotal,
+                'accepted' => $channelAccepted,
+                'success_rate' => $channelTotal > 0
+                    ? round(($channelAccepted / $channelTotal) * 100, 2)
                     : 0,
             ];
         }
@@ -1580,7 +1665,7 @@ class RegistrationPlan extends Model
             ];
         }
 
-        if ($invitation->expires_at < now()) {
+        if ($invitation->expires_at && $invitation->expires_at < now()) {
             return [
                 'valid' => false,
                 'message' => 'Invitation has expired',
@@ -1642,7 +1727,7 @@ class RegistrationPlan extends Model
                 'success' => true,
                 'property' => $property,
                 'registration_pattern' => $registrationPattern,
-                'next_available_name' => $this->next_available_name,
+                'next_available_name' => $this->fresh()->next_available_name,
             ];
         } catch (\Exception $e) {
             DB::rollBack();
@@ -1691,9 +1776,14 @@ class RegistrationPlan extends Model
         $generated = $pattern;
 
         if (strpos($pattern, '{letter}') !== false && strpos($pattern, '{number}') !== false) {
-            if (preg_match('/([A-Za-z]+)(\d+)/', $name, $matches)) {
+            // Handle both "A1" (letter then number) and "1A" (number then letter).
+            if (preg_match('/^([A-Za-z]+)(\d+)$/', $name, $matches)) {
                 $letter = $matches[1];
                 $number = $matches[2];
+                $generated = str_replace(['{letter}', '{number}'], [$letter, $number], $pattern);
+            } elseif (preg_match('/^(\d+)([A-Za-z]+)$/', $name, $matches)) {
+                $number = $matches[1];
+                $letter = $matches[2];
                 $generated = str_replace(['{letter}', '{number}'], [$letter, $number], $pattern);
             } else {
                 return $name;
@@ -1737,11 +1827,20 @@ class RegistrationPlan extends Model
 
     private function getStartingName($pattern): string
     {
+        $isNumberThenLetter = strpos($pattern, '{number}') !== false &&
+                              strpos($pattern, '{letter}') !== false &&
+                              strpos($pattern, '{number}') < strpos($pattern, '{letter}');
+
+        if ($isNumberThenLetter) {
+            return '1A';
+        }
         if (strpos($pattern, '{letter}') !== false && strpos($pattern, '{number}') !== false) {
             return 'A1';
-        } elseif (strpos($pattern, '{letter}') !== false) {
+        }
+        if (strpos($pattern, '{letter}') !== false) {
             return 'A';
-        } elseif (strpos($pattern, '{number}') !== false) {
+        }
+        if (strpos($pattern, '{number}') !== false) {
             return '1';
         }
 
@@ -1750,7 +1849,31 @@ class RegistrationPlan extends Model
 
     private function generateCombinedNextName($currentName, $sequenceType): string
     {
-        if (preg_match('/([A-Za-z]+)(\d+)/', $currentName, $matches)) {
+        // Support both "1A" and "A1".
+        if (preg_match('/^(\d+)([A-Za-z]+)$/', $currentName, $matches)) {
+            $number = (int) $matches[1];
+            $letter = $matches[2];
+
+            $number += 1;
+
+            switch ($sequenceType) {
+                case self::EVEN_ONLY:
+                    if ($number % 2 !== 0) $number += 1;
+                    break;
+                case self::ODD_ONLY:
+                    if ($number % 2 === 0) $number += 1;
+                    break;
+            }
+
+            if ($number > 99) {
+                $letter = $this->incrementLetters($letter);
+                $number = $sequenceType === self::EVEN_ONLY ? 2 : 1;
+            }
+
+            return $number . $letter;
+        }
+
+        if (preg_match('/^([A-Za-z]+)(\d+)$/', $currentName, $matches)) {
             $letter = $matches[1];
             $number = (int) $matches[2];
 
@@ -1767,7 +1890,7 @@ class RegistrationPlan extends Model
 
             if ($number > 99) {
                 $letter = $this->incrementLetters($letter);
-                $number = $sequenceType === self::EVEN_ONLY ? 2 : ($sequenceType === self::ODD_ONLY ? 1 : 1);
+                $number = $sequenceType === self::EVEN_ONLY ? 2 : 1;
             }
 
             return $letter . $number;
@@ -1776,17 +1899,27 @@ class RegistrationPlan extends Model
         return $this->generateSimpleNextName($currentName);
     }
 
+    /**
+     * Excel-style letter increment: A → B … Z → AA → AB … AZ → BA …
+     * Uses an array so the prepend path (past Z) returns the correct
+     * string instead of a mutated one.
+     */
     private function incrementLetters($letters): string
     {
-        $length = strlen($letters);
-        for ($i = $length - 1; $i >= 0; $i--) {
-            if ($letters[$i] !== 'Z') {
-                $letters[$i] = chr(ord($letters[$i]) + 1);
-                return $letters;
-            }
-            $letters[$i] = 'A';
+        $chars = preg_split('//u', $letters, -1, PREG_SPLIT_NO_EMPTY);
+        if (!$chars) {
+            return 'A';
         }
-        return 'A' . $letters;
+
+        for ($i = count($chars) - 1; $i >= 0; $i--) {
+            if ($chars[$i] !== 'Z') {
+                $chars[$i] = chr(ord($chars[$i]) + 1);
+                return implode('', $chars);
+            }
+            $chars[$i] = 'A';
+        }
+
+        return 'A' . implode('', $chars);
     }
 
     private function generateLetterNextName($currentName): string
@@ -1883,8 +2016,9 @@ class RegistrationPlan extends Model
             'completed_global_sequence_plans' => $completedPlans,
             'active_global_sequence_plans' => $activePlans,
             'sequence_patterns_distribution' => $sequencePatterns,
-            'average_properties_per_global_sequence' => $globalSequencePlans->count() > 0 ?
-                round($totalProperties / $globalSequencePlans->count(), 2) : 0,
+            'average_properties_per_global_sequence' => $globalSequencePlans->count() > 0
+                ? round($totalProperties / $globalSequencePlans->count(), 2)
+                : 0,
         ];
     }
 
@@ -1933,6 +2067,9 @@ class RegistrationPlan extends Model
         return $query->first();
     }
 
+    /**
+     * Static validation with BOTH {letter}{number} AND {number}{letter} support.
+     */
     public static function validateNamingPattern($pattern, $startingPoint, $sequenceType = null)
     {
         if (!preg_match('/\{([a-zA-Z_]+)\}/', $pattern)) {
@@ -1940,6 +2077,37 @@ class RegistrationPlan extends Model
                 'valid' => false,
                 'message' => 'Naming pattern must contain at least one placeholder like {letter}, {number}, etc.',
             ];
+        }
+
+        $isNumberThenLetter = strpos($pattern, '{number}') !== false
+            && strpos($pattern, '{letter}') !== false
+            && strpos($pattern, '{number}') < strpos($pattern, '{letter}');
+
+        if ($isNumberThenLetter) {
+            if (!preg_match('/^\d+[A-Za-z]+$/', $startingPoint)) {
+                return [
+                    'valid' => false,
+                    'message' => 'Starting point must be in format like 1A, 2B, etc. for number+letter patterns.',
+                ];
+            }
+
+            if ($sequenceType) {
+                $number = intval(preg_replace('/[^0-9]/', '', $startingPoint));
+                if ($sequenceType === self::EVEN_ONLY && $number % 2 !== 0) {
+                    return [
+                        'valid' => false,
+                        'message' => 'For even-only sequences, starting point must have an even number (2A, 4B, etc.).',
+                    ];
+                }
+                if ($sequenceType === self::ODD_ONLY && $number % 2 === 0) {
+                    return [
+                        'valid' => false,
+                        'message' => 'For odd-only sequences, starting point must have an odd number (1A, 3B, etc.).',
+                    ];
+                }
+            }
+
+            return ['valid' => true, 'message' => 'Pattern is valid'];
         }
 
         if (strpos($pattern, '{letter}') !== false && strpos($pattern, '{number}') !== false) {

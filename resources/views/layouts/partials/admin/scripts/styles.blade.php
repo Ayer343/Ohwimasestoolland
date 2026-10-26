@@ -216,8 +216,7 @@
 /* =====================================================
    BILLING MANAGEMENT MODAL STYLES
    ===================================================== */
-.billing-modal,
-.admin-tools-modal {
+.billing-modal {
     width: 90%;
     max-width: 1200px;
     border-radius: 16px;
@@ -246,8 +245,7 @@
     }
 }
 
-.billing-option-card,
-.admin-tools-card {
+.billing-option-card {
     background-color: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: 12px;
@@ -261,21 +259,18 @@
     height: 100%;
 }
 
-.billing-option-card:hover,
-.admin-tools-card:hover {
+.billing-option-card:hover {
     transform: translateY(-4px);
     border-color: var(--primary);
     box-shadow: 0 10px 30px rgba(var(--primary-rgb), 0.15);
 }
 
-.billing-option-card.active,
-.admin-tools-card.active {
+.billing-option-card.active {
     border-color: var(--primary);
     background-color: rgba(var(--primary-rgb), 0.05);
 }
 
-.billing-option-card.active::before,
-.admin-tools-card.active::before {
+.billing-option-card.active::before {
     content: '';
     position: absolute;
     left: 0;
@@ -286,8 +281,7 @@
     border-radius: 4px 0 0 4px;
 }
 
-.billing-icon-container,
-.admin-tools-icon-container {
+.billing-icon-container {
     width: 50px;
     height: 50px;
     border-radius: 12px;
@@ -299,24 +293,20 @@
     transition: all 0.3s ease;
 }
 
-.billing-option-card:hover .billing-icon-container,
-.admin-tools-card:hover .admin-tools-icon-container {
+.billing-option-card:hover .billing-icon-container {
     transform: scale(1.1);
 }
 
-.billing-icon-container i,
-.admin-tools-icon-container i {
+.billing-icon-container i {
     font-size: 22px;
 }
 
-.billing-content,
-.admin-tools-content {
+.billing-content {
     flex-grow: 1;
     min-width: 0;
 }
 
-.billing-title,
-.admin-tools-title {
+.billing-title {
     font-size: 16px;
     font-weight: 600;
     margin-bottom: 5px;
@@ -326,8 +316,7 @@
     text-overflow: ellipsis;
 }
 
-.billing-description,
-.admin-tools-description {
+.billing-description {
     font-size: 13px;
     margin-bottom: 10px;
     line-height: 1.4;
@@ -337,8 +326,7 @@
     overflow: hidden;
 }
 
-.billing-stats,
-.admin-tools-stats {
+.billing-stats {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -357,8 +345,7 @@
     white-space: nowrap;
 }
 
-.billing-arrow,
-.admin-tools-arrow {
+.billing-arrow {
     color: var(--text-secondary);
     opacity: 0.6;
     transition: all 0.3s ease;
@@ -366,8 +353,7 @@
     align-self: center;
 }
 
-.billing-option-card:hover .billing-arrow,
-.admin-tools-card:hover .admin-tools-arrow {
+.billing-option-card:hover .billing-arrow {
     opacity: 1;
     transform: translateX(4px);
     color: var(--primary);
@@ -947,41 +933,37 @@ input:focus, select:focus, textarea:focus {
    RESPONSIVE ADJUSTMENTS
    ===================================================== */
 @media (max-width: 1280px) {
-    .billing-modal,
-    .admin-tools-modal {
+    .billing-modal {
         max-width: 1000px;
     }
 }
 
 @media (max-width: 1100px) {
-    .billing-modal .grid,
-    .admin-tools-modal .grid {
+    .billing-modal .grid {
         grid-template-columns: repeat(2, 1fr) !important;
     }
 }
 
 @media (max-width: 768px) {
-    .billing-modal,
-    .admin-tools-modal {
+    .billing-modal {
         width: 95%;
         margin: 10px;
     }
-    
-    .billing-modal .grid,
-    .admin-tools-modal .grid {
+
+    .billing-modal .grid {
         grid-template-columns: 1fr !important;
     }
-    
+
     .stat-card {
         flex-direction: column;
         text-align: center;
     }
-    
+
     .stat-icon {
         margin-right: 0;
         margin-bottom: 10px;
     }
-    
+
     .quick-search-results {
         position: fixed;
         top: auto;
@@ -991,34 +973,34 @@ input:focus, select:focus, textarea:focus {
         width: calc(100% - 20px);
         margin-top: 8px;
     }
-    
+
     #quickSearchInput:focus {
         min-width: auto;
         width: 100%;
     }
-    
+
     .quick-result-item {
         padding: 12px;
     }
-    
+
     .header {
         padding: 10px 16px;
     }
-    
+
     .avatar-minimal {
         width: 28px;
         height: 28px;
     }
-    
+
     .header-buttons {
         gap: 6px;
     }
-    
+
     .header-search {
         min-width: auto;
         width: 200px;
     }
-    
+
     .notification-dropdown {
         width: 300px !important;
         right: -50px !important;
@@ -1057,30 +1039,27 @@ input:focus, select:focus, textarea:focus {
 }
 
 @media (max-width: 480px) {
-    .billing-option-card,
-    .admin-tools-card {
+    .billing-option-card {
         flex-direction: column;
         align-items: flex-start;
     }
-    
-    .billing-icon-container,
-    .admin-tools-icon-container {
+
+    .billing-icon-container {
         margin-right: 0;
         margin-bottom: 12px;
     }
-    
-    .billing-arrow,
-    .admin-tools-arrow {
+
+    .billing-arrow {
         position: absolute;
         bottom: 16px;
         right: 16px;
         margin-left: 0;
     }
-    
+
     .header-search {
         width: 160px;
     }
-    
+
     .search-modal-container .p-6 {
         padding: 1rem !important;
     }
@@ -1184,7 +1163,6 @@ input:focus, select:focus, textarea:focus {
    ===================================================== */
 #searchModal,
 #billingManagementModal,
-#administrativeToolsModal,
 #themeSettingsModal,
 #emailManagementModal,
 #smsManagementModal,
@@ -1299,7 +1277,6 @@ input:focus, select:focus, textarea:focus {
 #cancelSearch,
 #closeSearchModal,
 .billing-option-card,
-.admin-tools-card,
 .quick-action-btn,
 .recent-search-tag,
 #clearRecentSearchesBtn {

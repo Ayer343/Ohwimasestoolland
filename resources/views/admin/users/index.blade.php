@@ -12,7 +12,7 @@
                 <p class="mt-1 text-sm" style="color: var(--text-secondary);">
                     Manage all users except developers. Create, edit, and monitor user accounts.
                 </p>
-                <div class="mt-3">
+                <div class="mt-3 flex flex-wrap gap-3">
                     @php
                         $isDeveloper = auth()->user()->isDeveloper();
                         $isSuperAdmin = auth()->user()->isSuperAdmin();
@@ -26,6 +26,14 @@
                             $superAdminRoute = route('developer.super-admins.index');
                             $linkText = 'Manage Super Admins';
                         }
+
+                        $pendingPersonnelCount = 0;
+                        try {
+                            $pendingPersonnelCount = \App\Models\User::query()
+                                ->where('type', \App\Models\User::TYPE_SECURITY_PERSONNEL)
+                                ->where('metadata->awaiting_approval', true)
+                                ->count();
+                        } catch (\Throwable $e) {}
                     @endphp
                     <a href="{{ $superAdminRoute }}"
                        class="inline-flex items-center text-sm font-medium transition-colors hover:opacity-80"
@@ -34,6 +42,19 @@
                         {{ $linkText }}
                         <i class="fas fa-arrow-right ml-2 text-xs"></i>
                     </a>
+
+                    @if($pendingPersonnelCount > 0)
+                        <a href="{{ route('admin.users.index', ['queue' => 'pending_personnel']) }}"
+                           class="inline-flex items-center text-sm font-medium px-3 py-1 rounded-full transition-colors hover:opacity-90"
+                           style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                            <i class="fas fa-user-clock mr-2"></i>
+                            Pending Security Personnel
+                            <span class="ml-2 px-2 py-0.5 text-xs rounded-full text-white"
+                                  style="background-color: var(--warning);">
+                                {{ $pendingPersonnelCount }}
+                            </span>
+                        </a>
+                    @endif
                 </div>
             </div>
             <div class="flex items-center space-x-3 flex-wrap gap-2">
@@ -83,6 +104,45 @@
             </div>
         </div>
     </div>
+
+    {{-- ============================================================= --}}
+    {{-- PENDING PERSONNEL BANNER — shown only when queue is active   --}}
+    {{-- ============================================================= --}}
+    @if(isset($queue) && $queue === 'pending_personnel')
+        <div class="card p-4"
+             style="background-color: rgba(var(--warning-rgb), 0.1); border-left: 4px solid var(--warning);">
+            <div class="flex items-start justify-between flex-wrap gap-3">
+                <div class="flex items-start">
+                    <i class="fas fa-user-clock mt-0.5 mr-3 text-lg" style="color: var(--warning);"></i>
+                    <div>
+                        <p class="text-sm font-medium" style="color: var(--text-primary);">
+                            Pending Security Personnel — Approval Queue
+                        </p>
+                        <p class="text-sm mt-1" style="color: var(--text-secondary);">
+                            These submissions were created by the Head of Security. They cannot log in
+                            until you approve them. Rejected submissions are soft-deleted and visible to
+                            the submitting head for context.
+                        </p>
+                        <div class="mt-2 flex flex-wrap gap-3 text-xs" style="color: var(--text-secondary);">
+                            <span><i class="fas fa-clipboard-list mr-1"></i>
+                                Total: <strong style="color: var(--text-primary);">{{ $stats['pending_personnel_total'] ?? 0 }}</strong>
+                            </span>
+                            <span><i class="fas fa-calendar-day mr-1"></i>
+                                Today: <strong style="color: var(--text-primary);">{{ $stats['pending_personnel_today'] ?? 0 }}</strong>
+                            </span>
+                            <span><i class="fas fa-calendar-week mr-1"></i>
+                                This week: <strong style="color: var(--text-primary);">{{ $stats['pending_personnel_this_week'] ?? 0 }}</strong>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ route('admin.users.index') }}"
+                   class="btn-secondary px-3 py-2 rounded-lg text-sm">
+                    <i class="fas fa-times mr-1"></i> Exit Queue
+                </a>
+            </div>
+        </div>
+    @endif
 
     <!-- Statistics Cards -->
     @php
@@ -329,6 +389,10 @@
     <!-- Filters Card -->
     <div class="card p-6">
         <form action="{{ route('admin.users.index') }}" method="GET" class="grid grid-cols-1 md:grid-cols-5 gap-4">
+            @if(isset($queue) && $queue === 'pending_personnel')
+                <input type="hidden" name="queue" value="pending_personnel">
+            @endif
+
             <div>
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Search</label>
                 <input type="text" name="search" value="{{ request('search') }}"
@@ -390,7 +454,8 @@
                     {{ $users->total() }} users found
                 </div>
                 <div class="flex space-x-3">
-                    <a href="{{ route('admin.users.index') }}" class="btn-secondary px-4 py-2 rounded-lg text-sm">
+                    <a href="{{ route('admin.users.index', isset($queue) && $queue === 'pending_personnel' ? ['queue' => 'pending_personnel'] : []) }}"
+                       class="btn-secondary px-4 py-2 rounded-lg text-sm">
                         Clear Filters
                     </a>
                     <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm">
@@ -416,6 +481,11 @@
                         <th class="text-left py-3 px-4 font-medium" style="color: var(--text-primary);">Status</th>
                         <th class="text-left py-3 px-4 font-medium" style="color: var(--text-primary);">Phone</th>
                         <th class="text-left py-3 px-4 font-medium" style="color: var(--text-primary);">Created</th>
+
+                        @if(isset($queue) && $queue === 'pending_personnel')
+                            <th class="text-left py-3 px-4 font-medium" style="color: var(--text-primary);">Submitted By</th>
+                        @endif
+
                         <th class="text-left py-3 px-4 font-medium" style="color: var(--text-primary);">Invitation</th>
                         <th class="text-left py-3 px-4 font-medium" style="color: var(--text-primary);">Actions</th>
                     </tr>
@@ -423,16 +493,50 @@
                 <tbody>
                     @forelse($users as $user)
                     @php
-                        $isLandlordWithoutProperties = false;
-                        $showArchiveIcon = false;
+                        $ownedPropertyCount  = $user->property_count;
+                        $linkedPropertyCount = $user->linked_property_count;
+                        $totalPropertyCount  = $user->accessible_property_count;
+                        $hasPropertyAccess   = $user->has_property_access;
+                        $isLinkedOnly        = $ownedPropertyCount === 0 && $linkedPropertyCount > 0;
 
+                        $isLandlordWithoutProperties = false;
                         if ($user->type === \App\Models\User::TYPE_LANDLORD && !$user->isArchived()) {
-                            $propertyCount = $user->property_count ?? $user->properties()->count();
-                            if ($propertyCount == 0) {
+                            if (!$hasPropertyAccess) {
                                 $isLandlordWithoutProperties = true;
-                                $showArchiveIcon = true;
                             }
                         }
+
+                        $isOrphanTenant = false;
+                        $tenantDaysSinceCreation = null;
+                        if ($user->type === \App\Models\User::TYPE_TENANT && !$user->isArchived()) {
+                            $hasApprovedUnit = \App\Models\PropertyUnit::query()
+                                ->where('tenant_id', $user->id)
+                                ->where('tenant_status', \App\Models\PropertyUnit::TENANT_STATUS_APPROVED)
+                                ->exists();
+                            if (!$hasApprovedUnit) {
+                                $tenantDaysSinceCreation = (int) $user->created_at->diffInDays(now());
+                                if ($tenantDaysSinceCreation >= 30) {
+                                    $isOrphanTenant = true;
+                                }
+                            }
+                        }
+
+                        $showArchiveIcon = $isLandlordWithoutProperties || $isOrphanTenant;
+
+                        $rowHighlightClass = '';
+                        if ($isLandlordWithoutProperties) {
+                            $rowHighlightClass = 'landlord-no-properties-row';
+                        } elseif ($isOrphanTenant) {
+                            $rowHighlightClass = 'orphan-tenant-row';
+                        }
+
+                        $archiveReasonHint = $isLandlordWithoutProperties
+                            ? 'Landlord has no properties - manual archival by admin'
+                            : "Tenant has been unassigned for {$tenantDaysSinceCreation} days - manual archival by admin";
+
+                        $archiveMetricCount = $isLandlordWithoutProperties
+                            ? $ownedPropertyCount
+                            : ($tenantDaysSinceCreation ?? 0);
 
                         $isSuperAdminUser = $user->hasRole('super-admin') || $user->type === \App\Models\User::TYPE_SUPER_ADMIN;
                         $isCurrentUser = $user->id === auth()->id();
@@ -446,17 +550,14 @@
                             $hasAcceptedInvitation = true;
                             $acceptanceDate = $user->invitation_accepted_at;
                         }
-
                         if (!$hasAcceptedInvitation && $user->invitations()->where('status', 'accepted')->exists()) {
                             $hasAcceptedInvitation = true;
                             $acceptedInvitation = $user->invitations()->where('status', 'accepted')->latest()->first();
                             $acceptanceDate = $acceptedInvitation->accepted_at;
                         }
-
                         if (!$hasAcceptedInvitation && $user->status === \App\Models\User::STATUS_ACTIVE) {
                             $hasAcceptedInvitation = true;
                         }
-
                         if (!is_null($user->invitation_sent_at)) {
                             $hasInvitationSent = true;
                             $sentDate = $user->invitation_sent_at;
@@ -479,8 +580,10 @@
                         $canResendInvitation = !$user->isArchived() &&
                             $hasInvitationSent &&
                             !$hasAcceptedInvitation;
+
+                        $inPendingQueue = isset($queue) && $queue === 'pending_personnel';
                     @endphp
-                    <tr class="border-b {{ $isLandlordWithoutProperties ? 'landlord-no-properties-row' : '' }}"
+                    <tr class="border-b {{ $rowHighlightClass }}"
                         style="border-bottom-color: var(--border-color); background-color: var(--bg-secondary);">
                         <td class="py-4 px-4">
                             <input type="checkbox" name="user_ids[]" value="{{ $user->id }}"
@@ -557,16 +660,33 @@
                                                 <i class="fas fa-archive mr-1"></i> Archived
                                             </span>
                                         @endif
-                                        @if($showArchiveIcon)
+
+                                        @if($isLandlordWithoutProperties)
                                             <span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-warning text-dark warning-badge"
-                                                  title="Landlord without properties - Eligible for archival"
+                                                  title="Landlord with no owned or linked properties - Eligible for archival"
                                                   style="background-color: #ffc107; color: #856404;">
                                                 <i class="fas fa-exclamation-triangle mr-1"></i> No Properties
                                             </span>
                                         @endif
+
+                                        @if($isOrphanTenant)
+                                            <span class="ml-2 px-2 py-0.5 text-xs rounded-full"
+                                                  title="Tenant has not been assigned to any property unit for 30+ days - Eligible for archival"
+                                                  style="background-color: #fd7e14; color: #ffffff;">
+                                                <i class="fas fa-user-clock mr-1"></i> Unassigned {{ $tenantDaysSinceCreation }}d
+                                            </span>
+                                        @endif
+
                                         @if($isSuperAdminUser)
                                             <span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-purple-100 text-purple-800">
                                                 <i class="fas fa-user-shield mr-1"></i> Super Admin
+                                            </span>
+                                        @endif
+
+                                        @if($inPendingQueue)
+                                            <span class="ml-2 px-2 py-0.5 text-xs rounded-full"
+                                                  style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                                                <i class="fas fa-clock mr-1"></i> Awaiting Approval
                                             </span>
                                         @endif
                                     </div>
@@ -659,9 +779,16 @@
                                     @endforelse
                                 </div>
 
-                                @if($user->is_property_owner)
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                                        <i class="fas fa-building mr-1"></i> {{ $user->property_count }} Properties
+                                @if($hasPropertyAccess)
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+                                                 {{ $isLinkedOnly ? 'bg-indigo-100 text-indigo-800' : 'bg-purple-100 text-purple-800' }}"
+                                          title="{{ $ownedPropertyCount }} owned · {{ $linkedPropertyCount }} linked">
+                                        <i class="fas {{ $isLinkedOnly ? 'fa-user-friends' : 'fa-building' }} mr-1"></i>
+                                        {{ $totalPropertyCount }}
+                                        {{ \Illuminate\Support\Str::plural('Property', $totalPropertyCount) }}
+                                        @if($isLinkedOnly)
+                                            <span class="ml-1 opacity-75">· linked</span>
+                                        @endif
                                     </span>
                                 @endif
 
@@ -775,6 +902,24 @@
                             </div>
                         </td>
 
+                        @if($inPendingQueue)
+                            <td class="py-4 px-4">
+                                @php
+                                    $submittedByName = $user->submitted_by_head_name ?? null;
+                                    $submittedAt     = $user->submitted_at ?? null;
+                                @endphp
+                                <div class="text-sm font-medium" style="color: var(--text-primary);">
+                                    <i class="fas fa-user-shield mr-1" style="color: var(--warning);"></i>
+                                    {{ $submittedByName ?? 'Unknown' }}
+                                </div>
+                                @if($submittedAt)
+                                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                        {{ \Carbon\Carbon::parse($submittedAt)->diffForHumans() }}
+                                    </div>
+                                @endif
+                            </td>
+                        @endif
+
                         <td class="py-4 px-4">
                             @if(!$user->isArchived())
                                 @if($hasAcceptedInvitation)
@@ -821,119 +966,179 @@
                         </td>
 
                         <td class="py-4 px-4">
-                            <div class="flex items-center space-x-2 flex-wrap gap-1 action-buttons">
-                                <a href="{{ route('admin.users.show', $user->id) }}"
-                                   class="btn-secondary btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="View Details">
-                                    <i class="fas fa-eye"></i>
-                                </a>
+                            @if($inPendingQueue)
+                                <div class="flex items-center space-x-2 flex-wrap gap-1 action-buttons">
+                                    <a href="{{ route('admin.users.show', $user->id) }}"
+                                       class="btn-secondary btn-sm inline-flex items-center px-2 py-1 rounded text-xs"
+                                       title="View Details">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
 
-                                @if(auth()->user()->isSuperAdmin() && !$user->isArchived() && $user->type !== \App\Models\User::TYPE_DEVELOPER)
-                                <button type="button"
-                                        class="manage-roles-btn btn-info btn-sm inline-flex items-center px-2 py-1 rounded text-xs"
-                                        title="Manage Roles"
-                                        data-user-id="{{ $user->id }}"
-                                        data-user-name="{{ $user->name }}"
-                                        data-current-user-id="{{ auth()->id() }}"
-                                        data-user-type="{{ $user->type }}"
-                                        data-user-roles='@json($user->roles->pluck('slug'))'
-                                        data-has-landlord-role="{{ $user->hasRole('landlord') ? 'true' : 'false' }}"
-                                        data-property-count="{{ $user->property_count ?? 0 }}"
-                                        data-is-property-owner="{{ $user->is_property_owner ? 'true' : 'false' }}">
-                                    <i class="fas fa-user-tag"></i>
-                                </button>
-                                @endif
+                                    {{-- 🔧 FIX: approval route name is bare 'approve-personnel' (no admin.users. prefix) --}}
+                                    @if(Route::has('admin.users.approve-personnel'))
+    <form action="{{ route('admin.users.approve-personnel', $user->id) }}"
+          method="POST" class="inline"
+          onsubmit="return confirm('Approve {{ addslashes($user->name) }}? They will be able to log in immediately.');">
+        @csrf
+        <button type="submit"
+                class="btn-success btn-sm inline-flex items-center px-2 py-1 rounded text-xs"
+                title="Approve Submission">
+            <i class="fas fa-check mr-1"></i> Approve
+        </button>
+    </form>
+@endif
 
-                                @if($showArchiveIcon)
-                                <button type="button" onclick="showArchiveWarning({{ $user->id }}, '{{ addslashes($user->name) }}', {{ $user->property_count ?? 0 }})"
-                                        class="btn-warning btn-sm inline-flex items-center px-2 py-1 rounded text-xs archive-warning-btn"
-                                        title="This landlord has no properties and is eligible for archival"
-                                        style="background-color: #ffc107; color: #856404;">
-                                    <i class="fas fa-archive"></i>
-                                    <span class="ml-1 hidden sm:inline">Archive</span>
-                                </button>
-                                @endif
+                                    {{-- 🔧 FIX: rejection route name is bare 'reject-personnel' --}}
+                                    @if(Route::has('admin.users.reject-personnel'))
+    <button type="button"
+            onclick="showRejectPersonnelModal({{ $user->id }}, '{{ addslashes($user->name) }}')"
+            class="btn-danger btn-sm inline-flex items-center px-2 py-1 rounded text-xs"
+            title="Reject Submission">
+        <i class="fas fa-times mr-1"></i> Reject
+    </button>
+@endif
+                                </div>
+                            @else
+                                <div class="flex items-center space-x-2 flex-wrap gap-1 action-buttons">
+                                    <a href="{{ route('admin.users.show', $user->id) }}"
+                                       class="btn-secondary btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="View Details">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
 
-                                @if($user->isArchived())
-                                    <button type="button" onclick="restoreArchivedUser({{ $user->id }}, '{{ addslashes($user->name) }}')"
-                                            class="btn-success btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Restore Account">
-                                        <i class="fas fa-undo-alt"></i>
+                                    @if(auth()->user()->isSuperAdmin() && !$user->isArchived() && $user->type !== \App\Models\User::TYPE_DEVELOPER)
+                                    <button type="button"
+                                            class="manage-roles-btn btn-info btn-sm inline-flex items-center px-2 py-1 rounded text-xs"
+                                            title="Manage Roles"
+                                            data-user-id="{{ $user->id }}"
+                                            data-user-name="{{ $user->name }}"
+                                            data-current-user-id="{{ auth()->id() }}"
+                                            data-user-type="{{ $user->type }}"
+                                            data-user-roles='@json($user->roles->pluck('slug'))'
+                                            data-has-landlord-role="{{ $user->hasRole('landlord') ? 'true' : 'false' }}"
+                                            data-property-count="{{ $ownedPropertyCount }}"
+                                            data-linked-property-count="{{ $linkedPropertyCount }}"
+                                            data-is-property-owner="{{ $ownedPropertyCount > 0 ? 'true' : 'false' }}"
+                                            data-has-property-access="{{ $hasPropertyAccess ? 'true' : 'false' }}">
+                                        <i class="fas fa-user-tag"></i>
                                     </button>
-                                @endif
+                                    @endif
 
-                                @if(!$user->isArchived())
-                                <div class="relative group">
-                                    <button type="button" class="btn-info btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Photo Options">
-                                        <i class="fas fa-camera"></i>
-                                    </button>
-                                    <div class="absolute left-0 mt-2 w-48 bg-white rounded-lg shadow-lg border z-10 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200"
-                                         style="background-color: var(--bg-primary); border-color: var(--border-color);">
-                                        <div class="py-1">
-                                            @if($user->has_photo)
-                                                <button type="button" onclick="updateUserPhoto({{ $user->id }})"
-                                                        class="w-full text-left px-4 py-2 text-sm hover:bg-opacity-10"
-                                                        style="color: var(--text-primary);">
-                                                    <i class="fas fa-sync-alt mr-2"></i> Update Photo
-                                                </button>
-                                                <button type="button" onclick="removeUserPhoto({{ $user->id }})"
-                                                        class="w-full text-left px-4 py-2 text-sm hover:bg-opacity-10"
-                                                        style="color: var(--danger);">
-                                                    <i class="fas fa-trash mr-2"></i> Remove Photo
-                                                </button>
-                                            @else
-                                                <button type="button" onclick="updateUserPhoto({{ $user->id }})"
-                                                        class="w-full text-left px-4 py-2 text-sm hover:bg-opacity-10"
-                                                        style="color: var(--text-primary);">
-                                                    <i class="fas fa-plus mr-2"></i> Add Photo
-                                                </button>
-                                            @endif
+                                    @if($showArchiveIcon)
+                                        @php
+                                            $archiveKind = $isLandlordWithoutProperties ? 'landlord' : 'tenant';
+                                            $archiveButtonTitle = $isLandlordWithoutProperties
+                                                ? 'This landlord has no owned or linked properties and is eligible for archival'
+                                                : 'This tenant has been unassigned for 30+ days and is eligible for archival';
+                                            $archiveBadgeColor = $isLandlordWithoutProperties
+                                                ? 'background-color: #ffc107; color: #856404;'
+                                                : 'background-color: #fd7e14; color: #ffffff;';
+                                        @endphp
+                                        <button type="button"
+                                                onclick="showArchiveWarning({{ $user->id }}, '{{ addslashes($user->name) }}', {{ $archiveMetricCount }}, '{{ $archiveKind }}', '{{ addslashes($archiveReasonHint) }}')"
+                                                class="btn-warning btn-sm inline-flex items-center px-2 py-1 rounded text-xs archive-warning-btn"
+                                                title="{{ $archiveButtonTitle }}"
+                                                data-archive-kind="{{ $archiveKind }}"
+                                                style="{{ $archiveBadgeColor }}">
+                                            <i class="fas fa-archive"></i>
+                                            <span class="ml-1 hidden sm:inline">Archive</span>
+                                        </button>
+                                    @endif
+
+                                    @if($user->isArchived())
+                                        <button type="button" onclick="restoreArchivedUser({{ $user->id }}, '{{ addslashes($user->name) }}')"
+                                                class="btn-success btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Restore Account">
+                                            <i class="fas fa-undo-alt"></i>
+                                        </button>
+                                    @endif
+
+                                    @if(!$user->isArchived())
+                                    <div class="relative group">
+                                        <button type="button" class="btn-info btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Photo Options">
+                                            <i class="fas fa-camera"></i>
+                                        </button>
+                                        <div class="absolute left-0 mt-2 w-48 bg-white rounded-lg shadow-lg border z-10 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200"
+                                             style="background-color: var(--bg-primary); border-color: var(--border-color);">
+                                            <div class="py-1">
+                                                @if($user->has_photo)
+                                                    <button type="button" onclick="updateUserPhoto({{ $user->id }})"
+                                                            class="w-full text-left px-4 py-2 text-sm hover:bg-opacity-10"
+                                                            style="color: var(--text-primary);">
+                                                        <i class="fas fa-sync-alt mr-2"></i> Update Photo
+                                                    </button>
+                                                    <button type="button" onclick="removeUserPhoto({{ $user->id }})"
+                                                            class="w-full text-left px-4 py-2 text-sm hover:bg-opacity-10"
+                                                            style="color: var(--danger);">
+                                                        <i class="fas fa-trash mr-2"></i> Remove Photo
+                                                    </button>
+                                                @else
+                                                    <button type="button" onclick="updateUserPhoto({{ $user->id }})"
+                                                            class="w-full text-left px-4 py-2 text-sm hover:bg-opacity-10"
+                                                            style="color: var(--text-primary);">
+                                                        <i class="fas fa-plus mr-2"></i> Add Photo
+                                                    </button>
+                                                @endif
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                                @endif
+                                    @endif
 
-                                @if(!$user->isArchived() && $user->id !== auth()->id())
-                                    @if($user->status === 'active')
-                                        <button type="button" onclick="suspendUser({{ $user->id }})"
-                                                class="btn-warning btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Suspend User">
+                                    @if(!$user->isArchived() && $user->id !== auth()->id())
+                                        @if($user->status === 'active')
+                                            <button type="button" onclick="suspendUser({{ $user->id }})"
+                                                    class="btn-warning btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Suspend User">
+                                                <i class="fas fa-pause"></i>
+                                            </button>
+                                        @elseif($user->status === 'suspended')
+                                            <button type="button" onclick="activateUser({{ $user->id }})"
+                                                    class="btn-success btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Activate User">
+                                                <i class="fas fa-play"></i>
+                                            </button>
+                                        @elseif($user->status === 'pending')
+                                            <button type="button" onclick="activateUser({{ $user->id }})"
+                                                    class="btn-success btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Activate User">
+                                                <i class="fas fa-check"></i>
+                                            </button>
+                                        @endif
+
+                                        @if(auth()->user()->isSuperAdmin() && !$isSuperAdminUser)
+                                        <button type="button" onclick="deleteUser({{ $user->id }}, '{{ addslashes($user->name) }}')"
+                                                class="btn-danger btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Delete User">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                        @endif
+                                    @elseif($user->id === auth()->id())
+                                        <span class="btn-warning btn-sm opacity-50 cursor-not-allowed inline-flex items-center px-2 py-1 rounded text-xs" title="Cannot suspend your own account">
                                             <i class="fas fa-pause"></i>
-                                        </button>
-                                    @elseif($user->status === 'suspended')
-                                        <button type="button" onclick="activateUser({{ $user->id }})"
-                                                class="btn-success btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Activate User">
-                                            <i class="fas fa-play"></i>
-                                        </button>
-                                    @elseif($user->status === 'pending')
-                                        <button type="button" onclick="activateUser({{ $user->id }})"
-                                                class="btn-success btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Activate User">
-                                            <i class="fas fa-check"></i>
-                                        </button>
+                                        </span>
+                                        @if(auth()->user()->isSuperAdmin())
+                                        <span class="btn-danger btn-sm opacity-50 cursor-not-allowed inline-flex items-center px-2 py-1 rounded text-xs" title="Cannot delete your own account">
+                                            <i class="fas fa-trash"></i>
+                                        </span>
+                                        @endif
                                     @endif
-
-                                    @if(auth()->user()->isSuperAdmin() && !$isSuperAdminUser)
-                                    <button type="button" onclick="deleteUser({{ $user->id }}, '{{ addslashes($user->name) }}')"
-                                            class="btn-danger btn-sm inline-flex items-center px-2 py-1 rounded text-xs" title="Delete User">
-                                        <i class="fas fa-trash"></i>
-                                    </button>
-                                    @endif
-                                @elseif($user->id === auth()->id())
-                                    <span class="btn-warning btn-sm opacity-50 cursor-not-allowed inline-flex items-center px-2 py-1 rounded text-xs" title="Cannot suspend your own account">
-                                        <i class="fas fa-pause"></i>
-                                    </span>
-                                    @if(auth()->user()->isSuperAdmin())
-                                    <span class="btn-danger btn-sm opacity-50 cursor-not-allowed inline-flex items-center px-2 py-1 rounded text-xs" title="Cannot delete your own account">
-                                        <i class="fas fa-trash"></i>
-                                    </span>
-                                    @endif
-                                @endif
-                            </div>
+                                </div>
+                            @endif
                         </td>
                     </tr>
                     @empty
                     <tr>
-                        <td colspan="9" class="py-8 px-4 text-center" style="color: var(--text-secondary);">
+                        <td colspan="{{ isset($queue) && $queue === 'pending_personnel' ? 10 : 9 }}"
+                            class="py-8 px-4 text-center" style="color: var(--text-secondary);">
                             <i class="fas fa-users text-4xl mb-4 opacity-50"></i>
-                            <p class="text-lg">No users found</p>
-                            <p class="text-sm mt-2">Try adjusting your search filters or create a new user.</p>
+                            <p class="text-lg">
+                                @if(isset($queue) && $queue === 'pending_personnel')
+                                    No pending personnel submissions
+                                @else
+                                    No users found
+                                @endif
+                            </p>
+                            <p class="text-sm mt-2">
+                                @if(isset($queue) && $queue === 'pending_personnel')
+                                    There are currently no security-personnel submissions awaiting approval.
+                                @else
+                                    Try adjusting your search filters or create a new user.
+                                @endif
+                            </p>
                         </td>
                     </tr>
                     @endforelse
@@ -948,7 +1153,8 @@
         @endif
     </div>
 
-    <!-- Bulk Actions Card -->
+    <!-- Bulk Actions Card (hidden in queue mode) -->
+    @if(!(isset($queue) && $queue === 'pending_personnel'))
     <div class="card p-6">
         <div class="flex justify-between items-center">
             <h3 class="text-lg font-semibold" style="color: var(--text-primary);">Bulk Actions</h3>
@@ -977,9 +1183,58 @@
             Select users using the checkboxes and choose an action to perform on multiple users at once.
         </div>
     </div>
+    @endif
 </div>
 
 <!-- ==================== MODALS ==================== -->
+
+<!-- Reject Personnel Modal -->
+<div id="rejectPersonnelModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden p-4 modal-overlay">
+    <div class="bg-white rounded-lg w-full max-w-md modal-content" style="background-color: var(--bg-primary);">
+        <div class="p-6 border-b" style="border-color: var(--border-color);">
+            <div class="flex justify-between items-center">
+                <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-times-circle mr-2" style="color: var(--danger);"></i>
+                    Reject Personnel Submission
+                </h3>
+                <button type="button" onclick="closeRejectPersonnelModal()" class="text-gray-500 hover:text-gray-700">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+
+        <form id="rejectPersonnelForm" method="POST">
+            @csrf
+            <div class="p-6 space-y-4">
+                <p class="text-sm" style="color: var(--text-secondary);">
+                    You are rejecting <strong id="rejectPersonnelName" style="color: var(--text-primary);"></strong>'s
+                    submission. The user will be soft-deleted, visible to the submitting head for context,
+                    and will not be able to log in.
+                </p>
+
+                <div>
+                    <label for="rejection_reason" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                        Reason for rejection <span style="color: var(--danger);">*</span>
+                    </label>
+                    <textarea name="reason" id="rejection_reason" rows="4" required
+                              class="w-full p-2 border rounded"
+                              style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                              placeholder="Explain why this submission is being rejected. This is visible to the submitting head."></textarea>
+                </div>
+            </div>
+
+            <div class="p-6 border-t flex justify-end space-x-3" style="border-color: var(--border-color);">
+                <button type="button" onclick="closeRejectPersonnelModal()"
+                        class="btn-secondary px-4 py-2 rounded-lg">Cancel</button>
+                <button type="submit"
+                        class="px-4 py-2 rounded-lg font-medium text-white"
+                        style="background-color: var(--danger);">
+                    <i class="fas fa-times mr-2"></i> Reject Submission
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
 
 <!-- Photo Zoom Modal -->
 <div id="photoZoomModal" class="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-[100] hidden p-4 modal-overlay">
@@ -1229,15 +1484,12 @@
     </div>
 </div>
 
-<!-- ==================================================================== -->
-<!-- EXPORT MODAL — Super Admin/Admin + visible selection indicator      -->
-<!-- ==================================================================== -->
+<!-- Export Modal -->
 <div id="exportModal"
      class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden p-3 sm:p-4 modal-overlay">
     <div class="bg-white rounded-lg w-full max-w-xl max-h-[85vh] flex flex-col overflow-hidden modal-content"
          style="background-color: var(--bg-primary);">
 
-        <!-- Header (fixed) -->
         <div class="flex-shrink-0 px-5 py-3 border-b flex justify-between items-center"
              style="background-color: var(--bg-primary); border-color: var(--border-color);">
             <h3 class="text-base sm:text-lg font-semibold" style="color: var(--text-primary);">Export Users</h3>
@@ -1246,27 +1498,19 @@
             </button>
         </div>
 
-        <!-- Scrollable body -->
         <div class="flex-1 min-h-0 overflow-y-auto px-5 py-4 scrollable-modal-content">
             <form id="exportForm"
                   method="GET"
                   action="{{ route('admin.users.export') }}"
                   accept-charset="UTF-8">
 
-                <!-- ============================================== -->
-                <!-- Export Format — VISIBLE SELECTION INDICATOR   -->
-                <!-- ============================================== -->
                 <div class="mb-5">
                     <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Export Format</label>
                     <div class="grid grid-cols-2 gap-3">
                         <label class="export-format-option cursor-pointer relative">
                             <input type="radio" name="export_format" value="csv" checked class="sr-only peer">
-                            <div class="border-2 rounded-lg p-3 text-center transition-all duration-200
-                                        border-gray-300
-                                        peer-checked:border-blue-500 peer-checked:bg-blue-50 peer-checked:shadow-md
-                                        hover:border-blue-400 hover:shadow-md export-format-card">
+                            <div class="border-2 rounded-lg p-3 text-center transition-all duration-200 border-gray-300 peer-checked:border-blue-500 peer-checked:bg-blue-50 peer-checked:shadow-md hover:border-blue-400 hover:shadow-md export-format-card">
 
-                                <!-- Selected checkmark badge (top-right) -->
                                 <span class="format-check-badge absolute top-2 right-2 w-6 h-6 rounded-full bg-blue-500 text-white items-center justify-center text-xs shadow-md">
                                     <i class="fas fa-check"></i>
                                 </span>
@@ -1282,12 +1526,8 @@
 
                         <label class="export-format-option cursor-pointer relative">
                             <input type="radio" name="export_format" value="pdf" class="sr-only peer">
-                            <div class="border-2 rounded-lg p-3 text-center transition-all duration-200
-                                        border-gray-300
-                                        peer-checked:border-red-500 peer-checked:bg-red-50 peer-checked:shadow-md
-                                        hover:border-red-400 hover:shadow-md export-format-card">
+                            <div class="border-2 rounded-lg p-3 text-center transition-all duration-200 border-gray-300 peer-checked:border-red-500 peer-checked:bg-red-50 peer-checked:shadow-md hover:border-red-400 hover:shadow-md export-format-card">
 
-                                <!-- Selected checkmark badge (top-right) -->
                                 <span class="format-check-badge absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500 text-white items-center justify-center text-xs shadow-md">
                                     <i class="fas fa-check"></i>
                                 </span>
@@ -1303,9 +1543,6 @@
                     </div>
                 </div>
 
-                <!-- ============================================== -->
-                <!-- User types — INCLUDES SUPER ADMIN + ADMIN     -->
-                <!-- ============================================== -->
                 <div class="mb-5">
                     <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">User Types to Export</label>
                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
@@ -1340,7 +1577,6 @@
                     </div>
                 </div>
 
-                <!-- Additional options -->
                 <div class="mb-5">
                     <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Additional Options</label>
                     <div class="space-y-1.5">
@@ -1359,7 +1595,6 @@
                     </div>
                 </div>
 
-                <!-- Date range -->
                 <div class="mb-5">
                     <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Date Range</label>
                     <div class="grid grid-cols-2 gap-3">
@@ -1376,7 +1611,6 @@
                     </div>
                 </div>
 
-                <!-- Summary -->
                 <div class="bg-gray-50 rounded-lg p-3" style="background-color: var(--bg-secondary);">
                     <h4 class="font-medium mb-1 text-xs uppercase tracking-wide" style="color: var(--text-secondary);">Export Summary</h4>
                     <div class="text-sm" style="color: var(--text-primary);">
@@ -1386,7 +1620,6 @@
             </form>
         </div>
 
-        <!-- Footer (fixed) -->
         <div class="flex-shrink-0 px-5 py-3 border-t flex flex-col sm:flex-row justify-end gap-2 sm:gap-3"
              style="background-color: var(--bg-primary); border-color: var(--border-color);">
             <button type="button" onclick="closeExportModal()" class="btn-secondary px-4 py-2 rounded-lg order-2 sm:order-1">
@@ -1558,7 +1791,7 @@
     <div class="bg-white rounded-lg p-6 w-full max-w-md modal-content" style="background-color: var(--bg-primary);">
         <h3 class="text-lg font-semibold mb-4 flex items-center" style="color: var(--text-primary);">
             <i class="fas fa-archive text-warning mr-2" style="color: #ffc107;"></i>
-            Archive Landlord Account
+            <span id="archiveModalTitle">Archive Landlord Account</span>
         </h3>
 
         <div class="alert-warning p-3 rounded mb-4" style="background-color: rgba(255, 193, 7, 0.1); border-left: 4px solid #ffc107;">
@@ -1596,7 +1829,7 @@
         <div class="bg-blue-50 rounded p-3 mb-4" style="background-color: rgba(23, 162, 184, 0.1);">
             <p class="text-xs" style="color: var(--text-secondary);">
                 <i class="fas fa-gavel mr-1"></i>
-                This user has <strong id="archivePropertyCount">0</strong> properties. Archival will be processed according to system settings.
+                <span id="archiveMetricText">This user has <strong id="archivePropertyCount">0</strong> properties. Archival will be processed according to system settings.</span>
             </p>
         </div>
 
@@ -1638,26 +1871,67 @@ let currentRestoreUserName = null;
 let currentArchiveUserId = null;
 let currentArchiveUserName = null;
 let currentArchivePropertyCount = 0;
+let currentArchiveKind = 'landlord';
+
+let currentRejectPersonnelUserId = null;
+
+// ==================== ✅ SAFE JSON HELPER ====================
+async function parseResponseSafely(response) {
+    const text = await response.text();
+    const trimmed = text.trim();
+    let data = null;
+    let parsed = false;
+
+    const cleaned = trimmed.startsWith('\uFEFF') ? trimmed.slice(1) : trimmed;
+
+    if (cleaned.length > 0) {
+        try {
+            data = JSON.parse(cleaned);
+            parsed = true;
+        } catch (e) {
+            parsed = false;
+        }
+    }
+
+    if (parsed) {
+        return { ok: response.ok, status: response.status, data };
+    }
+
+    if (response.ok || response.redirected) {
+        return { ok: true, status: response.status, data: null };
+    }
+
+    throw new Error(`HTTP ${response.status}: ${response.statusText || 'Request failed'}`);
+}
+
+// ==================== REJECT PERSONNEL MODAL ====================
+// 🔧 FIX: the reject route is bare 'reject-personnel' — use the URL built from the blade rather than hardcoded path.
+@if(Route::has('reject-personnel'))
+function showRejectPersonnelModal(userId, userName) {
+    currentRejectPersonnelUserId = userId;
+    document.getElementById('rejectPersonnelName').textContent = userName;
+    document.getElementById('rejection_reason').value = '';
+
+    const form = document.getElementById('rejectPersonnelForm');
+    form.action = `{{ url('admin/users') }}/${userId}/reject-personnel`;
+
+    document.getElementById('rejectPersonnelModal').classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+}
+@else
+function showRejectPersonnelModal(userId, userName) {
+    alert('Reject route is not registered. Contact a system administrator.');
+}
+@endif
+
+function closeRejectPersonnelModal() {
+    document.getElementById('rejectPersonnelModal').classList.add('hidden');
+    document.body.style.overflow = '';
+    currentRejectPersonnelUserId = null;
+}
 
 // ==================== DOM CONTENT LOADED ====================
 document.addEventListener('DOMContentLoaded', function() {
-    // ═══════════════════════════════════════════════════════════════
-    // ⚠️ REMOVED: Auto-fill of start_date and end_date
-    //
-    // Previously this block did:
-    //   const oneMonthAgo = new Date();
-    //   oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-    //   startDateInput.value = oneMonthAgo.toISOString().split('T')[0];
-    //   endDateInput.value = today;
-    //
-    // That silently excluded any user created before "one month ago"
-    // from every export — including Super Admin, Admin, and any
-    // early-seeded users. The date range is now opt-in: the user
-    // must explicitly pick dates if they want to filter.
-    //
-    // Do NOT re-add date pre-filling here.
-    // ═══════════════════════════════════════════════════════════════
-
     updateExportSummary();
     updateFormatSelectionUI();
     initLazyLoading();
@@ -1684,10 +1958,6 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ==================== FORMAT SELECTION UI ====================
-/**
- * Toggle the visible "Selected" indicator on each format card
- * (checkmark badge + label + border color) based on which radio is checked.
- */
 function updateFormatSelectionUI() {
     const options = document.querySelectorAll('.export-format-option');
 
@@ -1701,18 +1971,15 @@ function updateFormatSelectionUI() {
 
         const isSelected = radio.checked;
 
-        // Toggle badge visibility
         if (badge) {
             badge.style.display = isSelected ? 'inline-flex' : 'none';
         }
 
-        // Toggle "Selected" label
         if (label) {
             label.style.visibility = isSelected ? 'visible' : 'hidden';
             label.style.opacity = isSelected ? '1' : '0';
         }
 
-        // Toggle active class for extra styling if needed
         card.classList.toggle('is-selected', isSelected);
     });
 }
@@ -1942,7 +2209,7 @@ document.getElementById('resendInvitationForm')?.addEventListener('submit', func
     });
 });
 
-// ==================== PHOTO ZOOM FUNCTIONS ====================
+// ==================== PHOTO ZOOM ====================
 function zoomUserPhoto(element) {
     const userId = element.dataset.userId;
     const userName = element.dataset.userName;
@@ -1993,17 +2260,13 @@ function closePhotoZoomModal() {
 
 function navigateZoomPhoto(direction) {
     currentZoomIndex += direction;
-
-    if (currentZoomIndex < 0) {
-        currentZoomIndex = zoomedPhotos.length - 1;
-    } else if (currentZoomIndex >= zoomedPhotos.length) {
-        currentZoomIndex = 0;
-    }
+    if (currentZoomIndex < 0) currentZoomIndex = zoomedPhotos.length - 1;
+    else if (currentZoomIndex >= zoomedPhotos.length) currentZoomIndex = 0;
 
     const photo = zoomedPhotos[currentZoomIndex];
     const zoomedPhoto = document.getElementById('zoomedPhoto');
-
     document.getElementById('photoZoomLoading').classList.remove('hidden');
+
     const highQualityUrl = photo.photoUrl.replace(/(\/thumb|\/small)/, '/large') || photo.photoUrl;
 
     zoomedPhoto.onload = function() {
@@ -2017,15 +2280,10 @@ function navigateZoomPhoto(direction) {
 }
 
 function handleZoomKeyboard(e) {
-    if (e.key === 'Escape') {
-        closePhotoZoomModal();
-    } else if (e.key === 'ArrowLeft') {
-        navigateZoomPhoto(-1);
-    } else if (e.key === 'ArrowRight') {
-        navigateZoomPhoto(1);
-    } else if (e.key === 'r' || e.key === 'R') {
-        rotateZoomedPhoto();
-    }
+    if (e.key === 'Escape') closePhotoZoomModal();
+    else if (e.key === 'ArrowLeft') navigateZoomPhoto(-1);
+    else if (e.key === 'ArrowRight') navigateZoomPhoto(1);
+    else if (e.key === 'r' || e.key === 'R') rotateZoomedPhoto();
 }
 
 function rotateZoomedPhoto() {
@@ -2052,7 +2310,7 @@ function closeAvatarInfoModal() {
     document.getElementById('avatarInfoModal').classList.add('hidden');
 }
 
-// ==================== EXPORT MODAL FUNCTIONS ====================
+// ==================== EXPORT MODAL ====================
 function showExportModal() {
     const modal = document.getElementById('exportModal');
     modal.classList.remove('hidden');
@@ -2139,9 +2397,7 @@ document.getElementById('exportForm')?.addEventListener('submit', function(e) {
         return false;
     }
 
-    setTimeout(() => {
-        closeExportModal();
-    }, 50);
+    setTimeout(() => closeExportModal(), 50);
     return true;
 });
 
@@ -2151,7 +2407,7 @@ document.getElementById('select-all')?.addEventListener('change', function(e) {
     });
 });
 
-// ==================== PHOTO MANAGEMENT FUNCTIONS ====================
+// ==================== PHOTO MANAGEMENT ====================
 function updateUserPhoto(userId) {
     currentPhotoUserId = userId;
     document.getElementById('photoModalTitle').textContent = 'Update User Photo';
@@ -2204,7 +2460,7 @@ document.getElementById('photoInput')?.addEventListener('change', function(e) {
         reader.onload = function(e) {
             previewImage.src = e.target.result;
             preview.classList.remove('hidden');
-        }
+        };
         reader.readAsDataURL(file);
     } else {
         preview.classList.add('hidden');
@@ -2213,7 +2469,6 @@ document.getElementById('photoInput')?.addEventListener('change', function(e) {
 
 document.getElementById('photoForm')?.addEventListener('submit', function(e) {
     e.preventDefault();
-
     if (!currentPhotoUserId) {
         showNotification('No user selected.', 'error');
         return;
@@ -2226,12 +2481,10 @@ document.getElementById('photoForm')?.addEventListener('submit', function(e) {
         showNotification('Please select a photo.', 'error');
         return;
     }
-
     if (photoFile.size > 5 * 1024 * 1024) {
         showNotification('File size must be less than 5MB.', 'error');
         return;
     }
-
     const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     if (!validTypes.includes(photoFile.type)) {
         showNotification('Please select a valid image file (JPEG, PNG, GIF, or WEBP).', 'error');
@@ -2268,7 +2521,7 @@ document.getElementById('photoForm')?.addEventListener('submit', function(e) {
     });
 });
 
-// ==================== DELETE USER FUNCTIONS ====================
+// ==================== DELETE USER ====================
 function closeDeleteModal() {
     document.getElementById('deleteUserModal').classList.add('hidden');
     currentUserId = null;
@@ -2414,22 +2667,35 @@ function performBulkAction() {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+            'X-CSRF-TOKEN': '{{ csrf_token() }}',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
         },
         body: JSON.stringify(actionData)
     })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            showNotification(data.message, 'success');
-            location.reload();
-        } else {
-            showNotification('Error: ' + data.message, 'error');
+    .then(parseResponseSafely)
+    .then(({ ok, data }) => {
+        if (data && typeof data === 'object' && 'success' in data) {
+            if (data.success) {
+                showNotification(data.message || 'Bulk action completed.', 'success');
+                setTimeout(() => location.reload(), 1200);
+            } else {
+                showNotification(data.message || 'Bulk action failed.', 'error');
+            }
+            return;
         }
+
+        if (ok) {
+            showNotification('Bulk action completed successfully.', 'success');
+            setTimeout(() => location.reload(), 1200);
+            return;
+        }
+
+        showNotification('Bulk action failed.', 'error');
     })
     .catch(error => {
-        console.error('Error:', error);
-        showNotification('An error occurred while performing the bulk action.', 'error');
+        console.error('Bulk action error:', error);
+        showNotification('An error occurred while performing the bulk action: ' + error.message, 'error');
     });
 }
 
@@ -2440,7 +2706,9 @@ function performBulkInvitationAction(userIds) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+            'X-CSRF-TOKEN': '{{ csrf_token() }}',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
         },
         body: JSON.stringify({
             action: 'send_invitation',
@@ -2449,18 +2717,29 @@ function performBulkInvitationAction(userIds) {
             invitation_type: 'welcome'
         })
     })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            showNotification(data.message, 'success');
-            location.reload();
-        } else {
-            showNotification('Error: ' + data.message, 'error');
+    .then(parseResponseSafely)
+    .then(({ ok, data }) => {
+        if (data && typeof data === 'object' && 'success' in data) {
+            if (data.success) {
+                showNotification(data.message || 'Invitations sent.', 'success');
+                setTimeout(() => location.reload(), 1200);
+            } else {
+                showNotification(data.message || 'Failed to send invitations.', 'error');
+            }
+            return;
         }
+
+        if (ok) {
+            showNotification('Invitations sent successfully.', 'success');
+            setTimeout(() => location.reload(), 1200);
+            return;
+        }
+
+        showNotification('Failed to send invitations.', 'error');
     })
     .catch(error => {
-        console.error('Error:', error);
-        showNotification('An error occurred while sending invitations.', 'error');
+        console.error('Bulk invitation error:', error);
+        showNotification('An error occurred while sending invitations: ' + error.message, 'error');
     });
 }
 
@@ -2472,30 +2751,41 @@ function performRoleBulkAction(userIds, actionType) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+            'X-CSRF-TOKEN': '{{ csrf_token() }}',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
         },
         body: JSON.stringify({
             action: actionType,
             user_ids: userIds
         })
     })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            showNotification(data.message, 'success');
-            location.reload();
-        } else {
-            showNotification('Error: ' + data.message, 'error');
+    .then(parseResponseSafely)
+    .then(({ ok, data }) => {
+        if (data && typeof data === 'object' && 'success' in data) {
+            if (data.success) {
+                showNotification(data.message || 'Role action completed.', 'success');
+                setTimeout(() => location.reload(), 1200);
+            } else {
+                showNotification(data.message || 'Role action failed.', 'error');
+            }
+            return;
         }
+        if (ok) {
+            showNotification('Role action completed successfully.', 'success');
+            setTimeout(() => location.reload(), 1200);
+            return;
+        }
+        showNotification('Role action failed.', 'error');
     })
     .catch(error => {
-        console.error('Error:', error);
-        showNotification('An error occurred while assigning roles.', 'error');
+        console.error('Bulk role error:', error);
+        showNotification('An error occurred while assigning roles: ' + error.message, 'error');
     });
     @endif
 }
 
-// ==================== ARCHIVAL FUNCTIONS ====================
+// ==================== ARCHIVAL ====================
 function restoreArchivedUser(userId, userName) {
     currentRestoreUserId = userId;
     currentRestoreUserName = userName;
@@ -2541,13 +2831,42 @@ function confirmRestoreArchived() {
     });
 }
 
-function showArchiveWarning(userId, userName, propertyCount) {
+function showArchiveWarning(userId, userName, metricCount, archiveKind, reasonHint) {
+    archiveKind = archiveKind || 'landlord';
+    reasonHint = reasonHint || '';
+
     currentArchiveUserId = userId;
     currentArchiveUserName = userName;
-    currentArchivePropertyCount = propertyCount;
+    currentArchivePropertyCount = metricCount;
+    currentArchiveKind = archiveKind;
+
+    const titleEl = document.getElementById('archiveModalTitle');
+    if (titleEl) {
+        titleEl.textContent = archiveKind === 'tenant'
+            ? 'Archive Tenant Account'
+            : 'Archive Landlord Account';
+    }
 
     document.getElementById('archiveWarningUserName').textContent = userName;
-    document.getElementById('archivePropertyCount').textContent = propertyCount;
+
+    const metricEl = document.getElementById('archiveMetricText');
+    const countEl  = document.getElementById('archivePropertyCount');
+
+    if (metricEl && countEl) {
+        if (archiveKind === 'tenant') {
+            metricEl.innerHTML = `This tenant has been unassigned for <strong id="archivePropertyCount">${metricCount}</strong> day(s). Archival will be processed according to system settings.`;
+        } else {
+            metricEl.innerHTML = `This user has <strong id="archivePropertyCount">${metricCount}</strong> properties. Archival will be processed according to system settings.`;
+        }
+    }
+
+    const reasonEl = document.getElementById('archive_reason');
+    if (reasonEl) {
+        reasonEl.value = '';
+        reasonEl.placeholder = archiveKind === 'tenant'
+            ? 'e.g., Tenant has been unassigned for 30+ days...'
+            : 'e.g., Landlord transferred all properties...';
+    }
 
     fetch('/admin/settings/archival-days')
         .then(response => response.json())
@@ -2559,20 +2878,25 @@ function showArchiveWarning(userId, userName, propertyCount) {
         });
 
     document.getElementById('archiveWarningModal').classList.remove('hidden');
-    document.getElementById('archive_reason').value = '';
 }
 
 function closeArchiveWarningModal() {
     document.getElementById('archiveWarningModal').classList.add('hidden');
     currentArchiveUserId = null;
+    currentArchiveKind = 'landlord';
 }
 
 function confirmArchiveUser() {
     if (!currentArchiveUserId) return;
 
-    const reason = document.getElementById('archive_reason').value;
-    const archiveBtn = document.getElementById('confirmArchiveBtn');
+    let reason = document.getElementById('archive_reason').value;
+    if (!reason) {
+        reason = currentArchiveKind === 'tenant'
+            ? 'Tenant has not been assigned to any property unit for 30+ days - manual archival by admin'
+            : 'Landlord has no properties - manual archival by admin';
+    }
 
+    const archiveBtn = document.getElementById('confirmArchiveBtn');
     archiveBtn.disabled = true;
     archiveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Archiving...';
 
@@ -2583,7 +2907,7 @@ function confirmArchiveUser() {
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         },
-        body: JSON.stringify({ reason: reason || 'Manual archival by admin' })
+        body: JSON.stringify({ reason: reason })
     })
     .then(response => response.json())
     .then(data => {
@@ -2603,7 +2927,7 @@ function confirmArchiveUser() {
     });
 }
 
-// ==================== INDIVIDUAL ACTION FUNCTIONS ====================
+// ==================== INDIVIDUAL ACTIONS ====================
 function activateUser(userId) {
     if (confirm('Activate this user account?')) {
         showNotification('Activating user...', 'info');
@@ -2611,7 +2935,8 @@ function activateUser(userId) {
             method: 'POST',
             headers: {
                 'X-CSRF-TOKEN': '{{ csrf_token() }}',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
             }
         })
         .then(response => {
@@ -2640,7 +2965,8 @@ function suspendUser(userId) {
             headers: {
                 'X-CSRF-TOKEN': '{{ csrf_token() }}',
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
             },
             body: JSON.stringify({ reason: reason || 'No reason provided' })
         })
@@ -2661,7 +2987,7 @@ function suspendUser(userId) {
     }
 }
 
-// ==================== ROLE MANAGEMENT FUNCTIONS (SUPER ADMIN ONLY) ====================
+// ==================== ROLE MANAGEMENT (SUPER ADMIN) ====================
 @if(auth()->user()->isSuperAdmin())
 function attachRoleButtonHandlers() {
     const roleButtons = document.querySelectorAll('.manage-roles-btn');
@@ -2715,7 +3041,6 @@ function openRoleManagementModal(userId, userName, userType, hasLandlordRole, pr
         }
     })
     .then(response => {
-        console.log('Role API Response Status:', response.status);
         if (!response.ok) {
             return response.text().then(text => {
                 console.error('Role API Error Response:', text);
@@ -2724,9 +3049,7 @@ function openRoleManagementModal(userId, userName, userType, hasLandlordRole, pr
         }
 
         return response.text().then(text => {
-            if (text.startsWith('\ufeff')) {
-                text = text.replace(/^\uFEFF/, '');
-            }
+            if (text.startsWith('\ufeff')) text = text.replace(/^\uFEFF/, '');
             try {
                 return JSON.parse(text);
             } catch (e) {
@@ -2968,7 +3291,7 @@ function submitRoleForm(e) {
 }
 @endif
 
-// ==================== UTILITY FUNCTIONS ====================
+// ==================== UTILITIES ====================
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
     notification.className = `fixed top-4 right-4 p-4 rounded-lg shadow-lg z-50 transform transition-all duration-300 ${
@@ -2982,7 +3305,8 @@ function showNotification(message, type = 'info') {
     setTimeout(() => notification.remove(), 5000);
 }
 
-// Close modals when clicking outside
+// ==================== CLOSE-ON-OUTSIDE-CLICK ====================
+document.getElementById('rejectPersonnelModal')?.addEventListener('click', function(e) { if (e.target === this) closeRejectPersonnelModal(); });
 document.getElementById('exportModal')?.addEventListener('click', function(e) { if (e.target === this) closeExportModal(); });
 document.getElementById('photoModal')?.addEventListener('click', function(e) { if (e.target === this) closePhotoModal(); });
 document.getElementById('deleteUserModal')?.addEventListener('click', function(e) { if (e.target === this) closeDeleteModal(); });
@@ -2996,12 +3320,19 @@ document.getElementById('archiveWarningModal')?.addEventListener('click', functi
 document.getElementById('roleManagementModal')?.addEventListener('click', function(e) { if (e.target === this) closeRoleModal(); });
 @endif
 
-// Keyboard shortcuts
+// ==================== KEYBOARD SHORTCUTS ====================
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        closeExportModal(); closePhotoModal(); closeDeleteModal(); closePhotoZoomModal();
-        closeAvatarInfoModal(); closeRestoreArchivedModal(); closeSendInvitationModal();
-        closeResendInvitationModal(); closeArchiveWarningModal();
+        closeExportModal();
+        closePhotoModal();
+        closeDeleteModal();
+        closePhotoZoomModal();
+        closeAvatarInfoModal();
+        closeRestoreArchivedModal();
+        closeSendInvitationModal();
+        closeResendInvitationModal();
+        closeArchiveWarningModal();
+        closeRejectPersonnelModal();
         @if(auth()->user()->isSuperAdmin())
         closeRoleModal();
         @endif
@@ -3060,6 +3391,9 @@ td .user-type-badge { display: inline-flex !important; }
 .landlord-no-properties-row { background-color: rgba(255, 193, 7, 0.05); }
 .landlord-no-properties-row:hover { background-color: rgba(255, 193, 7, 0.1); }
 
+.orphan-tenant-row { background-color: rgba(253, 126, 20, 0.06); }
+.orphan-tenant-row:hover { background-color: rgba(253, 126, 20, 0.12); }
+
 .archive-warning-btn:hover { transform: scale(1.05); filter: brightness(0.95); }
 
 @media (max-width: 768px) {
@@ -3072,9 +3406,6 @@ td .user-type-badge { display: inline-flex !important; }
     box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
-/* ===================================================== */
-/* EXPORT MODAL — compact + scrollable                   */
-/* ===================================================== */
 #exportModal .scrollable-modal-content {
     min-height: 0;
     scrollbar-width: thin;
@@ -3090,10 +3421,6 @@ td .user-type-badge { display: inline-flex !important; }
     transform: translateY(-1px);
 }
 
-/* ===================================================== */
-/* EXPORT FORMAT — VISIBLE SELECTION INDICATOR           */
-/* ===================================================== */
-/* By default (unchecked), hide the badge and "Selected" label. */
 #exportModal .format-check-badge {
     display: none;
     transition: opacity 0.15s ease, transform 0.15s ease;
@@ -3104,7 +3431,6 @@ td .user-type-badge { display: inline-flex !important; }
     transition: opacity 0.15s ease, visibility 0.15s ease;
 }
 
-/* When the radio inside the option is checked, show both. */
 #exportModal .export-format-option input[type="radio"]:checked ~ .export-format-card .format-check-badge {
     display: inline-flex;
 }
@@ -3113,7 +3439,6 @@ td .user-type-badge { display: inline-flex !important; }
     opacity: 1;
 }
 
-/* Subtle pop animation on the checkmark when it appears. */
 @keyframes badgePop {
     0%   { transform: scale(0.5); opacity: 0; }
     60%  { transform: scale(1.15); opacity: 1; }

@@ -6,6 +6,7 @@ use App\Models\RegistrationPlan;
 use App\Models\User;
 use App\Models\Property;
 use App\Models\PlanAgentAssignment;
+use App\Models\Role;                             // ✅ ADDED
 use App\Services\AgentInvitationService;
 use App\Services\SmsTemplateService;
 use App\Services\SmsService;
@@ -18,8 +19,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Maatwebsite\Excel\Facades\Excel;
-use App\Exports\RegistrationPlansExport;
 
 class RegistrationPlanController extends Controller
 {
@@ -41,6 +40,95 @@ class RegistrationPlanController extends Controller
         $this->smsService = $smsService;
         $this->whatsappService = $whatsappService;
         $this->emailService = $emailService;
+    }
+
+    // ================================================================
+    //  FIELD-AGENT ROLE SYNC HELPER (NEW)
+    // ================================================================
+
+    /**
+     * Attach the `field-agent` Spatie role to a user that was just created
+     * through the registration-plan flow.
+     *
+     * Accepts:
+     *   • null              → uses the default `field-agent` slug
+     *   • string  ("field-agent" or "4")  → resolved
+     *   • int     (4)       → used as-is if the role exists
+     *   • array   (["field-agent"] or [4]) → resolved
+     *
+     * Silently no-ops if the role row doesn't exist (with a warning log),
+     * so the plan-creation flow never fails because of a missing role.
+     */
+    protected function syncFieldAgentRole(User $agent, $rolePayload = null): void
+    {
+        try {
+            if (!$agent || !$agent->exists) {
+                return;
+            }
+
+            // Normalise to array of identifiers
+            if ($rolePayload === null) {
+                $identifiers = ['field-agent'];
+            } elseif (is_array($rolePayload)) {
+                $identifiers = $rolePayload;
+            } else {
+                $identifiers = [$rolePayload];
+            }
+
+            // Resolve to numeric IDs
+            $numericIds = [];
+            $slugs      = [];
+
+            foreach ($identifiers as $value) {
+                if ($value === null || $value === '') {
+                    continue;
+                }
+                if (is_numeric($value)) {
+                    $numericIds[] = (int) $value;
+                } else {
+                    $slugs[] = (string) $value;
+                }
+            }
+
+            if (!empty($slugs)) {
+                $slugIds = Role::whereIn('slug', $slugs)->pluck('id')->all();
+                $numericIds = array_merge($numericIds, array_map('intval', $slugIds));
+            }
+
+            $numericIds = array_values(array_unique(array_filter($numericIds)));
+
+            // Safety fallback: if the payload didn't resolve (unknown slug,
+            // missing role, empty array), try the canonical slug explicitly.
+            if (empty($numericIds)) {
+                $fallbackId = Role::where('slug', 'field-agent')->value('id');
+                if ($fallbackId) {
+                    $numericIds = [(int) $fallbackId];
+                }
+            }
+
+            if (empty($numericIds)) {
+                Log::warning('Cannot assign field-agent role — role row missing from DB', [
+                    'agent_id'    => $agent->id,
+                    'identifiers' => $identifiers,
+                ]);
+                return;
+            }
+
+            $agent->roles()->syncWithoutDetaching($numericIds);
+
+            Log::info('Field-agent role synced for plan-created agent', [
+                'agent_id'    => $agent->id,
+                'role_ids'    => $numericIds,
+                'identifiers' => $identifiers,
+            ]);
+        } catch (\Throwable $e) {
+            // Never let role assignment break the plan flow — the agent
+            // is already created and assigned; a missing role is recoverable.
+            Log::warning('Failed to sync field-agent role for agent', [
+                'agent_id' => $agent->id ?? null,
+                'error'    => $e->getMessage(),
+            ]);
+        }
     }
 
     // ================================================================
@@ -290,18 +378,19 @@ class RegistrationPlanController extends Controller
         if (in_array($requestedStatus, ['assigned', 'in_progress'], true) && !$hasRequiredFields) {
             return null;
         }
+
         if ($requestedStatus === 'in_progress' && !$hasAgentsToAssign) {
             return null;
         }
-        if ($requestedStatus === 'in_progress' && $hasAgentsToAssign && $hasRequiredFields) {
-            return 'in_progress';
-        }
-        if ($hasAgentsToAssign && $hasRequiredFields && $requestedStatus === 'draft') {
+
+        if ($requestedStatus === 'draft' && $hasAgentsToAssign && $hasRequiredFields) {
             return 'assigned';
         }
+
         if (!$hasAgentsToAssign && in_array($requestedStatus, ['assigned', 'in_progress'], true)) {
             return 'draft';
         }
+
         return $requestedStatus;
     }
 
@@ -339,7 +428,16 @@ class RegistrationPlanController extends Controller
 
         $plans = $query->paginate(20);
 
-        $agents = User::where('type', User::TYPE_FIELD_AGENT)->get();
+        $agents = User::where(function ($q) {
+                $q->where('type', User::TYPE_FIELD_AGENT)
+                  ->orWhereHas('roles', function ($r) {
+                      $r->where('slug', 'field-agent');
+                  });
+            })
+            ->whereNull('deleted_at')
+            ->orderBy('name')
+            ->get();
+
         $statuses = ['draft', 'assigned', 'in_progress', 'completed', 'cancelled'];
 
         $trashedCount = RegistrationPlan::onlyTrashed()->count();
@@ -402,6 +500,8 @@ class RegistrationPlanController extends Controller
         $whatsappStatus = $channelStatuses['whatsappStatus'];
         $emailStatus    = $channelStatuses['emailStatus'];
 
+        $submissionToken = (string) \Illuminate\Support\Str::uuid();
+
         return view('admin.registration-plans.create', compact(
             'fieldAgents',
             'zones',
@@ -409,7 +509,8 @@ class RegistrationPlanController extends Controller
             'namingPatterns',
             'smsStatus',
             'whatsappStatus',
-            'emailStatus'
+            'emailStatus',
+            'submissionToken'
         ));
     }
 
@@ -444,6 +545,11 @@ class RegistrationPlanController extends Controller
 
             'agent_invitation_channels'   => 'nullable|array',
 
+            // ✅ Allow the blade to submit role identifiers per new agent row.
+            'agent_roles'             => 'nullable|array',
+            'agent_roles.*'           => 'nullable|array',
+            'agent_roles.*.*'         => 'nullable',
+
             'zone'                      => 'required|string|max:100',
             'section'                   => 'nullable|string|max:100',
             'naming_pattern'            => 'required|string|max:100',
@@ -456,6 +562,7 @@ class RegistrationPlanController extends Controller
             'instructions'              => 'nullable|string',
             'boundaries_description'    => 'nullable|string',
             'agent_assignment_type'     => 'required|in:single,multiple',
+            'submission_token'          => 'nullable|string|max:64',
         ]);
 
         if ($validated['naming_pattern'] === 'custom' && !empty($validated['custom_pattern'])) {
@@ -474,16 +581,33 @@ class RegistrationPlanController extends Controller
         DB::beginTransaction();
 
         try {
-            $conflictCheck = $this->checkNamingPatternConflicts(
+            // ---------- GUARD 1 — idempotency token ----------
+            $token = (string) ($validated['submission_token'] ?? '');
+            if ($token !== '') {
+                $existing = RegistrationPlan::where('submission_token', $token)->first();
+                if ($existing) {
+                    DB::rollBack();
+                    Log::info('Duplicate plan submission blocked (token match)', [
+                        'existing_plan_id' => $existing->id,
+                        'token'            => $token,
+                        'user_id'          => Auth::id(),
+                    ]);
+                    return redirect()->route('registration-plans.show', $existing->id)
+                        ->with('info', 'This plan was already created. Redirected to the existing plan.');
+                }
+            }
+
+            // ---------- GUARD 2 — duplicate zone/section/start/pattern ----------
+            $duplicateCheck = $this->checkPlanDuplicate(
                 $validated['naming_pattern'],
                 $validated['starting_point'],
-                null,
                 $validated['zone'],
-                $validated['section']
+                $validated['section'] ?? null
             );
 
-            if ($conflictCheck['has_conflict']) {
-                return back()->with('error', $conflictCheck['message'])->withInput();
+            if ($duplicateCheck['has_duplicate']) {
+                DB::rollBack();
+                return back()->with('error', $duplicateCheck['message'])->withInput();
             }
 
             $nextAvailableName = $validated['starting_point'];
@@ -493,10 +617,14 @@ class RegistrationPlanController extends Controller
             $newAgentsCreated  = [];
             $skippedExisting   = [];
 
+            // ----------------------------------------------------------
+            // Resolve the set of agents to assign.
+            // ----------------------------------------------------------
             if ($validated['agent_assignment_type'] === 'single') {
                 if (!empty($validated['assigned_agent_id'])) {
                     $assignedUser = User::find($validated['assigned_agent_id']);
                     if (!$assignedUser || !$assignedUser->isFieldAgent()) {
+                        DB::rollBack();
                         return back()->with('error', 'The assigned user must be a field agent.')->withInput();
                     }
                     $assignedAgentIds[] = $validated['assigned_agent_id'];
@@ -508,6 +636,7 @@ class RegistrationPlanController extends Controller
                     ]);
 
                     if (!$agentResult['success']) {
+                        DB::rollBack();
                         return back()->with('error', $agentResult['message'])->withInput();
                     }
 
@@ -517,6 +646,14 @@ class RegistrationPlanController extends Controller
                         'name'  => $validated['agent_name'],
                         'email' => $validated['agent_email'] ?? null,
                     ];
+
+                    // ✅ Sync field-agent role on the freshly-created user.
+                    //    Single-agent path has no indexed role payload, so
+                    //    the helper falls back to the canonical slug.
+                    $newAgent = User::find($agentResult['agent_id']);
+                    if ($newAgent) {
+                        $this->syncFieldAgentRole($newAgent, $validated['agent_roles'][0] ?? null);
+                    }
                 }
             } else {
                 if (!empty($validated['agent_types'])) {
@@ -525,6 +662,7 @@ class RegistrationPlanController extends Controller
                             $agentId = $validated['assigned_agent_ids'][$index];
                             $assignedUser = User::find($agentId);
                             if (!$assignedUser || !$assignedUser->isFieldAgent()) {
+                                DB::rollBack();
                                 return back()->with('error', 'The assigned user must be a field agent.')->withInput();
                             }
                             $assignedAgentIds[] = $agentId;
@@ -536,6 +674,7 @@ class RegistrationPlanController extends Controller
                             ]);
 
                             if (!$agentResult['success']) {
+                                DB::rollBack();
                                 return back()->with('error', $agentResult['message'])->withInput();
                             }
 
@@ -545,39 +684,44 @@ class RegistrationPlanController extends Controller
                                 'name'  => $validated['agent_names'][$index],
                                 'email' => $validated['agent_emails'][$index] ?? null,
                             ];
+
+                            // ✅ Sync field-agent role per new agent.
+                            //    The blade sends agent_roles[$index][] = <id or slug>.
+                            $newAgent = User::find($agentResult['agent_id']);
+                            if ($newAgent) {
+                                $this->syncFieldAgentRole($newAgent, $validated['agent_roles'][$index] ?? null);
+                            }
                         }
                     }
                 }
             }
 
-            if (!empty($assignedAgentIds)) {
-                if (empty($validated['registration_start_date']) || empty($validated['registration_end_date'])) {
-                    return back()->with('error', 'Start date and end date are required when assigning field agents.')->withInput();
-                }
-            } else {
+            // ---------- Draft-cleanup: dates/instructions are optional ----------
+            if (empty($assignedAgentIds)) {
                 $validated['registration_start_date'] = null;
-                $validated['registration_end_date'] = null;
-                $validated['instructions'] = null;
+                $validated['registration_end_date']   = null;
+                $validated['instructions']            = null;
             }
 
             $plan = RegistrationPlan::create([
                 'created_by'                => Auth::id(),
                 'zone'                      => $validated['zone'],
-                'section'                   => $validated['section'],
+                'section'                   => $validated['section'] ?? null,
                 'naming_pattern'            => $validated['naming_pattern'],
                 'starting_point'            => $validated['starting_point'],
                 'next_available_name'       => $nextAvailableName,
                 'estimated_houses'          => $validated['estimated_houses'],
                 'sequence_type'             => $validated['sequence_type'],
-                'registration_start_date'   => $validated['registration_start_date'],
-                'registration_end_date'     => $validated['registration_end_date'],
-                'instructions'              => $validated['instructions'],
-                'boundaries_description'    => $validated['boundaries_description'],
+                'registration_start_date'   => $validated['registration_start_date'] ?? null,
+                'registration_end_date'     => $validated['registration_end_date'] ?? null,
+                'instructions'              => $validated['instructions'] ?? null,
+                'boundaries_description'    => $validated['boundaries_description'] ?? null,
                 'status'                    => !empty($assignedAgentIds) ? 'assigned' : 'draft',
                 'agent_assignment_type'     => $validated['agent_assignment_type'],
+                'submission_token'          => $token !== '' ? $token : null,
             ]);
 
-            foreach ($assignedAgentIds as $index => $agentId) {
+            foreach ($assignedAgentIds as $agentId) {
                 PlanAgentAssignment::create([
                     'plan_id'     => $plan->id,
                     'agent_id'    => $agentId,
@@ -586,7 +730,7 @@ class RegistrationPlanController extends Controller
                 ]);
             }
 
-            foreach ($assignedAgentIds as $index => $agentId) {
+            foreach ($assignedAgentIds as $agentId) {
                 $this->notifyAgentOfPlanAssignment(
                     $plan,
                     $agentId,
@@ -602,7 +746,8 @@ class RegistrationPlanController extends Controller
                 if ($validated['agent_assignment_type'] === 'single') {
                     $channels = $this->collectInvitationChannels($request);
                 } else {
-                    $channels = $this->collectInvitationChannels($request, $agentId);
+                    $agentIndex = array_search($agentId, $assignedAgentIds, true);
+                    $channels = $this->collectInvitationChannels($request, $agentIndex);
                 }
 
                 if (empty($channels)) {
@@ -643,6 +788,10 @@ class RegistrationPlanController extends Controller
                 $successMessage .= "• Estimated Houses: {$plan->estimated_houses}\n";
                 $successMessage .= "• Naming Pattern: {$plan->naming_pattern}\n";
                 $successMessage .= "• Starting Point: {$plan->starting_point}\n";
+                $successMessage .= "• Start Date: " .
+                    ($plan->registration_start_date?->format('M j, Y') ?? 'Not specified') . "\n";
+                $successMessage .= "• End Date: " .
+                    ($plan->registration_end_date?->format('M j, Y') ?? 'Not specified') . "\n";
 
                 $successMessage .= "\n👥 Agent Assignment:\n";
                 $successMessage .= "• Total Agents: {$agentCount}\n";
@@ -672,7 +821,7 @@ class RegistrationPlanController extends Controller
                 }
             } else {
                 $successMessage .= "\n\n📋 Plan saved as DRAFT (no agents assigned).\n";
-                $successMessage .= "You can edit this plan later to assign field agents.";
+                $successMessage .= "You can edit this plan later to assign field agents and add a schedule.";
             }
 
             $successMessage .= "\n\n💡 What would you like to do next?\n";
@@ -700,8 +849,30 @@ class RegistrationPlanController extends Controller
                 ->with('invitation_count', count($invitationsSent))
                 ->with('new_agents_created', $newAgentsCreated);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
+
+            if (str_contains($e->getMessage(), 'registration_plans_zone_section')) {
+                Log::warning('Duplicate plan blocked by DB unique index', [
+                    'zone'    => $validated['zone']    ?? null,
+                    'section' => $validated['section'] ?? null,
+                    'start'   => $validated['starting_point'] ?? null,
+                    'user_id' => Auth::id(),
+                ]);
+                return back()
+                    ->with('error', 'Another plan with the same zone/section/starting-point was created at the same time. Please refresh and try again.')
+                    ->withInput();
+            }
+
+            if (str_contains($e->getMessage(), 'plan_agent_assignments_plan_agent_unique')) {
+                Log::warning('Duplicate pivot insert blocked by DB unique index', [
+                    'user_id' => Auth::id(),
+                ]);
+                return back()
+                    ->with('error', 'Another save was in progress for this plan. Please refresh and try again.')
+                    ->withInput();
+            }
+
             Log::error('Failed to create registration plan: ' . $e->getMessage());
             Log::error('Stack trace: ' . $e->getTraceAsString());
 
@@ -832,23 +1003,9 @@ class RegistrationPlanController extends Controller
     }
 
     // ================================================================
-    //  UPDATE  ← THE FIX LIVES HERE
+    //  UPDATE
     // ================================================================
-    //
-    //  ORDER OF OPERATIONS (critical):
-    //
-    //    1. Validate
-    //    2. Resolve $finalStatus
-    //    3. Resolve the desired agent set (into $assignedAgentIds)
-    //    4. Diff + sync the pivot (add / remove agents)  ← MUST BE BEFORE 5
-    //    5. Fill + save the plan (status + fields)       ← model hook now sees correct agent count
-    //    6. Send notifications + invitations
-    //    7. Commit
-    //
-    //  Reversing 4 and 5 causes the model's `updating` hook to see
-    //  zero active agents (because the pivot hasn't been written yet)
-    //  and silently revert `assigned` back to `draft`.
-    //
+
     public function update(Request $request, $id)
     {
         $registrationPlan = RegistrationPlan::withTrashed()->with(['assignedAgents'])->findOrFail($id);
@@ -878,6 +1035,11 @@ class RegistrationPlanController extends Controller
 
             'agent_invitation_channels'   => 'nullable|array',
 
+            // ✅ Same role payload whitelist as store()
+            'agent_roles'             => 'nullable|array',
+            'agent_roles.*'           => 'nullable|array',
+            'agent_roles.*.*'         => 'nullable',
+
             'zone'                      => 'required|string|max:100',
             'section'                   => 'nullable|string|max:100',
             'naming_pattern'            => 'required|string|max:100',
@@ -893,9 +1055,6 @@ class RegistrationPlanController extends Controller
             'agent_assignment_type'     => 'required|in:single,multiple',
         ]);
 
-        // ------------------------------------------------------------------
-        // Resolve custom naming pattern
-        // ------------------------------------------------------------------
         if ($validated['naming_pattern'] === 'custom' && !empty($validated['custom_pattern'])) {
             $validated['naming_pattern'] = $validated['custom_pattern'];
         }
@@ -909,24 +1068,22 @@ class RegistrationPlanController extends Controller
             return back()->with('error', $patternValidation['message'])->withInput();
         }
 
-        $conflictCheck = $this->checkNamingPatternConflicts(
+        $duplicateCheck = $this->checkPlanDuplicate(
             $validated['naming_pattern'],
             $validated['starting_point'],
-            $registrationPlan->id,
             $validated['zone'],
-            $validated['section']
+            $validated['section'] ?? null,
+            $registrationPlan->id
         );
 
-        if ($conflictCheck['has_conflict']) {
-            return back()->with('error', $conflictCheck['message'])->withInput();
+        if ($duplicateCheck['has_duplicate']) {
+            return back()->with('error', $duplicateCheck['message'])->withInput();
         }
 
         DB::beginTransaction();
 
         try {
-            // ==============================================================
-            // STEP 1: Determine whether agents are being assigned
-            // ==============================================================
+            // STEP 1 — Determine whether agents are being assigned
             $hasAgentsToAssign = false;
             if ($validated['agent_assignment_type'] === 'single') {
                 $hasAgentsToAssign = !empty($validated['assigned_agent_id'])
@@ -940,9 +1097,7 @@ class RegistrationPlanController extends Controller
                 && !empty($validated['sequence_type'])
                 && !empty($validated['estimated_houses']);
 
-            // ==============================================================
-            // STEP 2: Resolve final status
-            // ==============================================================
+            // STEP 2 — Resolve final status
             $finalStatus = $this->resolveFinalStatus(
                 $validated['status'],
                 $hasAgentsToAssign,
@@ -972,9 +1127,7 @@ class RegistrationPlanController extends Controller
                 ]);
             }
 
-            // ==============================================================
-            // STEP 3: Resolve desired agent set (DO NOT touch DB yet)
-            // ==============================================================
+            // STEP 3 — Resolve desired agent set (no DB writes yet)
             $assignedAgentIds  = [];
             $invitationsSent   = [];
             $newAgentsCreated  = [];
@@ -1004,6 +1157,12 @@ class RegistrationPlanController extends Controller
                         'name'  => $validated['agent_name'],
                         'email' => $validated['agent_email'] ?? null,
                     ];
+
+                    // ✅ Sync role for new single-path agent
+                    $newAgent = User::find($agentResult['agent_id']);
+                    if ($newAgent) {
+                        $this->syncFieldAgentRole($newAgent, $validated['agent_roles'][0] ?? null);
+                    }
                 }
             } else {
                 if (!empty($validated['agent_types'])) {
@@ -1032,25 +1191,27 @@ class RegistrationPlanController extends Controller
                                 'name'  => $validated['agent_names'][$index],
                                 'email' => $validated['agent_emails'][$index] ?? null,
                             ];
+
+                            // ✅ Sync role for new multi-path agent
+                            $newAgent = User::find($agentResult['agent_id']);
+                            if ($newAgent) {
+                                $this->syncFieldAgentRole($newAgent, $validated['agent_roles'][$index] ?? null);
+                            }
                         }
                     }
                 }
             }
 
-            // ==============================================================
-            // STEP 4: Sync the pivot BEFORE saving the plan
-            //         (this is what makes the model's auto-status hook
-            //          see the correct agent count)
-            // ==============================================================
+            // STEP 4 — Sync pivot BEFORE saving plan
             $currentAgentIds = $registrationPlan->assignedAgents()
                 ->where('is_active', true)
+                ->lockForUpdate()
                 ->pluck('agent_id')
                 ->toArray();
 
             $newAgentIds     = array_values(array_diff($assignedAgentIds, $currentAgentIds));
             $removedAgentIds = array_values(array_diff($currentAgentIds, $assignedAgentIds));
 
-            // Deactivate removed agents
             foreach ($removedAgentIds as $agentId) {
                 $assignment = PlanAgentAssignment::where('plan_id', $registrationPlan->id)
                     ->where('agent_id', $agentId)
@@ -1062,7 +1223,6 @@ class RegistrationPlanController extends Controller
                 }
             }
 
-            // Create new agent assignments
             foreach ($newAgentIds as $agentId) {
                 PlanAgentAssignment::create([
                     'plan_id'     => $registrationPlan->id,
@@ -1072,14 +1232,11 @@ class RegistrationPlanController extends Controller
                 ]);
             }
 
-            // Bust the relation caches so the model hook queries fresh data
             $registrationPlan->unsetRelation('assignedAgents');
             $registrationPlan->unsetRelation('planAssignments');
             $registrationPlan->unsetRelation('activeAgents');
 
-            // ==============================================================
-            // STEP 5: NOW save the plan (pivot is already correct)
-            // ==============================================================
+            // STEP 5 — Save plan
             $updateData = [
                 'zone'                      => $validated['zone'],
                 'section'                   => $validated['section'] ?? null,
@@ -1098,7 +1255,6 @@ class RegistrationPlanController extends Controller
             $registrationPlan->fill($updateData);
             $registrationPlan->save();
 
-            // Diagnostic log (keep in debug mode)
             if (config('app.debug')) {
                 $activeCount = $registrationPlan->assignedAgents()
                     ->where('is_active', true)
@@ -1116,9 +1272,7 @@ class RegistrationPlanController extends Controller
                 ]);
             }
 
-            // ==============================================================
-            // STEP 6: Notify + invite NEW agents
-            // ==============================================================
+            // STEP 6 — Notify + invite new agents
             foreach ($newAgentIds as $agentId) {
                 $this->notifyAgentOfPlanAssignment(
                     $registrationPlan,
@@ -1135,7 +1289,8 @@ class RegistrationPlanController extends Controller
                 if ($validated['agent_assignment_type'] === 'single') {
                     $channels = $this->collectInvitationChannels($request);
                 } else {
-                    $channels = $this->collectInvitationChannels($request, $agentId);
+                    $agentIndex = array_search($agentId, $assignedAgentIds, true);
+                    $channels = $this->collectInvitationChannels($request, $agentIndex);
                 }
 
                 if (empty($channels)) {
@@ -1160,12 +1315,8 @@ class RegistrationPlanController extends Controller
 
             DB::commit();
 
-            // Refresh so the success message reflects what's actually in the DB
             $registrationPlan->refresh();
 
-            // ==============================================================
-            // Success message
-            // ==============================================================
             $successMessage = 'Registration plan updated successfully!';
 
             if ($finalStatus !== $validated['status']) {
@@ -1194,8 +1345,29 @@ class RegistrationPlanController extends Controller
             return redirect()->route('registration-plans.show', $registrationPlan->id)
                 ->with('success', $successMessage);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             DB::rollBack();
+
+            if (str_contains($e->getMessage(), 'registration_plans_zone_section')) {
+                Log::warning('Duplicate plan blocked by DB unique index during update', [
+                    'plan_id' => $registrationPlan->id,
+                    'user_id' => Auth::id(),
+                ]);
+                return back()
+                    ->with('error', 'Another plan with the same zone/section/starting-point already exists. Please refresh and try again.')
+                    ->withInput();
+            }
+
+            if (str_contains($e->getMessage(), 'plan_agent_assignments_plan_agent_unique')) {
+                Log::warning('Duplicate pivot insert blocked during update', [
+                    'plan_id' => $registrationPlan->id,
+                    'user_id' => Auth::id(),
+                ]);
+                return back()
+                    ->with('error', 'Another save was in progress for this plan. Please refresh and try again.')
+                    ->withInput();
+            }
+
             Log::error('Failed to update registration plan: ' . $e->getMessage());
             Log::error('Stack trace: ' . $e->getTraceAsString());
 
@@ -1241,37 +1413,72 @@ class RegistrationPlanController extends Controller
     //  HELPERS
     // ================================================================
 
-    private function checkNamingPatternConflicts($namingPattern, $startingPoint, $planId = null, $zone, $section = null)
-    {
-        $query = Property::whereHas('registrationPlan', function ($q) use ($zone, $section) {
-                $q->where('zone', $zone);
-                if ($section) {
-                    $q->where('section', $section);
-                }
+    private function checkPlanDuplicate(
+        string $namingPattern,
+        string $startingPoint,
+        string $zone,
+        ?string $section = null,
+        ?int $ignorePlanId = null
+    ): array {
+        $section = $section ?: null;
+
+        $planQuery = RegistrationPlan::query()
+            ->where('zone', $zone)
+            ->when(
+                $section !== null,
+                fn ($q) => $q->where('section', $section),
+                fn ($q) => $q->whereNull('section')
+            )
+            ->where(function ($q) use ($startingPoint, $namingPattern) {
+                $q->where('starting_point', $startingPoint)
+                  ->orWhere('naming_pattern', $namingPattern);
             })
-            ->where('registration_pattern', $startingPoint);
+            ->whereNotIn('status', ['cancelled'])
+            ->when($ignorePlanId, fn ($q) => $q->where('id', '!=', $ignorePlanId));
 
-        if ($planId) {
-            $query->whereHas('registrationPlan', function ($q) use ($planId) {
-                $q->where('id', '!=', $planId);
-            });
-        }
+        $conflictingPlan = $planQuery->first();
 
-        $existingProperty = $query->first();
-
-        if ($existingProperty) {
-            $conflictingPlan = $existingProperty->registrationPlan;
-
+        if ($conflictingPlan) {
             return [
-                'has_conflict' => true,
-                'message'      => "Pattern '{$startingPoint}' already exists in plan: " .
-                                   "{$conflictingPlan->zone}" .
-                                   ($conflictingPlan->section ? " - {$conflictingPlan->section}" : "") .
-                                   ". Please use a different pattern."
+                'has_duplicate' => true,
+                'message' => sprintf(
+                    "A %s plan already uses %s in %s%s. Duplicate plans are not allowed — edit the existing plan or choose a different starting point.",
+                    $conflictingPlan->status,
+                    $conflictingPlan->starting_point === $startingPoint
+                        ? "starting point '{$startingPoint}'"
+                        : "pattern '{$namingPattern}'",
+                    $zone,
+                    $section ? " - {$section}" : ''
+                ),
+                'plan' => $conflictingPlan,
             ];
         }
 
-        return ['has_conflict' => false];
+        $propertyQuery = Property::query()
+            ->where('registration_pattern', $startingPoint)
+            ->whereHas('registrationPlan', function ($q) use ($zone, $section, $ignorePlanId) {
+                $q->where('zone', $zone)
+                  ->when(
+                      $section !== null,
+                      fn ($p) => $p->where('section', $section),
+                      fn ($p) => $p->whereNull('section')
+                  )
+                  ->when($ignorePlanId, fn ($p) => $p->where('id', '!=', $ignorePlanId));
+            });
+
+        $existingProperty = $propertyQuery->first();
+
+        if ($existingProperty && $existingProperty->registrationPlan) {
+            $p = $existingProperty->registrationPlan;
+            return [
+                'has_duplicate' => true,
+                'message' => "Starting point '{$startingPoint}' is already used by a property in plan #{$p->id} ({$p->zone}"
+                           . ($p->section ? " - {$p->section}" : '') . "). Choose a different starting point.",
+                'plan' => $p,
+            ];
+        }
+
+        return ['has_duplicate' => false, 'message' => '', 'plan' => null];
     }
 
     private function validateNamingPattern($pattern, $startingPoint, $sequenceType)
@@ -1458,15 +1665,20 @@ class RegistrationPlanController extends Controller
 
     private function incrementLetters($letters)
     {
-        $length = strlen($letters);
-        for ($i = $length - 1; $i >= 0; $i--) {
-            if ($letters[$i] !== 'Z') {
-                $letters[$i] = chr(ord($letters[$i]) + 1);
-                return $letters;
-            }
-            $letters[$i] = 'A';
+        $chars = preg_split('//u', $letters, -1, PREG_SPLIT_NO_EMPTY);
+        if (!$chars) {
+            return 'A';
         }
-        return 'A' . $letters;
+
+        for ($i = count($chars) - 1; $i >= 0; $i--) {
+            if ($chars[$i] !== 'Z') {
+                $chars[$i] = chr(ord($chars[$i]) + 1);
+                return implode('', $chars);
+            }
+            $chars[$i] = 'A';
+        }
+
+        return 'A' . implode('', $chars);
     }
 
     private function generateLetterNextName($currentName)

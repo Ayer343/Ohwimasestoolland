@@ -20,14 +20,23 @@
                 <p class="text-sm mt-1" style="color: var(--text-secondary);">
                     <i class="fas fa-house-user mr-1"></i>Site Allocation • {{ $property->landlord->name }}'s Property
                 </p>
+                {{-- ✅ NEW: full location line with region + area --}}
                 <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                    @if($property->area)
+                        <i class="fas fa-map-pin mr-1" style="color: var(--info);"></i>{{ $property->area }}
+                    @endif
+                    @if($property->area && ($property->zone || $property->region)) • @endif
                     {{ $property->house_number }} {{ $property->street_name }}
                     @if($property->block_number) • Block {{ $property->block_number }} @endif
                     @if($property->zone) • {{ $property->zone }} @endif
+                    @if($property->section) • {{ $property->section }} @endif
+                    @if($property->region)
+                        • <span style="color: var(--info);"><i class="fas fa-globe-africa mr-1"></i>{{ $property->region }}</span>
+                    @endif
                 </p>
                 
                 <!-- Property Type Badge -->
-                <div class="flex items-center mt-2">
+                <div class="flex items-center mt-2 flex-wrap">
                     @if($property->propertyType)
                         <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold" 
                               style="background-color: {{ $property->propertyType->color }}20; color: {{ $property->propertyType->color }}; border: 1px solid {{ $property->propertyType->color }}30;">
@@ -221,7 +230,70 @@
                 <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
                     <i class="fas fa-home mr-2"></i>Site Allocation Information
                 </h3>
-                
+
+                {{-- ============================================================ --}}
+                {{-- ✅ NEW: REGIONAL LOCATION (region + area)                    --}}
+                {{-- Shown at the top of the info card so the hierarchy reads:    --}}
+                {{-- Region → Area → Zone → Section → Block → Street → House      --}}
+                {{-- ============================================================ --}}
+                <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.2);">
+                    <div class="flex items-center justify-between mb-3">
+                        <h4 class="text-sm font-semibold" style="color: var(--text-primary);">
+                            <i class="fas fa-globe-africa mr-1" style="color: var(--info);"></i>
+                            Regional Location
+                        </h4>
+                        @if($property->has_region || $property->has_area)
+                            <span class="px-2 py-1 rounded-full text-xs font-semibold"
+                                  style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                <i class="fas fa-check-circle mr-1"></i> Captured
+                            </span>
+                        @else
+                            <span class="px-2 py-1 rounded-full text-xs font-semibold"
+                                  style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                                <i class="fas fa-exclamation-triangle mr-1"></i> Not captured
+                            </span>
+                        @endif
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="property-field">
+                            <label class="field-label">Region</label>
+                            @if($property->region)
+                                <p class="field-value" style="color: var(--info);">
+                                    <i class="fas fa-map-marked-alt mr-1"></i>{{ $property->region }}
+                                </p>
+                            @else
+                                <p class="field-value" style="color: var(--warning);">
+                                    <i class="fas fa-exclamation-triangle mr-1"></i>Not specified
+                                </p>
+                            @endif
+                        </div>
+
+                        <div class="property-field">
+                            <label class="field-label">Area / Neighbourhood</label>
+                            @if($property->area)
+                                <p class="field-value">
+                                    <i class="fas fa-map-pin mr-1" style="color: var(--info);"></i>{{ $property->area }}
+                                </p>
+                            @else
+                                <p class="field-value" style="color: var(--warning);">
+                                    <i class="fas fa-exclamation-triangle mr-1"></i>Not specified
+                                </p>
+                            @endif
+                        </div>
+                    </div>
+
+                    @if($property->full_location)
+                        <div class="mt-3 pt-3 border-t" style="border-color: rgba(var(--info-rgb), 0.2);">
+                            <label class="field-label">Full Location Summary</label>
+                            <p class="text-sm" style="color: var(--text-primary);">
+                                <i class="fas fa-location-arrow mr-1" style="color: var(--info);"></i>
+                                {{ $property->full_location }}
+                            </p>
+                        </div>
+                    @endif
+                </div>
+
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <!-- Basic Information -->
                     <div class="space-y-4">
@@ -384,6 +456,20 @@
                         @endif
                     </div>
                 </div>
+
+                <!-- ✅ NEW: Coordinates (read-only) -->
+                @if($property->has_coordinates)
+                <div class="mt-6 property-field">
+                    <label class="field-label">GPS Coordinates</label>
+                    <div class="p-3 rounded-lg font-mono text-sm" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary);">
+                        <i class="fas fa-crosshairs mr-1" style="color: var(--info);"></i>
+                        Lat: {{ $property->latitude }} · Lng: {{ $property->longitude }}
+                        @if($property->city)
+                            <span class="ml-2" style="color: var(--text-secondary);">· {{ $property->city }}</span>
+                        @endif
+                    </div>
+                </div>
+                @endif
 
                 <!-- Description -->
                 @if($property->description)
@@ -1180,8 +1266,24 @@
                             <i class="fas fa-copy mr-2"></i> Copy Digital Address
                         </button>
                     @endif
-                    
-                    <a href="https://maps.google.com/?q={{ urlencode($property->street_name . ' ' . $property->house_number . ' ' . $property->zone) }}" 
+
+                    {{-- ✅ NEW: prefer coordinates when available, else use area/region-aware search --}}
+                    @php
+                        if ($property->has_coordinates) {
+                            $mapsUrl = 'https://maps.google.com/?q=' . urlencode($property->latitude . ',' . $property->longitude);
+                        } else {
+                            $queryBits = array_filter([
+                                $property->area,
+                                $property->street_name,
+                                $property->house_number,
+                                $property->zone,
+                                $property->region,
+                                'Ghana',
+                            ]);
+                            $mapsUrl = 'https://maps.google.com/?q=' . urlencode(implode(' ', $queryBits));
+                        }
+                    @endphp
+                    <a href="{{ $mapsUrl }}"
                        target="_blank" class="action-button btn-secondary">
                         <i class="fas fa-map-marker-alt mr-2"></i> View on Google Maps
                     </a>
@@ -1416,6 +1518,48 @@
                         <span class="font-mono text-xs px-2 py-1 rounded" style="background-color: var(--bg-secondary); color: var(--text-primary);">
                             {{ $property->registration_pattern ?? 'N/A' }}
                         </span>
+                    </div>
+
+                    {{-- ✅ NEW: Region row --}}
+                    <div class="flex justify-between items-center p-2">
+                        <span class="text-sm" style="color: var(--text-secondary);">Region</span>
+                        @if($property->region)
+                            <span class="text-sm font-semibold" style="color: var(--info);">
+                                <i class="fas fa-globe-africa mr-1"></i>{{ $property->region }}
+                            </span>
+                        @else
+                            <span class="text-sm font-semibold" style="color: var(--warning);">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>Not set
+                            </span>
+                        @endif
+                    </div>
+
+                    {{-- ✅ NEW: Area row --}}
+                    <div class="flex justify-between items-center p-2">
+                        <span class="text-sm" style="color: var(--text-secondary);">Area</span>
+                        @if($property->area)
+                            <span class="text-sm font-semibold" style="color: var(--text-primary);">
+                                <i class="fas fa-map-pin mr-1"></i>{{ $property->area }}
+                            </span>
+                        @else
+                            <span class="text-sm font-semibold" style="color: var(--warning);">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>Not set
+                            </span>
+                        @endif
+                    </div>
+
+                    {{-- ✅ NEW: Coordinates badge --}}
+                    <div class="flex justify-between items-center p-2">
+                        <span class="text-sm" style="color: var(--text-secondary);">Coordinates</span>
+                        @if($property->has_coordinates)
+                            <span class="text-sm font-semibold" style="color: var(--success);">
+                                <i class="fas fa-crosshairs mr-1"></i>Captured
+                            </span>
+                        @else
+                            <span class="text-sm font-semibold" style="color: var(--warning);">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>Missing
+                            </span>
+                        @endif
                     </div>
                     
                     <!-- Property Type in Metadata -->

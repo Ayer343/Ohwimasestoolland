@@ -33,6 +33,7 @@ class DeveloperSettingsController extends Controller
 
     const USER_TYPE_SUPER_ADMIN = 0;
     const USER_TYPE_DEVELOPER   = 5;
+    const USER_TYPE_ADMIN       = 1;   // ✅ NEW — for the 2FA role picker
 
     // Email update status constants
     const EMAIL_UPDATE_QUEUED     = 'queued';
@@ -48,6 +49,7 @@ class DeveloperSettingsController extends Controller
     const API_KEYS_CACHE_KEY      = 'developer_api_keys';
     const BILLING_CACHE_KEY       = 'developer_billing_settings_v2';
     const PRIMARY_SA_CACHE_KEY    = 'developer_primary_super_admin';
+    const TWO_FACTOR_POLICY_CACHE_KEY = 'developer_setting_2fa_policy';  // ✅ NEW
 
     // Cache TTLs
     const CACHE_TTL_SETTINGS      = 3600;
@@ -62,6 +64,22 @@ class DeveloperSettingsController extends Controller
 
     /** Default reminder offsets when none are selected */
     const DEFAULT_REMINDER_DAYS = [7, 3, 1];
+
+    /**
+     * ✅ NEW: canonical 2FA policy enum values.
+     * Mirrors DeveloperSetting::TWO_FACTOR_* constants.
+     */
+    const TWO_FACTOR_POLICIES = [
+        DeveloperSetting::TWO_FACTOR_OPTIONAL,
+        DeveloperSetting::TWO_FACTOR_ENCOURAGED,
+        DeveloperSetting::TWO_FACTOR_REQUIRED,
+    ];
+
+    /**
+     * ✅ NEW: roles allowed in `two_factor_required_roles`.
+     * Mirrors DeveloperSetting::ALLOWED_TWO_FACTOR_ROLES.
+     */
+    const ALLOWED_TWO_FACTOR_ROLES = [0, 1, 5];
 
     protected $emailService;
     protected $emailConfigService;
@@ -244,7 +262,9 @@ class DeveloperSettingsController extends Controller
             $oldSettings  = $settings->toArray();
             $data         = $validator->validated();
 
-            // Email config must be updated via the dedicated endpoint
+            // ------------------------------------------------------------
+            // Guard: email fields must not be updated via this endpoint.
+            // ------------------------------------------------------------
             if ($this->hasEmailConfigChanged($data, $oldSettings)) {
                 DB::rollBack();
                 return $this->respondToSettingsUpdate(
@@ -347,12 +367,8 @@ class DeveloperSettingsController extends Controller
      | SECTION-AWARE VALIDATION
      * ============================================================ */
 
-    /**
-     * Validate only the fields relevant to the given section.
-     */
     private function validateDeveloperSettings(array $data, string $section = 'general')
     {
-        // Common rules applied regardless of section (harmless if absent)
         $common = [
             'section' => 'nullable|string|in:general,monitoring,analytics',
         ];
@@ -407,25 +423,6 @@ class DeveloperSettingsController extends Controller
 
     /* ============================================================
      | BILLING — AUTOMATION SETTINGS ONLY
-     | ------------------------------------------------------------
-     | This endpoint is intentionally narrow.
-     |
-     | What it does:
-     |   - Toggles `auto_generate_invoices` on/off
-     |   - Toggles `send_payment_reminders` on/off
-     |   - Adjusts `invoice_due_days`
-     |   - Adjusts `reminder_days_before` (array of ints)
-     |
-     | What it does NOT do (by design):
-     |   - Create, update, or supersede billing agreements
-     |   - Change the primary super admin
-     |   - Generate invoices
-     |   - Touch amount, currency, cycle, or payment method
-     |
-     | Those concerns live on the Billing Dashboard:
-     |   - POST /billing/create-agreement
-     |   - POST /billing/change-primary-super-admin
-     |   - POST /billing/generate-monthly-invoice
      * ============================================================ */
 
     public function updateBillingSettings(Request $request)
@@ -436,7 +433,7 @@ class DeveloperSettingsController extends Controller
             return redirect()->back()
                 ->with('error', "Too many settings update attempts. Try again in {$seconds} seconds.");
         }
-        RateLimiter::hit($key, 60); // 10 attempts per minute
+        RateLimiter::hit($key, 60);
 
         if (!$this->canManageBilling()) {
             abort(403, 'Unauthorized to update billing settings.');
@@ -468,9 +465,6 @@ class DeveloperSettingsController extends Controller
             $user     = auth()->user();
             $settings = DeveloperSetting::first() ?: $this->initializeDeveloperSettings();
 
-            // ✅ FIX: use the model's safe accessor. It handles the case where
-            // billing_rules is stored as an array (cast) or a JSON string
-            // (legacy), and fills in DEFAULT_BILLING_RULES for missing keys.
             $existingRules = $settings->getBillingRulesArray();
 
             $newRules = array_merge($existingRules, [
@@ -482,9 +476,6 @@ class DeveloperSettingsController extends Controller
                 ),
             ]);
 
-            // ✅ FIX: pass the array directly. The 'array' cast on
-            // DeveloperSetting::$casts handles json_encode on save.
-            // Do NOT wrap in json_encode() — that double-encodes.
             $settings->update([
                 'billing_rules' => $newRules,
                 'updated_at'    => now(),
@@ -522,12 +513,6 @@ class DeveloperSettingsController extends Controller
         }
     }
 
-    /**
-     * Normalize reminder_days_before input.
-     *
-     * Accepts an array of scalars, keeps values in [1..30], dedupes,
-     * sorts descending, and falls back to DEFAULT_REMINDER_DAYS when empty.
-     */
     private function normalizeReminderDays($input): array
     {
         if (!is_array($input)) {
@@ -547,11 +532,6 @@ class DeveloperSettingsController extends Controller
 
     /* ============================================================
      | CHANGE PRIMARY SUPER ADMIN
-     | ------------------------------------------------------------
-     | This still lives on the settings controller for route
-     | compatibility, but the UI should be on the Billing Dashboard.
-     | The rule: primary-SA change is a billing operation, not a
-     | settings operation. Do NOT expose this on the settings form.
      * ============================================================ */
 
     public function changePrimarySuperAdmin(Request $request)
@@ -659,11 +639,6 @@ class DeveloperSettingsController extends Controller
      | BILLING SECTION DATA (read-only — no side effects)
      * ============================================================ */
 
-    /**
-     * Build billing data for the settings view.
-     *
-     * Pure read. Cached per developer setting for CACHE_TTL_BILLING seconds.
-     */
     private function getBillingSectionData(DeveloperSetting $settings, User $user): array
     {
         $cacheKey = $this->getCacheKey(self::BILLING_CACHE_KEY . $settings->id);
@@ -713,10 +688,6 @@ class DeveloperSettingsController extends Controller
                 $recentInvoices = $q->orderByDesc('created_at')->limit(5)->get();
             }
 
-            // ✅ FIX: use the model's safe accessor instead of json_decode().
-            // The previous code called json_decode() on a value that is cast
-            // to array by the DeveloperSetting model — throwing TypeError
-            // on PHP 8+.
             $billingRules = $settings->getBillingRulesArray();
 
             return [
@@ -745,12 +716,6 @@ class DeveloperSettingsController extends Controller
      | BILLING INVOICES LISTING
      * ============================================================ */
 
-    /**
-     * Show a paginated list of billing invoices for the current developer.
-     *
-     * Route:  GET developer/billing/invoices  →  developer.billing.invoices
-     * View:   resources/views/developer/billing/invoices.blade.php
-     */
     public function billingInvoices(Request $request)
     {
         if (!$this->canManageBilling()) {
@@ -773,7 +738,6 @@ class DeveloperSettingsController extends Controller
                     ->with('error', 'Billing invoices table is not available yet.');
             }
 
-            // ---------- BASE QUERY ----------
             $query = BillingInvoice::where('developer_setting_id', $settings->id);
 
             if ($request->filled('status')) {
@@ -800,14 +764,12 @@ class DeveloperSettingsController extends Controller
                 $query->where('invoice_type', $request->get('invoice_type'));
             }
 
-            // ---------- PAGINATED RESULTS ----------
             $invoices = (clone $query)
                 ->orderByDesc('issue_date')
                 ->orderByDesc('created_at')
                 ->paginate(20)
                 ->withQueryString();
 
-            // ---------- STATS (fresh clone, no pagination leak) ----------
             $statsQuery = clone $query;
 
             $stats = [
@@ -863,11 +825,7 @@ class DeveloperSettingsController extends Controller
     }
 
     /* ============================================================
-     | AGREEMENT CREATION (used only by changePrimarySuperAdmin)
-     | ------------------------------------------------------------
-     | Full agreement creation lives in DeveloperBillingController.
-     | This helper exists ONLY to satisfy the change-primary flow
-     | when no agreement exists yet for the new primary SA.
+     | AGREEMENT CREATION
      * ============================================================ */
 
     private function createAgreementForSuperAdmin(
@@ -1146,91 +1104,43 @@ class DeveloperSettingsController extends Controller
         }
     }
 
-    public function testEmailConfiguration(Request $request)
-    {
-        if (!$request->ajax()) {
-            return response()->json(['success' => false, 'message' => 'Invalid request. AJAX required.'], 403);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'test_email'  => 'required|email|max:255',
-            'test_type'   => 'required|in:connection,send,template,full',
-            'config_type' => 'nullable|in:developer,system',
-            'template'    => 'nullable|in:welcome,invoice,notification,alert',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation failed',
-                'errors'  => $validator->errors(),
-            ], 422);
-        }
-
-        try {
-            if (!$this->canManageDeveloperEmail()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized',
-                ], 403);
-            }
-
-            $data       = $validator->validated();
-            $configType = $data['config_type'] ?? 'developer';
-            $configStatus = $this->getCachedEmailStatus();
-
-            if (!$configStatus['configured']) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Email configuration not set up',
-                    'details' => 'Please configure your email settings first.',
-                ], 400);
-            }
-
-            $result = $this->emailService->testConfiguration(
-                null,
-                $data['test_email'],
-                $data['test_type'],
-                $configType
-            );
-
-            Cache::forget($this->getCacheKey(self::EMAIL_STATUS_CACHE_KEY));
-
-            $this->logAudit('email_test', 'Email configuration test performed', [
-                'test_type'   => $data['test_type'],
-                'config_type' => $configType,
-                'user_type'   => auth()->user()->type,
-                'success'     => $result['success'],
-                'test_email'  => $data['test_email'],
-                'ip_address'  => $request->ip(),
-            ]);
-
-            return response()->json($result);
-
-        } catch (\Exception $e) {
-            Log::error('Email configuration test failed: ' . $e->getMessage(), [
-                'trace'   => $e->getTraceAsString(),
-                'user_id' => auth()->id(),
-            ]);
-            return response()->json([
-                'success' => false,
-                'message' => 'Test failed: ' . $e->getMessage(),
-            ], 500);
-        }
-    }
-
     /* ============================================================
      | SECURITY / API / CACHE
-     * ============================================================ */
+     | ------------------------------------------------------------
+     | ✅ CHANGED (2026-10-13): updateSecuritySettings now handles
+     |    the 3-state 2FA policy + role list. It delegates the
+     |    actual persistence to DeveloperSetting::setTwoFactorPolicy()
+     |    so the legacy `enable_two_factor` boolean stays in sync.
+     |
+     |    Backward compatibility:
+     |      - If the request only contains the legacy `enable_two_factor`
+     |        boolean (old form / API clients), we translate it into
+     |        the equivalent policy:
+     |          enable_two_factor = 0 → optional
+     |          enable_two_factor = 1 → encouraged
+     |      - If the request contains the new `two_factor_policy`
+     |        field, it wins and `enable_two_factor` is derived.
+     | ============================================================ */
 
     public function updateSecuritySettings(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'enable_two_factor'    => 'boolean',
-            'session_timeout'      => 'integer|min:15|max:1440',
-            'max_login_attempts'   => 'integer|min:3|max:10',
-            'password_expiry_days' => 'integer|min:30|max:180',
-            'allowed_ips'          => 'nullable|string',
+            // Legacy boolean — still accepted for BC
+            'enable_two_factor'          => 'sometimes|boolean',
+
+            // New policy enum — preferred
+            'two_factor_policy'          => 'sometimes|in:optional,encouraged,required',
+            'two_factor_required_roles'  => 'sometimes|array',
+            'two_factor_required_roles.*'=> 'integer|in:0,1,5',
+
+            // Everything else unchanged
+            'session_timeout'            => 'integer|min:15|max:1440',
+            'max_login_attempts'         => 'integer|min:3|max:10',
+            'password_expiry_days'       => 'integer|min:30|max:180',
+            'allowed_ips'                => 'nullable|string',
+        ], [
+            'two_factor_policy.in'       => 'Two-factor policy must be one of: optional, encouraged, required.',
+            'two_factor_required_roles.*.in' => 'Two-factor roles may only include Developer (5), Super Admin (0), or Admin (1).',
         ]);
 
         if ($validator->fails()) {
@@ -1252,23 +1162,64 @@ class DeveloperSettingsController extends Controller
                     : json_encode([]);
             }
 
-            foreach (['enable_two_factor'] as $boolField) {
-                if (array_key_exists($boolField, $data)) {
-                    $data[$boolField] = (bool) $data[$boolField];
-                }
+            // ─────────────────────────────────────────────────────
+            // 2FA POLICY — resolved before the general update so that
+            // the legacy boolean never overwrites the new columns.
+            // ─────────────────────────────────────────────────────
+            $policyRequested = $request->has('two_factor_policy');
+            $legacyRequested = $request->has('enable_two_factor');
+
+            if ($policyRequested) {
+                // New API path: caller sent `two_factor_policy` (+roles).
+                // Delegate persistence to the model so `enable_two_factor`
+                // stays in sync automatically.
+                $settings->setTwoFactorPolicy(
+                    $request->input('two_factor_policy'),
+                    $request->input('two_factor_required_roles', [])
+                );
+
+                // Strip these keys so the general ->update() below doesn't
+                // clobber what setTwoFactorPolicy() just wrote.
+                unset(
+                    $data['two_factor_policy'],
+                    $data['two_factor_required_roles']
+                );
+            } elseif ($legacyRequested) {
+                // Old API path: caller only sent `enable_two_factor`.
+                // Translate the boolean into an equivalent policy.
+                $legacy = (bool) $request->boolean('enable_two_factor');
+                $settings->setTwoFactorPolicy(
+                    $legacy
+                        ? DeveloperSetting::TWO_FACTOR_ENCOURAGED
+                        : DeveloperSetting::TWO_FACTOR_OPTIONAL,
+                    [] // legacy callers never set roles
+                );
+
+                unset($data['enable_two_factor']);
             }
 
-            $settings->update($data);
+            // Remove any 2FA keys from $data so the general update below
+            // can't accidentally overwrite them.
+            unset($data['enable_two_factor']);
+
+            // Apply the remaining (non-2FA) security fields.
+            if (!empty($data)) {
+                $settings->update($data);
+            }
+
             $this->clearDeveloperCache();
+            Cache::forget($this->getCacheKey(self::TWO_FACTOR_POLICY_CACHE_KEY));
 
             if (isset($data['session_timeout'])) {
                 config(['session.lifetime' => $data['session_timeout']]);
             }
 
             $this->logAudit('security_settings_updated', 'Security settings updated', [
-                'changed_fields' => array_keys($data),
-                'user_type'      => auth()->user()->type,
-                'ip_address'     => request()->ip(),
+                'changed_fields'    => array_keys($data),
+                'two_factor_policy' => $settings->twoFactorPolicy(),          // ✅ NEW
+                'two_factor_roles'  => $settings->twoFactorRequiredRoles(),   // ✅ NEW
+                'user_type'         => auth()->user()->type,
+                'ip_address'        => request()->ip(),
             ]);
 
             return redirect()->route('developer.settings.index', ['section' => 'api'])
@@ -1368,6 +1319,7 @@ class DeveloperSettingsController extends Controller
             Cache::forget("developer_billing_dashboard_{$user->id}");
             Cache::forget($this->getCacheKey(self::BILLING_CACHE_KEY));
             Cache::forget($this->getCacheKey(self::PRIMARY_SA_CACHE_KEY));
+            Cache::forget($this->getCacheKey(self::TWO_FACTOR_POLICY_CACHE_KEY)); // ✅ NEW
 
             $this->logAudit('cache_cleared', 'Developer cache cleared', [
                 'user_id'                    => $user->id,
@@ -1443,6 +1395,7 @@ class DeveloperSettingsController extends Controller
                 $this->getCacheKey(self::EMAIL_STATUS_CACHE_KEY),
                 $this->getCacheKey(self::API_KEYS_CACHE_KEY),
                 $this->getCacheKey(self::PRIMARY_SA_CACHE_KEY),
+                $this->getCacheKey(self::TWO_FACTOR_POLICY_CACHE_KEY), // ✅ NEW
             ];
 
             if ($userId) {
@@ -1577,13 +1530,39 @@ class DeveloperSettingsController extends Controller
         ];
 
         foreach ($emailFields as $field) {
-            if (isset($newData[$field]) && isset($oldData[$field])) {
-                if ($newData[$field] !== $oldData[$field]) return true;
-            } elseif (isset($newData[$field]) || isset($oldData[$field])) {
+            if (!array_key_exists($field, $newData)) {
+                continue;
+            }
+
+            $newValue = $newData[$field];
+
+            if ($field === 'developer_smtp_password' && $this->isMaskedPassword($newValue)) {
+                continue;
+            }
+
+            $oldValue = $oldData[$field] ?? null;
+
+            if ((string) $newValue !== (string) $oldValue) {
                 return true;
             }
         }
+
         return false;
+    }
+
+    private function isMaskedPassword($value): bool
+    {
+        if (!is_string($value)) {
+            return false;
+        }
+
+        $placeholders = ['••••••••', '********', '[HIDDEN]', '[ENCRYPTED]', '[MASKED]'];
+
+        if (in_array($value, $placeholders, true)) {
+            return true;
+        }
+
+        return strlen($value) <= 6 && preg_match('/^\*+$/', $value) === 1;
     }
 
     private function getEmailUpdateStatus(int $userId): array
@@ -1649,6 +1628,12 @@ class DeveloperSettingsController extends Controller
             'billing_cycle'               => 'monthly',
             'monthly_billing_amount'      => 0,
             'billing_status'              => 'inactive',
+
+            // ✅ NEW: 2FA defaults — optional policy, no roles required.
+            'enable_two_factor'           => false,
+            'two_factor_policy'           => DeveloperSetting::TWO_FACTOR_OPTIONAL,
+            'two_factor_required_roles'   => null,
+
             'created_at'                  => now(),
             'updated_at'                  => now(),
         ];
@@ -1780,104 +1765,103 @@ class DeveloperSettingsController extends Controller
         return $data;
     }
 
-    /**
- * Cache config.
- */
-public function configCache()
-{
-    try {
-        \Illuminate\Support\Facades\Artisan::call('config:cache');
-        return redirect()->back()->with('success', 'Configuration cached successfully.');
-    } catch (\Throwable $e) {
-        \Illuminate\Support\Facades\Log::error('config:cache failed: ' . $e->getMessage());
-        return redirect()->back()->with('error', 'Failed to cache config: ' . $e->getMessage());
-    }
-}
+    /* ============================================================
+     | CACHE / CONFIG COMMANDS (unchanged)
+     * ============================================================ */
 
-public function configClear()
-{
-    try {
-        \Illuminate\Support\Facades\Artisan::call('config:clear');
-        return redirect()->back()->with('success', 'Configuration cache cleared.');
-    } catch (\Throwable $e) {
-        return redirect()->back()->with('error', 'Failed to clear config: ' . $e->getMessage());
-    }
-}
-
-public function routeCache()
-{
-    try {
-        \Illuminate\Support\Facades\Artisan::call('route:cache');
-        return redirect()->back()->with('success', 'Routes cached successfully.');
-    } catch (\Throwable $e) {
-        return redirect()->back()->with('error', 'Failed to cache routes: ' . $e->getMessage());
-    }
-}
-
-public function routeClear()
-{
-    try {
-        \Illuminate\Support\Facades\Artisan::call('route:clear');
-        return redirect()->back()->with('success', 'Route cache cleared.');
-    } catch (\Throwable $e) {
-        return redirect()->back()->with('error', 'Failed to clear routes: ' . $e->getMessage());
-    }
-}
-
-public function viewCache()
-{
-    try {
-        \Illuminate\Support\Facades\Artisan::call('view:cache');
-        return redirect()->back()->with('success', 'Views cached successfully.');
-    } catch (\Throwable $e) {
-        return redirect()->back()->with('error', 'Failed to cache views: ' . $e->getMessage());
-    }
-}
-
-public function viewClear()
-{
-    try {
-        \Illuminate\Support\Facades\Artisan::call('view:clear');
-        return redirect()->back()->with('success', 'View cache cleared.');
-    } catch (\Throwable $e) {
-        return redirect()->back()->with('error', 'Failed to clear views: ' . $e->getMessage());
-    }
-}
-
-public function queueRestart()
-{
-    try {
-        \Illuminate\Support\Facades\Artisan::call('queue:restart');
-        return redirect()->back()->with('success', 'Queue restart signal sent.');
-    } catch (\Throwable $e) {
-        return redirect()->back()->with('error', 'Failed to restart queue: ' . $e->getMessage());
-    }
-}
-
-public function sessionClean()
-{
-    try {
-        // Only works if you use the database session driver.
-        if (config('session.driver') === 'database') {
-            \Illuminate\Support\Facades\DB::table('sessions')
-                ->where('last_activity', '<', now()->subMinutes(config('session.lifetime'))->timestamp)
-                ->delete();
+    public function configCache()
+    {
+        try {
+            \Illuminate\Support\Facades\Artisan::call('config:cache');
+            return redirect()->back()->with('success', 'Configuration cached successfully.');
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('config:cache failed: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Failed to cache config: ' . $e->getMessage());
         }
-        return redirect()->back()->with('success', 'Expired sessions cleaned.');
-    } catch (\Throwable $e) {
-        return redirect()->back()->with('error', 'Failed to clean sessions: ' . $e->getMessage());
     }
-}
 
-public function scheduleRun()
-{
-    try {
-        \Illuminate\Support\Facades\Artisan::call('schedule:run');
-        $output = \Illuminate\Support\Facades\Artisan::output();
-        return redirect()->back()->with('success', 'Scheduler ran successfully. ' . strip_tags($output));
-    } catch (\Throwable $e) {
-        return redirect()->back()->with('error', 'Failed to run scheduler: ' . $e->getMessage());
+    public function configClear()
+    {
+        try {
+            \Illuminate\Support\Facades\Artisan::call('config:clear');
+            return redirect()->back()->with('success', 'Configuration cache cleared.');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Failed to clear config: ' . $e->getMessage());
+        }
     }
-}
 
+    public function routeCache()
+    {
+        try {
+            \Illuminate\Support\Facades\Artisan::call('route:cache');
+            return redirect()->back()->with('success', 'Routes cached successfully.');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Failed to cache routes: ' . $e->getMessage());
+        }
+    }
+
+    public function routeClear()
+    {
+        try {
+            \Illuminate\Support\Facades\Artisan::call('route:clear');
+            return redirect()->back()->with('success', 'Route cache cleared.');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Failed to clear routes: ' . $e->getMessage());
+        }
+    }
+
+    public function viewCache()
+    {
+        try {
+            \Illuminate\Support\Facades\Artisan::call('view:cache');
+            return redirect()->back()->with('success', 'Views cached successfully.');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Failed to cache views: ' . $e->getMessage());
+        }
+    }
+
+    public function viewClear()
+    {
+        try {
+            \Illuminate\Support\Facades\Artisan::call('view:clear');
+            return redirect()->back()->with('success', 'View cache cleared.');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Failed to clear views: ' . $e->getMessage());
+        }
+    }
+
+    public function queueRestart()
+    {
+        try {
+            \Illuminate\Support\Facades\Artisan::call('queue:restart');
+            return redirect()->back()->with('success', 'Queue restart signal sent.');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Failed to restart queue: ' . $e->getMessage());
+        }
+    }
+
+    public function sessionClean()
+    {
+        try {
+            if (config('session.driver') === 'database') {
+                \Illuminate\Support\Facades\DB::table('sessions')
+                    ->where('last_activity', '<', now()->subMinutes(config('session.lifetime'))->timestamp)
+                    ->delete();
+            }
+            return redirect()->back()->with('success', 'Expired sessions cleaned.');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Failed to clean sessions: ' . $e->getMessage());
+        }
+    }
+
+    public function scheduleRun()
+    {
+        try {
+            \Illuminate\Support\Facades\Artisan::call('schedule:run');
+            $output = \Illuminate\Support\Facades\Artisan::output();
+            return redirect()->back()->with('success', 'Scheduler ran successfully. ' . strip_tags($output));
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Failed to run scheduler: ' . $e->getMessage());
+        }
+    }
 }

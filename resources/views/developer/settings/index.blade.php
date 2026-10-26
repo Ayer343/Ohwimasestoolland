@@ -1,4 +1,4 @@
-{{-- developer/settings/index.blade.php — ALIGNED WITH DECOUPLED BILLING SETTINGS --}}
+{{-- developer/settings/index.blade.php — ALIGNED WITH 3-STATE 2FA POLICY --}}
 @extends('layouts.dev')
 
 @php
@@ -8,7 +8,6 @@
     $pageTitle       = 'Developer Settings - System Configuration';
     $successMessage  = session('success');
     $errorMessage    = session('error');
-    $emailTestResult = session('email_test_result');
     $apiKeysGenerated = session('api_keys_generated');
     $billingUpdated  = session('billing_updated');
     $billingSettingsUpdated = session('billing_settings_updated');
@@ -99,6 +98,29 @@
         'password_expiry_days' => config('developer.defaults.password_expiry_days', 90),
         'log_retention_days'   => config('developer.defaults.log_retention_days', 90),
     ];
+
+    // ✅ NEW (2026-10-13): 2FA policy — resolve from the model with safe fallbacks.
+    //
+    // $settings may be a fresh DeveloperSetting instance (empty), in which
+    // case `twoFactorPolicy()` returns 'optional' and `twoFactorRequiredRoles()`
+    // returns the defaults [5, 0]. We call the model methods directly rather
+    // than reading the raw attributes so the fallback logic lives in one place.
+    $twoFactorPolicy = old('two_factor_policy', $settings->twoFactorPolicy());
+    $twoFactorRequiredRoles = old('two_factor_required_roles', $settings->twoFactorRequiredRoles());
+
+    if (!is_array($twoFactorRequiredRoles)) {
+        $twoFactorRequiredRoles = [];
+    }
+    $twoFactorRequiredRoles = array_map('intval', $twoFactorRequiredRoles);
+
+    // Role labels — keep in sync with User::TYPE_* constants.
+    // Only privileged roles are shown; admins are the lowest tier that
+    // can meaningfully be required to enroll.
+    $twoFactorRoleOptions = [
+        0 => 'Super Admin',
+        1 => 'Admin',
+        5 => 'Developer',
+    ];
 @endphp
 
 @section('title', $pageTitle)
@@ -134,7 +156,6 @@
             <div class="text-sm" style="color: var(--text-secondary);">
                 <i class="fas fa-calendar-alt mr-1"></i> {{ now()->format('F j, Y') }}
                 <div class="flex items-center space-x-2 mt-2 flex-wrap gap-2">
-                    {{-- ✅ Theme toggle button REMOVED --}}
                     <a href="{{ route('developer.dashboard') }}"
                        class="px-3 py-1 rounded-lg text-xs font-medium inline-flex items-center"
                        style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary); border: 1px solid rgba(var(--primary-rgb), 0.3);">
@@ -215,8 +236,6 @@
 
     {{-- ============================================================
          NAVIGATION + SEARCH
-         ✅ Search field now uses same theme tokens as the rest
-         ✅ Container adapts to light/dark without a hardcoded white
     ============================================================ --}}
     <div class="card p-6">
         <div class="flex flex-wrap items-center justify-between gap-4">
@@ -252,7 +271,6 @@
                 @endif
             </div>
 
-            {{-- ✅ Themed search wrapper --}}
             <div class="settings-search-wrapper">
                 <input type="text"
                        id="settingsSearch"
@@ -362,9 +380,6 @@
 
     {{-- ============================================================
          MAIN CONTENT
-         ✅ Sidebar no longer sticky → fixes overlap with
-            System Status / Quick Actions.
-         ✅ All sidebar cards live in one column and scroll together.
     ============================================================ --}}
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {{-- SIDEBAR --}}
@@ -433,6 +448,12 @@
                         </div>
                         <div class="flex-1">
                             <span class="text-sm font-medium" style="color: var(--text-primary);">API & Security</span>
+                            {{-- ✅ NEW: show 2FA policy badge when not optional --}}
+                            @if($twoFactorPolicy === 'required')
+                                <span class="text-xs ml-2 badge-warning" title="Two-factor authentication is required for selected roles">2FA required</span>
+                            @elseif($twoFactorPolicy === 'encouraged')
+                                <span class="text-xs ml-2 badge-info">2FA encouraged</span>
+                            @endif
                         </div>
                         <i class="fas fa-chevron-right text-xs transition-transform duration-200" style="color: var(--text-secondary);"></i>
                     </a>
@@ -499,6 +520,15 @@
                         <span class="text-sm" style="color: var(--text-secondary);">Billing</span>
                         <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium badge-{{ $hasPrimarySuperAdmin ? 'success' : 'warning' }}">
                             {{ $hasPrimarySuperAdmin ? 'Configured' : 'Not Configured' }}
+                        </span>
+                    </div>
+                    {{-- ✅ NEW: 2FA policy row --}}
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm" style="color: var(--text-secondary);">2FA Policy</span>
+                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium badge-{{
+                            $twoFactorPolicy === 'required' ? 'warning' : ($twoFactorPolicy === 'encouraged' ? 'info' : 'secondary')
+                        }}">
+                            {{ ucfirst($twoFactorPolicy) }}
                         </span>
                     </div>
                 </div>
@@ -857,25 +887,6 @@
                                 </div>
                             </div>
                         </div>
-
-                        @if($emailTestResult)
-                        <div class="mt-4 p-4 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.1); border: 1px solid rgba(var(--info-rgb), 0.3);">
-                            <div class="text-sm font-medium mb-2" style="color: var(--text-secondary);">Last Test Results:</div>
-                            <div class="flex items-center mb-1" style="{{ $emailTestResult['success'] ? 'color: var(--success);' : 'color: var(--danger);' }}">
-                                <i class="fas fa-{{ $emailTestResult['success'] ? 'check-circle' : 'exclamation-circle' }} mr-2"></i>
-                                {{ $emailTestResult['message'] }}
-                            </div>
-                        </div>
-                        @endif
-
-                        <div class="mt-4 flex gap-3">
-                            <button type="button" onclick="showEmailTestModal()" class="btn-secondary px-4 py-2 rounded-lg font-medium inline-flex items-center">
-                                <i class="fas fa-vial mr-2"></i> Test Configuration
-                            </button>
-                            <button type="button" onclick="sendTestEmail()" class="btn-primary px-4 py-2 rounded-lg font-medium inline-flex items-center">
-                                <i class="fas fa-paper-plane mr-2"></i> Send Test Email
-                            </button>
-                        </div>
                     </div>
 
                     <form method="POST" action="{{ route('developer.settings.email.update') }}" class="space-y-6" id="emailSettingsForm" data-section="email">
@@ -939,7 +950,7 @@
                                             <i class="fas fa-eye"></i>
                                         </button>
                                     </div>
-                                    <p class="mt-1 text-xs" style="color: var(--text-secondary);">Password is encrypted and stored securely.</p>
+                                    <p class="mt-1 text-xs" style="color: var(--text-secondary);">Password is stored as plaintext in .env (standard Laravel behaviour).</p>
                                     @error('developer_mail_password')<p class="mt-1 text-sm" style="color: var(--danger);">{{ $message }}</p>@enderror
                                 </div>
                             </div>
@@ -1401,20 +1412,85 @@
                             </button>
                         </div>
 
-                        <div class="space-y-4">
-                            <div class="flex items-center justify-between p-4 rounded-lg setting-item" style="background-color: rgba(var(--primary-rgb), 0.05); border: 1px solid rgba(var(--primary-rgb), 0.1);">
-                                <div>
-                                    <p class="font-medium" style="color: var(--text-primary);">Two-Factor Authentication</p>
-                                    <p class="text-sm mt-1" style="color: var(--text-secondary);">Require 2FA for developer account access</p>
-                                </div>
-                                <label class="toggle-switch">
-                                    <input type="hidden" name="enable_two_factor" value="0">
-                                    <input type="checkbox" name="enable_two_factor" value="1" class="toggle-checkbox"
-                                           {{ old('enable_two_factor', $settings->enable_two_factor) ? 'checked' : '' }}>
-                                    <span class="toggle-slider"></span>
+                        {{-- ============================================================
+                             ✅ NEW (2026-10-13): 3-STATE 2FA POLICY CONTROL
+                             ------------------------------------------------------------
+                             Replaces the old single boolean toggle. The new
+                             control maps 1:1 to DeveloperSetting::TWO_FACTOR_*
+                             and drives the enforcement path in LoginController.
+
+                             The legacy `enable_two_factor` field is submitted
+                             as a hidden input so any integration that still
+                             posts it (old API clients, webhooks) doesn't 422.
+                             The model derives it from the policy automatically.
+                        --}}
+                        <div class="p-4 rounded-lg mb-6" style="background-color: rgba(var(--success-rgb), 0.05); border: 1px solid rgba(var(--success-rgb), 0.15);">
+                            <h4 class="text-md font-semibold mb-2 flex items-center" style="color: var(--text-primary);">
+                                <i class="fas fa-shield-alt mr-2" style="color: var(--success);"></i>
+                                Two-Factor Authentication Policy
+                            </h4>
+                            <p class="text-sm mb-4" style="color: var(--text-secondary);">
+                                Control whether privileged users must set up 2FA.
+                                Everyone can still enable it voluntarily from their profile.
+                            </p>
+
+                            {{-- Legacy mirror — keeps backward compatibility --}}
+                            <input type="hidden" name="enable_two_factor" value="{{ $twoFactorPolicy !== 'optional' ? '1' : '0' }}">
+
+                            {{-- 3-state radio group --}}
+                            <div class="space-y-3 mb-4">
+                                @foreach([
+                                    'optional'   => ['Optional',   'No prompts, no enforcement. Users may enable 2FA on their own account.'],
+                                    'encouraged'=> ['Encouraged',  'Show a security banner to privileged users until they enable 2FA. Non-blocking.'],
+                                    'required'  => ['Required',    'Selected roles MUST set up 2FA before they can use the system.'],
+                                ] as $value => [$label, $desc])
+                                <label class="flex items-start gap-3 p-3 rounded-lg cursor-pointer setting-item"
+                                       style="background-color: rgba(var(--primary-rgb), 0.05); border: 1px solid rgba(var(--primary-rgb), 0.1);">
+                                    <input type="radio"
+                                           name="two_factor_policy"
+                                           value="{{ $value }}"
+                                           class="mt-1 form-radio"
+                                           data-two-factor-policy
+                                           {{ $twoFactorPolicy === $value ? 'checked' : '' }}>
+                                    <div>
+                                        <p class="font-medium" style="color: var(--text-primary);">{{ $label }}</p>
+                                        <p class="text-sm mt-0.5" style="color: var(--text-secondary);">{{ $desc }}</p>
+                                    </div>
                                 </label>
+                                @endforeach
                             </div>
 
+                            {{-- Role checkboxes — only relevant when policy = required --}}
+                            <div id="requiredRolesBlock"
+                                 class="p-4 rounded-lg"
+                                 style="background-color: rgba(var(--warning-rgb), 0.05); border: 1px solid rgba(var(--warning-rgb), 0.2); {{ $twoFactorPolicy !== 'required' ? 'display:none;' : '' }}">
+                                <p class="text-sm font-medium mb-3" style="color: var(--text-primary);">
+                                    Which roles must use 2FA?
+                                </p>
+                                <div class="flex flex-wrap gap-3">
+                                    @foreach($twoFactorRoleOptions as $type => $label)
+                                    <label class="inline-flex items-center px-3 py-1 rounded-lg cursor-pointer"
+                                           style="background-color: rgba(var(--primary-rgb), 0.05); border: 1px solid rgba(var(--primary-rgb), 0.2);">
+                                        <input type="checkbox"
+                                               name="two_factor_required_roles[]"
+                                               value="{{ $type }}"
+                                               class="form-checkbox mr-2"
+                                               {{ in_array((int) $type, $twoFactorRequiredRoles, true) ? 'checked' : '' }}>
+                                        <span class="text-sm" style="color: var(--text-primary);">{{ $label }}</span>
+                                    </label>
+                                    @endforeach
+                                </div>
+                                <p class="text-xs mt-3" style="color: var(--text-secondary);">
+                                    Users in these roles will be forced to set up 2FA at their next login.
+                                    Others can still opt in voluntarily.
+                                </p>
+                            </div>
+                        </div>
+
+                        {{-- ============================================================
+                             Existing session / password settings
+                        --}}
+                        <div class="space-y-4">
                             <div>
                                 <label class="block mb-2 text-sm font-medium" style="color: var(--text-primary);">Session Timeout (minutes)</label>
                                 <input type="number" name="session_timeout" id="session_timeout"
@@ -1611,7 +1687,7 @@
                                         style="background-color: var(--card-bg); color: var(--text-primary); border-color: var(--border-color);">
                                     <option value="">-- Select Provider --</option>
                                     <option value="google"   {{ old('analytics_provider', $settings->analytics_provider) == 'google'   ? 'selected' : '' }}>Google Analytics</option>
-                                    <option value="internal" {{ old('analytics_provider', $settings->analytics_provider) == 'internal' ? 'selected' : '' }}>Internal Analytics</option>
+                                    <option value="internal" {{ old('analytics_provider', $settings->analytics_provider ?? 'internal') == 'internal' ? 'selected' : '' }}>Internal Analytics</option>
                                     <option value="matomo"   {{ old('analytics_provider', $settings->analytics_provider) == 'matomo'   ? 'selected' : '' }}>Matomo (Self-hosted)</option>
                                     <option value="mixpanel" {{ old('analytics_provider', $settings->analytics_provider) == 'mixpanel' ? 'selected' : '' }}>Mixpanel</option>
                                 </select>
@@ -1682,61 +1758,6 @@
      MODALS
 ============================================================ --}}
 
-<!-- Email Test Modal -->
-<div id="emailTestModal" class="fixed inset-0 z-50 hidden">
-    <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity" onclick="closeModal('emailTestModal')"></div>
-    <div class="fixed inset-0 flex items-center justify-center p-4">
-        <div class="modal-container max-w-md w-full" style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-            <div class="modal-header">
-                <h3 class="flex items-center text-lg font-semibold" style="color: var(--text-primary);">
-                    <i class="fas fa-vial mr-2" style="color: var(--info);"></i> Test Email Configuration
-                </h3>
-                <button type="button" onclick="closeModal('emailTestModal')" class="modal-close-btn">
-                    <i class="fas fa-times" style="color: var(--text-secondary);"></i>
-                </button>
-            </div>
-            <div class="modal-body">
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Test Email Address *</label>
-                        <input type="email" id="test_email_input"
-                               class="form-input w-full p-3 rounded-lg border focus-ring"
-                               style="border-color: var(--border-color); background-color: var(--card-bg); color: var(--text-primary);"
-                               placeholder="test@example.com" value="{{ auth()->user()->email }}">
-                        <p class="mt-1 text-xs" style="color: var(--text-secondary);" id="testEmailError"></p>
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Test Type</label>
-                        <div class="grid grid-cols-2 gap-3">
-                            <button type="button" onclick="testEmailConfiguration('connection')"
-                                    class="btn-secondary px-4 py-2 rounded-lg font-medium text-center transition-all">
-                                <i class="fas fa-plug mr-2"></i> Test Connection
-                            </button>
-                            <button type="button" onclick="testEmailConfiguration('send')"
-                                    class="btn-primary px-4 py-2 rounded-lg font-medium text-white text-center transition-all">
-                                <i class="fas fa-paper-plane mr-2"></i> Send Test Email
-                            </button>
-                        </div>
-                    </div>
-
-                    <div id="testProgress" class="hidden">
-                        <div class="flex items-center justify-center py-4">
-                            <i class="fas fa-spinner fa-spin text-2xl" style="color: var(--primary);"></i>
-                            <span class="ml-3" style="color: var(--text-secondary);">Testing connection...</span>
-                        </div>
-                    </div>
-
-                    <div id="testResult" class="hidden p-3 rounded-lg"></div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button onclick="closeModal('emailTestModal')" class="btn-secondary px-4 py-2 rounded-lg font-medium">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- API Documentation Modal -->
 <div id="apiDocsModal" class="fixed inset-0 z-50 hidden">
     <div class="fixed inset-0 bg-black bg-opacity-50 transition-opacity" onclick="closeModal('apiDocsModal')"></div>
@@ -1786,7 +1807,7 @@ X-API-Secret: YOUR_SECRET_KEY</pre>
                                 <span class="flex-1 font-mono text-sm" style="color: var(--text-primary);">{{ $endpoint }}</span>
                                 <span class="text-sm" style="color: var(--text-secondary);">{{ $desc }}</span>
                                 <button onclick="copyEndpoint('{{ $endpoint }}')" class="text-xs px-2 py-1 rounded">
-                                    <i class="fas fa-copy"></i>
+                                    <i class="fas fa-copy"></i> Copy
                                 </button>
                             </div>
                             @endforeach
@@ -1842,10 +1863,6 @@ curl -X GET "{{ $apiKeys['base_url'] ?? config('app.url') . '/api/developer' }}/
 
 @section('scripts')
 <script>
-// =====================================================
-// ✅ Theme toggle removed (button no longer exists)
-// =====================================================
-
 // =====================================================
 // Form Validation
 // =====================================================
@@ -1904,7 +1921,35 @@ document.addEventListener('DOMContentLoaded', function() {
     animateStatCards();
     initPresetButtons();
     initConfirmForms();
+
+    // ✅ NEW: 2FA policy radio → toggle the required-roles block.
+    initTwoFactorPolicy();
 });
+
+// =====================================================
+// ✅ NEW: 2FA policy UI behaviour
+// =====================================================
+function initTwoFactorPolicy() {
+    const radios = document.querySelectorAll('input[name="two_factor_policy"]');
+    const block  = document.getElementById('requiredRolesBlock');
+    if (!radios.length || !block) return;
+
+    const sync = () => {
+        const selected = document.querySelector('input[name="two_factor_policy"]:checked');
+        const isRequired = selected && selected.value === 'required';
+        block.style.display = isRequired ? 'block' : 'none';
+
+        // Mirror the selection onto the hidden legacy boolean so any
+        // server-side BC check still sees a consistent value.
+        const legacyHidden = document.querySelector('input[name="enable_two_factor"]');
+        if (legacyHidden) {
+            legacyHidden.value = selected && selected.value !== 'optional' ? '1' : '0';
+        }
+    };
+
+    radios.forEach(r => r.addEventListener('change', sync));
+    sync();
+}
 
 // =====================================================
 // Toggle Switches
@@ -2121,6 +2166,13 @@ function resetSecurityDefaults() {
         const input = form?.querySelector(`[name="${key}"]`);
         if (input) input.value = value;
     }
+
+    // ✅ NEW: reset 2FA policy to 'optional' and uncheck all roles.
+    const policyRadio = form?.querySelector('input[name="two_factor_policy"][value="optional"]');
+    if (policyRadio) policyRadio.checked = true;
+    form?.querySelectorAll('input[name="two_factor_required_roles[]"]').forEach(cb => cb.checked = false);
+    initTwoFactorPolicy();
+
     showToast('Reset to default values', 'info');
     if (form) markFormDirty(form);
 }
@@ -2137,83 +2189,6 @@ function resetPerformanceDefaults() {
     }
     showToast('Reset to default values', 'info');
     if (form) markFormDirty(form);
-}
-
-// =====================================================
-// Email Testing
-// =====================================================
-let testInProgress = false;
-
-function testEmailConfiguration(testType) {
-    if (testInProgress) {
-        showToast('Test already in progress. Please wait.', 'warning');
-        return;
-    }
-    const testEmail = document.getElementById('test_email_input').value;
-    const testProgress = document.getElementById('testProgress');
-    const testResult = document.getElementById('testResult');
-    const testEmailError = document.getElementById('testEmailError');
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(testEmail)) {
-        testEmailError.textContent = 'Please enter a valid email address';
-        return;
-    }
-    testEmailError.textContent = '';
-
-    testInProgress = true;
-    testProgress.classList.remove('hidden');
-    testResult.classList.add('hidden');
-
-    const button = event?.target;
-    const originalText = button?.innerHTML || '';
-    if (button) {
-        button.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Testing...';
-        button.disabled = true;
-    }
-
-    fetch('{{ route("developer.email.test") }}', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': '{{ csrf_token() }}',
-            'Accept': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({ test_email: testEmail, test_type: testType })
-    })
-    .then(r => r.json())
-    .then(data => {
-        testProgress.classList.add('hidden');
-        testResult.classList.remove('hidden');
-        if (data.success) {
-            testResult.style.cssText = 'background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.3); color: var(--success);';
-            testResult.innerHTML = `<i class="fas fa-check-circle mr-2"></i> ${data.message}`;
-            showToast('Test successful! ' + data.message, 'success');
-            setTimeout(() => location.reload(), 2000);
-        } else {
-            testResult.style.cssText = 'background-color: rgba(var(--danger-rgb), 0.1); border: 1px solid rgba(var(--danger-rgb), 0.3); color: var(--danger);';
-            testResult.innerHTML = `<i class="fas fa-exclamation-circle mr-2"></i> ${data.message || 'Test failed'}`;
-            showToast('Test failed: ' + (data.message || 'Unknown error'), 'error');
-        }
-    })
-    .catch(error => {
-        testProgress.classList.add('hidden');
-        testResult.classList.remove('hidden');
-        testResult.style.cssText = 'background-color: rgba(var(--danger-rgb), 0.1); border: 1px solid rgba(var(--danger-rgb), 0.3); color: var(--danger);';
-        testResult.innerHTML = `<i class="fas fa-exclamation-circle mr-2"></i> Network error: ${error.message}`;
-        showToast('Test failed: ' + error.message, 'error');
-    })
-    .finally(() => {
-        testInProgress = false;
-        if (button) {
-            button.innerHTML = originalText;
-            button.disabled = false;
-        }
-    });
-}
-
-function sendTestEmail() {
-    testEmailConfiguration('send');
 }
 
 // =====================================================
@@ -2242,17 +2217,8 @@ function resetEmailForm() {
 }
 
 // =====================================================
-// Modals
+// Modals (API docs + unsaved changes only)
 // =====================================================
-function showEmailTestModal() {
-    const modal = document.getElementById('emailTestModal');
-    if (modal) {
-        modal.classList.remove('hidden');
-        document.body.style.overflow = 'hidden';
-        setTimeout(() => document.getElementById('test_email_input')?.focus(), 100);
-    }
-}
-
 function showApiDocumentation() {
     const modal = document.getElementById('apiDocsModal');
     if (modal) {
@@ -2473,7 +2439,6 @@ document.addEventListener('DOMContentLoaded', function() {
 // =====================================================
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        closeModal('emailTestModal');
         closeModal('apiDocsModal');
         closeModal('unsavedChangesModal');
     }
@@ -2481,7 +2446,7 @@ document.addEventListener('keydown', function(e) {
 
 window.onclick = function(event) {
     if (event.target.classList.contains('fixed') &&
-        ['emailTestModal', 'apiDocsModal', 'unsavedChangesModal'].includes(event.target.id)) {
+        ['apiDocsModal', 'unsavedChangesModal'].includes(event.target.id)) {
         closeModal(event.target.id);
     }
 };
@@ -2496,11 +2461,6 @@ window.onclick = function(event) {
 .alert-error { background-color: rgba(var(--danger-rgb), 0.1); border: 1px solid rgba(var(--danger-rgb), 0.3); color: var(--danger); padding: 1rem; border-radius: 0.5rem; position: relative; transition: all 0.3s ease; }
 .alert-warning { background-color: rgba(var(--warning-rgb), 0.1); border: 1px solid rgba(var(--warning-rgb), 0.3); color: var(--warning); padding: 1rem; border-radius: 0.5rem; position: relative; transition: all 0.3s ease; }
 
-/* ============================================================
-   ✅ Themed search wrapper — no more hardcoded white on the
-   search input. Uses the same tokens as every other input
-   in the app.
-   ============================================================ */
 .settings-search-wrapper {
     position: relative;
     width: 260px;
@@ -2540,11 +2500,6 @@ window.onclick = function(event) {
     pointer-events: none;
 }
 
-/* ============================================================
-   ✅ Sidebar column — no sticky, no z-index fights.
-   The nav card and the System Status / Quick Actions cards
-   now scroll together. No more overlap.
-   ============================================================ */
 .settings-sidebar-column {
     position: relative;
     align-self: flex-start;
@@ -2556,7 +2511,6 @@ window.onclick = function(event) {
     background-color: var(--card-bg);
 }
 
-/* Remove any leftover sticky styling on smaller devices. */
 @media (max-width: 1023px) {
     .settings-sidebar-column,
     .settings-sidebar-card {

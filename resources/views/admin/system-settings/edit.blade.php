@@ -8,6 +8,33 @@
     $whatsappProviderConfigured = $whatsappProviderConfigured ?? false;
     $smsActiveProviderName      = $smsActiveProviderName      ?? null;
     $whatsappActiveProviderName = $whatsappActiveProviderName ?? null;
+
+    // ============================================================
+    // ✅ NEW (2026-10-13): 2FA policy state
+    // ------------------------------------------------------------
+    // Read from DeveloperSetting (which owns the policy). This
+    // blade surfaces the CURRENT policy read-only; the write path
+    // lives on DeveloperSettingsController. Falls back to safe
+    // defaults if the model or column is missing.
+    // ============================================================
+    try {
+        $developerSetting = \App\Models\DeveloperSetting::current();
+        $twoFactorPolicy = $developerSetting?->twoFactorPolicy() ?? 'optional';
+        $twoFactorRequiredRoles = $developerSetting?->twoFactorRequiredRoles() ?? [];
+    } catch (\Throwable $e) {
+        $developerSetting = null;
+        $twoFactorPolicy = 'optional';
+        $twoFactorRequiredRoles = [];
+    }
+
+    $twoFactorRoleLabels = [
+        0 => 'Super Admin',
+        1 => 'Admin',
+        5 => 'Developer',
+    ];
+
+    $currentUser = auth()->user();
+    $currentUser2FAEnabled = (bool) ($currentUser->two_factor_enabled ?? false);
 @endphp
 
 @section('content')
@@ -26,6 +53,74 @@
             </div>
         </div>
     </div>
+
+    {{-- ============================================================
+         ✅ NEW: YOUR ACCOUNT SECURITY (self-service 2FA for the
+         currently-logged-in Super Admin / Developer)
+    ============================================================ --}}
+    @if($currentUser && in_array($currentUser->type, [0, 5], true))
+    <div class="card p-6">
+        <div class="flex justify-between items-start flex-wrap gap-3">
+            <div class="flex items-start gap-3 flex-1 min-w-[240px]">
+                <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center"
+                     style="background-color: {{ $currentUser2FAEnabled ? 'rgba(var(--success-rgb), 0.15)' : 'rgba(var(--warning-rgb), 0.15)' }};">
+                    <i class="fas fa-shield-alt"
+                       style="color: {{ $currentUser2FAEnabled ? 'var(--success)' : 'var(--warning)' }};"></i>
+                </div>
+                <div class="flex-1">
+                    <div class="flex items-center gap-2 flex-wrap mb-1">
+                        <h3 class="font-semibold" style="color: var(--text-primary);">Your Account Security</h3>
+                        @if($currentUser2FAEnabled)
+                            <span class="px-2 py-0.5 text-xs rounded-full"
+                                  style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                <i class="fas fa-check mr-1"></i>2FA Enabled
+                            </span>
+                        @else
+                            <span class="px-2 py-0.5 text-xs rounded-full"
+                                  style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>2FA Not Enabled
+                            </span>
+                        @endif
+                    </div>
+                    <p class="text-sm" style="color: var(--text-secondary);">
+                        @if($currentUser2FAEnabled)
+                            Your {{ $currentUser->type === 5 ? 'developer' : 'super admin' }} account is protected
+                            with {{ ucfirst($currentUser->two_factor_method ?? 'email') }}-based 2FA.
+                        @else
+                            Protect your {{ $currentUser->type === 5 ? 'developer' : 'super admin' }} account
+                            with two-factor authentication. Recommended for all privileged users.
+                        @endif
+                    </p>
+                    @if(!$currentUser2FAEnabled)
+                        <p class="text-xs mt-1" style="color: var(--text-secondary);">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            You'll need an authenticator app (Google Authenticator, Authy, Microsoft Authenticator).
+                            Setup takes about 60 seconds.
+                        </p>
+                    @endif
+                </div>
+            </div>
+
+            <div class="flex gap-2 flex-wrap">
+                @if($currentUser2FAEnabled)
+                    <a href="{{ route('2fa.recovery-codes') }}"
+                       class="btn-outline btn-sm flex items-center">
+                        <i class="fas fa-key mr-2"></i>Recovery Codes
+                    </a>
+                    <a href="{{ route('2fa.setup') }}"
+                       class="btn-secondary btn-sm flex items-center">
+                        <i class="fas fa-cog mr-2"></i>Manage
+                    </a>
+                @else
+                    <a href="{{ route('2fa.setup') }}"
+                       class="btn-warning btn-sm flex items-center">
+                        <i class="fas fa-shield-alt mr-2"></i>Enable 2FA Now
+                    </a>
+                @endif
+            </div>
+        </div>
+    </div>
+    @endif
 
     <!-- Success Message -->
     @if(session('success'))
@@ -54,7 +149,7 @@
     <form action="{{ route('admin.system-settings.update') }}" method="POST" enctype="multipart/form-data" id="systemSettingsForm">
         @csrf
         @method('PUT')
-        
+
         @if($errors->any())
             <div class="card p-6">
                 <div class="alert alert-danger">
@@ -83,12 +178,16 @@
                     <button type="button" class="tab-btn px-6 py-3 font-medium transition-all duration-200" data-tab="tenant">
                         <i class="fas fa-users mr-2"></i> Tenant Dues
                     </button>
+                    {{-- ✅ NEW: Security tab --}}
+                    <button type="button" class="tab-btn px-6 py-3 font-medium transition-all duration-200" data-tab="security">
+                        <i class="fas fa-shield-alt mr-2"></i> Security
+                    </button>
                     <button type="button" class="tab-btn px-6 py-3 font-medium transition-all duration-200" data-tab="advanced">
                         <i class="fas fa-cogs mr-2"></i> Advanced
                     </button>
                 </div>
             </div>
-            
+
             <!-- Tab Content -->
             <div class="p-6">
                 <!-- ==================== GENERAL TAB ==================== -->
@@ -103,15 +202,15 @@
                             <div class="space-y-4">
                                 <div>
                                     <label for="system_name" class="block mb-2 font-medium required" style="color: var(--text-primary);">System Name *</label>
-                                    <input type="text" class="w-full p-2 border rounded form-input" 
+                                    <input type="text" class="w-full p-2 border rounded form-input"
                                            id="system_name" name="system_name" value="{{ old('system_name', $settings->system_name) }}" required>
                                 </div>
 
                                 <div>
                                     <label for="system_short_name" class="block mb-2 font-medium required" style="color: var(--text-primary);">Short Name *</label>
                                     <div class="relative">
-                                        <input type="text" class="w-full p-2 border rounded form-input font-mono" 
-                                               id="system_short_name" name="system_short_name" value="{{ old('system_short_name', $settings->system_short_name) }}" 
+                                        <input type="text" class="w-full p-2 border rounded form-input font-mono"
+                                               id="system_short_name" name="system_short_name" value="{{ old('system_short_name', $settings->system_short_name) }}"
                                                required pattern="[a-z0-9-]+" title="Only lowercase letters, numbers, and hyphens allowed">
                                         <button type="button" class="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
                                                 onclick="generateSlug()" title="Generate from system name">
@@ -127,18 +226,18 @@
 
                                 <div>
                                     <label for="system_email" class="block mb-2 font-medium required" style="color: var(--text-primary);">System Email *</label>
-                                    <input type="email" class="w-full p-2 border rounded form-input" 
+                                    <input type="email" class="w-full p-2 border rounded form-input"
                                            id="system_email" name="system_email" value="{{ old('system_email', $settings->system_email) }}" required>
                                     <p class="text-sm mt-1" style="color: var(--text-secondary);">Used as MAIL_USERNAME for sending emails</p>
                                 </div>
-                                
+
                                 <div>
                                     <label for="system_email_password" class="block mb-2 font-medium" style="color: var(--text-primary);">Email Password</label>
                                     <div class="relative">
-                                        <input type="password" class="w-full p-2 border rounded form-input pr-10" 
-                                               id="system_email_password" name="system_email_password" 
+                                        <input type="password" class="w-full p-2 border rounded form-input pr-10"
+                                               id="system_email_password" name="system_email_password"
                                                placeholder="Leave blank to keep current password">
-                                        <button type="button" class="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500" 
+                                        <button type="button" class="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500"
                                                 onclick="togglePasswordVisibility('system_email_password')">
                                             <i class="fas fa-eye" id="system_email_password_icon"></i>
                                         </button>
@@ -148,13 +247,11 @@
 
                                 <div>
                                     <label for="system_phone" class="block mb-2 font-medium required" style="color: var(--text-primary);">System Phone *</label>
-                                    <input type="text" class="w-full p-2 border rounded form-input" 
+                                    <input type="text" class="w-full p-2 border rounded form-input"
                                            id="system_phone" name="system_phone" value="{{ old('system_phone', $settings->system_phone) }}" required>
                                 </div>
 
-                                <!-- ========================================================== -->
                                 <!-- DEFAULT SMS SENDER ID -->
-                                <!-- ========================================================== -->
                                 <div>
                                     <label for="sms_sender_id" class="block mb-2 font-medium" style="color: var(--text-primary);">
                                         <i class="fas fa-comment-dots mr-1"></i> Default SMS Sender ID
@@ -194,13 +291,11 @@
 
                                 <div>
                                     <label for="system_address" class="block mb-2 font-medium" style="color: var(--text-primary);">System Address</label>
-                                    <textarea class="w-full p-2 border rounded form-textarea" 
+                                    <textarea class="w-full p-2 border rounded form-textarea"
                                               id="system_address" name="system_address" rows="3">{{ old('system_address', $settings->system_address) }}</textarea>
                                 </div>
-                                
-                                <!-- ========================================================== -->
+
                                 <!-- SYSTEM LOGO UPLOAD -->
-                                <!-- ========================================================== -->
                                 <div>
                                     <label for="system_logo" class="block mb-2 font-medium" style="color: var(--text-primary);">System Logo</label>
                                     <div class="space-y-3">
@@ -218,7 +313,7 @@
                                                 </div>
                                             </div>
                                         @endif
-                                        
+
                                         <div id="logoPreview" class="hidden">
                                             <p class="text-sm mb-2" style="color: var(--text-secondary);">New Logo Preview:</p>
                                             <div class="flex items-center space-x-4 p-3 border rounded">
@@ -231,7 +326,7 @@
                                                 </div>
                                             </div>
                                         </div>
-                                        
+
                                         <div id="logoUploadArea" class="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer" style="border-color: var(--border-color);">
                                             <i class="fas fa-cloud-upload-alt text-3xl mb-2" style="color: var(--text-secondary);"></i>
                                             <div>
@@ -241,17 +336,15 @@
                                                 </label>
                                             </div>
                                             <p class="text-xs mt-1" style="color: var(--text-secondary);">PNG, JPG, GIF, WebP up to 2MB</p>
-                                            <input type="file" id="system_logo" name="system_logo" class="hidden" 
+                                            <input type="file" id="system_logo" name="system_logo" class="hidden"
                                                    accept="image/jpeg,image/png,image/gif,image/webp" onchange="previewLogo(this)">
                                         </div>
-                                        
+
                                         <input type="hidden" name="remove_logo" id="remove_logo" value="0">
                                     </div>
                                 </div>
 
-                                <!-- ========================================================== -->
                                 <!-- FAVICON UPLOAD -->
-                                <!-- ========================================================== -->
                                 <div>
                                     <label for="system_favicon" class="block mb-2 font-medium" style="color: var(--text-primary);">
                                         <i class="fas fa-image mr-1"></i> Favicon
@@ -271,7 +364,7 @@
                                                 </div>
                                             </div>
                                         @endif
-                                        
+
                                         <div id="faviconPreview" class="hidden">
                                             <p class="text-sm mb-2" style="color: var(--text-secondary);">New Favicon Preview:</p>
                                             <div class="flex items-center space-x-4 p-3 border rounded" style="border-color: var(--border-color);">
@@ -284,7 +377,7 @@
                                                 </div>
                                             </div>
                                         </div>
-                                        
+
                                         <div id="faviconUploadArea" class="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer" style="border-color: var(--border-color);">
                                             <i class="fas fa-image text-3xl mb-2" style="color: var(--primary);"></i>
                                             <div>
@@ -299,15 +392,15 @@
                                                 <span>📐 32x32</span>
                                                 <span>📐 64x64</span>
                                             </div>
-                                            <input type="file" id="system_favicon" name="system_favicon" class="hidden" 
+                                            <input type="file" id="system_favicon" name="system_favicon" class="hidden"
                                                    accept="image/x-icon,image/png,image/svg+xml,image/jpeg" onchange="previewFavicon(this)">
                                         </div>
-                                        
+
                                         <input type="hidden" name="remove_favicon" id="remove_favicon" value="0">
-                                        
+
                                         <p class="text-xs mt-2" style="color: var(--text-secondary);">
                                             <i class="fas fa-info-circle mr-1"></i>
-                                            This icon appears in browser tabs, bookmarks, and address bar. 
+                                            This icon appears in browser tabs, bookmarks, and address bar.
                                             <a href="https://favicon.io/" target="_blank" class="text-blue-500 hover:underline">Generate a favicon</a>
                                         </p>
                                     </div>
@@ -327,9 +420,8 @@
                                     <div class="flex items-center justify-between">
                                         <div>
                                             <label class="flex items-center">
-                                                {{-- Hidden fallback: ensures "off" is submitted when unchecked --}}
                                                 <input type="hidden" name="auto_generate_invoices" value="0">
-                                                <input type="checkbox" id="auto_generate_invoices" name="auto_generate_invoices" value="1" 
+                                                <input type="checkbox" id="auto_generate_invoices" name="auto_generate_invoices" value="1"
                                                        {{ old('auto_generate_invoices', $settings->auto_generate_invoices) ? 'checked' : '' }} class="mr-2 auto-invoice-toggle">
                                                 <span class="font-medium" style="color: var(--text-primary);">Auto Generate Invoices</span>
                                             </label>
@@ -345,7 +437,7 @@
                                         <div>
                                             <label class="flex items-center">
                                                 <input type="hidden" name="send_payment_reminders" value="0">
-                                                <input type="checkbox" id="send_payment_reminders" name="send_payment_reminders" value="1" 
+                                                <input type="checkbox" id="send_payment_reminders" name="send_payment_reminders" value="1"
                                                        {{ old('send_payment_reminders', $settings->send_payment_reminders) ? 'checked' : '' }} class="mr-2 reminder-toggle">
                                                 <span class="font-medium" style="color: var(--text-primary);">Send Payment Reminders</span>
                                             </label>
@@ -358,7 +450,7 @@
                                 <!-- REMINDER DAYS -->
                                 <div class="reminder-dependent-field" style="{{ old('send_payment_reminders', $settings->send_payment_reminders) ? 'display: block;' : 'display: none;' }}">
                                     <label for="reminder_days_before" class="block mb-2 font-medium" style="color: var(--text-primary);">Reminder Days Before *</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="reminder_days_before" 
+                                    <input type="number" class="w-full p-2 border rounded" id="reminder_days_before"
                                            name="reminder_days_before" value="{{ old('reminder_days_before', $settings->reminder_days_before) }}" min="1" max="30">
                                     <p class="text-xs mt-1" style="color: var(--text-secondary);">Days before due date to send reminders</p>
                                 </div>
@@ -366,7 +458,7 @@
                                 <!-- GRACE PERIOD -->
                                 <div>
                                     <label for="grace_period_days" class="block mb-2 font-medium" style="color: var(--text-primary);">Grace Period (Days) *</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="grace_period_days" 
+                                    <input type="number" class="w-full p-2 border rounded" id="grace_period_days"
                                            name="grace_period_days" value="{{ old('grace_period_days', $settings->grace_period_days) }}" min="0" max="30">
                                     <p class="text-xs mt-1" style="color: var(--text-secondary);">Days after due date before late penalties apply</p>
                                 </div>
@@ -377,7 +469,7 @@
                                 <div>
                                     <label class="flex items-center">
                                         <input type="hidden" name="enable_bulk_payments" value="0">
-                                        <input type="checkbox" id="enable_bulk_payments" name="enable_bulk_payments" value="1" 
+                                        <input type="checkbox" id="enable_bulk_payments" name="enable_bulk_payments" value="1"
                                                {{ old('enable_bulk_payments', $settings->enable_bulk_payments) ? 'checked' : '' }} class="mr-2">
                                         <span class="font-medium" style="color: var(--text-primary);">Enable Bulk Payments</span>
                                     </label>
@@ -385,7 +477,7 @@
                                 </div>
                                 <div>
                                     <label for="max_bulk_months" class="block mb-2 font-medium" style="color: var(--text-primary);">Maximum Bulk Months *</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="max_bulk_months" 
+                                    <input type="number" class="w-full p-2 border rounded" id="max_bulk_months"
                                            name="max_bulk_months" value="{{ old('max_bulk_months', $settings->max_bulk_months) }}" min="1" max="12">
                                 </div>
                             </div>
@@ -434,7 +526,7 @@
                                 </div>
                                 <div>
                                     <label for="decimal_places" class="block mb-2 font-medium required" style="color: var(--text-primary);">Decimal Places *</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="decimal_places" 
+                                    <input type="number" class="w-full p-2 border rounded" id="decimal_places"
                                            name="decimal_places" value="{{ old('decimal_places', $settings->decimal_places) }}" min="0" max="4">
                                 </div>
                             </div>
@@ -450,13 +542,13 @@
                                 <i class="fas fa-exclamation-triangle mr-2"></i>
                                 <span id="payment-error-message">At least one payment gateway must be enabled</span>
                             </div>
-                            
+
                             <div class="grid grid-cols-1 gap-4">
                                 <div class="flex items-center justify-between p-3 border rounded" style="border-color: var(--border-color);">
                                     <div><i class="fas fa-credit-card text-blue-600 mr-3"></i><span style="color: var(--text-primary);">ExpressPay</span></div>
                                     <label class="toggle-modern">
                                         <input type="hidden" name="enable_expresspay" value="0">
-                                        <input type="checkbox" name="enable_expresspay" value="1" 
+                                        <input type="checkbox" name="enable_expresspay" value="1"
                                                {{ old('enable_expresspay', $settings->enable_expresspay ?? false) ? 'checked' : '' }} class="payment-gateway-checkbox">
                                         <span class="toggle-slider"></span>
                                     </label>
@@ -465,7 +557,7 @@
                                     <div><i class="fas fa-phone-alt text-blue-500 mr-3"></i><span style="color: var(--text-primary);">Hubtel</span></div>
                                     <label class="toggle-modern">
                                         <input type="hidden" name="enable_hubtel" value="0">
-                                        <input type="checkbox" name="enable_hubtel" value="1" 
+                                        <input type="checkbox" name="enable_hubtel" value="1"
                                                {{ old('enable_hubtel', $settings->enable_hubtel ?? false) ? 'checked' : '' }} class="payment-gateway-checkbox">
                                         <span class="toggle-slider"></span>
                                     </label>
@@ -474,7 +566,7 @@
                                     <div><i class="fas fa-credit-card text-purple-600 mr-3"></i><span style="color: var(--text-primary);">Paystack</span></div>
                                     <label class="toggle-modern">
                                         <input type="hidden" name="enable_paystack" value="0">
-                                        <input type="checkbox" name="enable_paystack" value="1" 
+                                        <input type="checkbox" name="enable_paystack" value="1"
                                                {{ old('enable_paystack', $settings->enable_paystack ?? false) ? 'checked' : '' }} class="payment-gateway-checkbox">
                                         <span class="toggle-slider"></span>
                                     </label>
@@ -483,13 +575,13 @@
                                     <div><i class="fas fa-cloud-upload-alt text-orange-500 mr-3"></i><span style="color: var(--text-primary);">Flutterwave</span></div>
                                     <label class="toggle-modern">
                                         <input type="hidden" name="enable_flutterwave" value="0">
-                                        <input type="checkbox" name="enable_flutterwave" value="1" 
+                                        <input type="checkbox" name="enable_flutterwave" value="1"
                                                {{ old('enable_flutterwave', $settings->enable_flutterwave ?? false) ? 'checked' : '' }} class="payment-gateway-checkbox">
                                         <span class="toggle-slider"></span>
                                     </label>
                                 </div>
                             </div>
-                            
+
                             <div class="mt-4 text-sm" style="color: var(--text-secondary);">
                                 <span id="enabled-gateways-count">{{ $settings->getEnabledPaymentProvidersCount() }}</span> out of 4 payment gateways enabled
                             </div>
@@ -508,12 +600,12 @@
                                 </div>
                                 <div>
                                     <label for="monthly_dues_amount" class="block mb-2 font-medium required" style="color: var(--text-primary);">Monthly Dues Amount *</label>
-                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="monthly_dues_amount" 
+                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="monthly_dues_amount"
                                            name="monthly_dues_amount" value="{{ old('monthly_dues_amount', $settings->monthly_dues_amount) }}">
                                 </div>
                                 <div id="per_property_amount_field" class="{{ $settings->calculation_method == 'per_property' ? '' : 'hidden' }}">
                                     <label for="per_property_amount" class="block mb-2 font-medium" style="color: var(--text-primary);">Per Property Amount</label>
-                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="per_property_amount" 
+                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="per_property_amount"
                                            name="per_property_amount" value="{{ old('per_property_amount', $settings->per_property_amount) }}">
                                 </div>
                             </div>
@@ -525,12 +617,12 @@
                             <div class="space-y-4">
                                 <div>
                                     <label for="late_payment_percentage" class="block mb-2 font-medium required" style="color: var(--text-primary);">Late Payment Percentage *</label>
-                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="late_payment_percentage" 
+                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="late_payment_percentage"
                                            name="late_payment_percentage" value="{{ old('late_payment_percentage', $settings->late_payment_percentage) }}" min="0" max="100">
                                 </div>
                                 <div>
                                     <label for="fixed_penalty_amount" class="block mb-2 font-medium" style="color: var(--text-primary);">Fixed Penalty Amount</label>
-                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="fixed_penalty_amount" 
+                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="fixed_penalty_amount"
                                            name="fixed_penalty_amount" value="{{ old('fixed_penalty_amount', $settings->fixed_penalty_amount) }}">
                                     <p class="text-xs mt-1" style="color: var(--text-secondary);">Set to 0 to use percentage penalty only</p>
                                 </div>
@@ -552,7 +644,7 @@
                                     $overdueChannels = $settings->getOverdueNotificationChannels() ?? [];
                                     $confirmationChannels = $settings->getPaymentConfirmationChannels() ?? [];
                                 @endphp
-                                
+
                                 <div class="border rounded p-4" style="border-color: var(--border-color);">
                                     <h4 class="font-semibold mb-2" style="color: var(--text-primary);">Invoice Generated</h4>
                                     <div class="space-y-2">
@@ -660,9 +752,7 @@
                             </div>
                         </div>
 
-                        <!-- ============================================================ -->
                         <!-- SMS GLOBAL SETTINGS -->
-                        <!-- ============================================================ -->
                         <div class="card p-6" id="smsGlobalSettingsCard" data-provider-configured="{{ $smsProviderConfigured ? '1' : '0' }}">
                             <div class="flex justify-between items-center mb-4">
                                 <h3 class="text-lg font-semibold mb-0" style="color: var(--text-primary);">
@@ -676,7 +766,6 @@
                             </div>
 
                             @if(!$smsProviderConfigured)
-                                {{-- Locked state: no SMS provider configured --}}
                                 <div class="alert alert-warning">
                                     <div class="flex items-start">
                                         <i class="fas fa-exclamation-triangle mr-2 mt-1"></i>
@@ -692,7 +781,6 @@
                                     </div>
                                 </div>
 
-                                {{-- Hidden/disabled inputs so the form still posts consistent data --}}
                                 <input type="hidden" name="sms_notifications_enabled" value="0">
                                 <input type="hidden" name="sms_reminder_enabled" value="0">
                                 <input type="hidden" name="sms_payment_confirmation_enabled" value="0">
@@ -700,27 +788,26 @@
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
                                         <label class="flex items-center" style="color: var(--text-primary);">
-                                            {{-- Hidden fallback: ensures "off" is submitted when unchecked --}}
                                             <input type="hidden" name="sms_notifications_enabled" value="0">
-                                            <input type="checkbox" id="sms_notifications_enabled" name="sms_notifications_enabled" value="1" 
+                                            <input type="checkbox" id="sms_notifications_enabled" name="sms_notifications_enabled" value="1"
                                                    {{ old('sms_notifications_enabled', $settings->sms_notifications_enabled ?? false) ? 'checked' : '' }} class="mr-2 sms-global-toggle">
                                             <span class="font-medium">Enable SMS Notifications</span>
                                         </label>
                                     </div>
                                     <div class="sms-dependent-field" style="{{ ($settings->sms_notifications_enabled ?? false) ? 'display: block;' : 'display: none;' }}">
                                         <label for="sms_daily_limit_per_user" class="block mb-2 font-medium" style="color: var(--text-primary);">Daily SMS Limit Per User</label>
-                                        <input type="number" class="w-full p-2 border rounded" id="sms_daily_limit_per_user" 
+                                        <input type="number" class="w-full p-2 border rounded" id="sms_daily_limit_per_user"
                                                name="sms_daily_limit_per_user" value="{{ old('sms_daily_limit_per_user', $settings->sms_daily_limit_per_user ?? 10) }}" min="1" max="100">
                                     </div>
                                     <div class="sms-dependent-field" style="{{ ($settings->sms_notifications_enabled ?? false) ? 'display: block;' : 'display: none;' }}">
                                         <label for="sms_hourly_limit_per_user" class="block mb-2 font-medium" style="color: var(--text-primary);">Hourly SMS Limit Per User</label>
-                                        <input type="number" class="w-full p-2 border rounded" id="sms_hourly_limit_per_user" 
+                                        <input type="number" class="w-full p-2 border rounded" id="sms_hourly_limit_per_user"
                                                name="sms_hourly_limit_per_user" value="{{ old('sms_hourly_limit_per_user', $settings->sms_hourly_limit_per_user ?? 3) }}" min="1" max="20">
                                     </div>
                                     <div class="sms-dependent-field" style="{{ ($settings->sms_notifications_enabled ?? false) ? 'display: block;' : 'display: none;' }}">
                                         <label class="flex items-center" style="color: var(--text-primary);">
                                             <input type="hidden" name="sms_reminder_enabled" value="0">
-                                            <input type="checkbox" id="sms_reminder_enabled" name="sms_reminder_enabled" value="1" 
+                                            <input type="checkbox" id="sms_reminder_enabled" name="sms_reminder_enabled" value="1"
                                                    {{ old('sms_reminder_enabled', $settings->sms_reminder_enabled ?? false) ? 'checked' : '' }} class="mr-2">
                                             <span>Enable SMS Reminders</span>
                                         </label>
@@ -728,7 +815,7 @@
                                     <div class="sms-dependent-field" style="{{ ($settings->sms_notifications_enabled ?? false) ? 'display: block;' : 'display: none;' }}">
                                         <label class="flex items-center" style="color: var(--text-primary);">
                                             <input type="hidden" name="sms_payment_confirmation_enabled" value="0">
-                                            <input type="checkbox" id="sms_payment_confirmation_enabled" name="sms_payment_confirmation_enabled" value="1" 
+                                            <input type="checkbox" id="sms_payment_confirmation_enabled" name="sms_payment_confirmation_enabled" value="1"
                                                    {{ old('sms_payment_confirmation_enabled', $settings->sms_payment_confirmation_enabled ?? false) ? 'checked' : '' }} class="mr-2">
                                             <span>Enable SMS Payment Confirmations</span>
                                         </label>
@@ -737,9 +824,7 @@
                             @endif
                         </div>
 
-                        <!-- ============================================================ -->
                         <!-- WHATSAPP GLOBAL SETTINGS -->
-                        <!-- ============================================================ -->
                         <div class="card p-6" id="whatsappGlobalSettingsCard" data-provider-configured="{{ $whatsappProviderConfigured ? '1' : '0' }}">
                             <div class="flex justify-between items-center mb-4">
                                 <h3 class="text-lg font-semibold mb-0" style="color: var(--text-primary);">
@@ -753,7 +838,6 @@
                             </div>
 
                             @if(!$whatsappProviderConfigured)
-                                {{-- Locked state --}}
                                 <div class="alert alert-warning">
                                     <div class="flex items-start">
                                         <i class="fas fa-exclamation-triangle mr-2 mt-1"></i>
@@ -772,9 +856,8 @@
                                 <div class="space-y-4">
                                     <div>
                                         <label class="flex items-center" style="color: var(--text-primary);">
-                                            {{-- Hidden fallback: ensures "off" is submitted when unchecked --}}
                                             <input type="hidden" name="enable_whatsapp_notifications" value="0">
-                                            <input type="checkbox" id="enable_whatsapp_notifications" name="enable_whatsapp_notifications" value="1" 
+                                            <input type="checkbox" id="enable_whatsapp_notifications" name="enable_whatsapp_notifications" value="1"
                                                    {{ old('enable_whatsapp_notifications', $settings->enable_whatsapp_notifications ?? false) ? 'checked' : '' }} class="mr-2 whatsapp-global-toggle">
                                             <span class="font-medium">Enable WhatsApp Notifications</span>
                                         </label>
@@ -782,7 +865,7 @@
                                     <div class="whatsapp-dependent-field" style="{{ ($settings->enable_whatsapp_notifications ?? false) ? 'display: block;' : 'display: none;' }}">
                                         <label class="flex items-center" style="color: var(--text-primary);">
                                             <input type="hidden" name="whatsapp_reminder_enabled" value="0">
-                                            <input type="checkbox" id="whatsapp_reminder_enabled" name="whatsapp_reminder_enabled" value="1" 
+                                            <input type="checkbox" id="whatsapp_reminder_enabled" name="whatsapp_reminder_enabled" value="1"
                                                    {{ old('whatsapp_reminder_enabled', $settings->whatsapp_reminder_enabled ?? false) ? 'checked' : '' }} class="mr-2">
                                             <span>Enable WhatsApp Reminders</span>
                                         </label>
@@ -806,24 +889,24 @@
                                 <div>
                                     <label class="flex items-center" style="color: var(--text-primary);">
                                         <input type="hidden" name="force_email_fallback" value="0">
-                                        <input type="checkbox" id="force_email_fallback" name="force_email_fallback" value="1" 
+                                        <input type="checkbox" id="force_email_fallback" name="force_email_fallback" value="1"
                                                {{ old('force_email_fallback', $settings->force_email_fallback ?? true) ? 'checked' : '' }} class="mr-2">
                                         <span class="font-medium">Force Email Fallback</span>
                                     </label>
                                 </div>
                                 <div>
                                     <label for="notification_retry_attempts" class="block mb-2 font-medium" style="color: var(--text-primary);">Retry Attempts</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="notification_retry_attempts" 
+                                    <input type="number" class="w-full p-2 border rounded" id="notification_retry_attempts"
                                            name="notification_retry_attempts" value="{{ old('notification_retry_attempts', $settings->notification_retry_attempts ?? 3) }}" min="1" max="10">
                                 </div>
                                 <div>
                                     <label for="notification_retry_delay_minutes" class="block mb-2 font-medium" style="color: var(--text-primary);">Retry Delay (Minutes)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="notification_retry_delay_minutes" 
+                                    <input type="number" class="w-full p-2 border rounded" id="notification_retry_delay_minutes"
                                            name="notification_retry_delay_minutes" value="{{ old('notification_retry_delay_minutes', $settings->notification_retry_delay_minutes ?? 5) }}" min="1" max="60">
                                 </div>
                                 <div>
                                     <label for="notification_log_retention_days" class="block mb-2 font-medium" style="color: var(--text-primary);">Log Retention (Days)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="notification_log_retention_days" 
+                                    <input type="number" class="w-full p-2 border rounded" id="notification_log_retention_days"
                                            name="notification_log_retention_days" value="{{ old('notification_log_retention_days', $settings->notification_log_retention_days ?? 90) }}" min="30" max="365">
                                 </div>
                             </div>
@@ -838,28 +921,28 @@
                             <h3 class="text-lg font-semibold" style="color: var(--text-primary);">Tenant Dues Configuration</h3>
                             <i class="fas fa-users text-2xl" style="color: var(--text-secondary);"></i>
                         </div>
-                        
+
                         <div class="mb-4 alert alert-info">
                             <i class="fas fa-info-circle mr-2"></i>
                             Enable tenant invoicing if tenants should also pay monthly dues.
                         </div>
-                        
+
                         <div class="space-y-6">
                             <!-- TENANT INVOICING TOGGLE -->
                             <div>
                                 <label class="flex items-center" style="color: var(--text-primary);">
                                     <input type="hidden" name="enable_tenant_invoicing" value="0">
-                                    <input type="checkbox" id="enable_tenant_invoicing" name="enable_tenant_invoicing" value="1" 
+                                    <input type="checkbox" id="enable_tenant_invoicing" name="enable_tenant_invoicing" value="1"
                                            {{ old('enable_tenant_invoicing', $settings->enable_tenant_invoicing ?? true) ? 'checked' : '' }} class="mr-2 tenant-invoice-toggle">
                                     <span class="font-medium">Enable Tenant Invoicing</span>
                                 </label>
                                 <p class="text-xs mt-1 ml-6" style="color: var(--text-secondary);">When enabled, tenants will be invoiced monthly for their dues</p>
                             </div>
-                            
+
                             <div class="tenant-dependent-field grid grid-cols-1 md:grid-cols-2 gap-6" style="{{ ($settings->enable_tenant_invoicing ?? true) ? '' : 'display: none;' }}">
                                 <div>
                                     <label for="tenant_monthly_dues_amount" class="block mb-2 font-medium" style="color: var(--text-primary);">Tenant Monthly Dues Amount</label>
-                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="tenant_monthly_dues_amount" 
+                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="tenant_monthly_dues_amount"
                                            name="tenant_monthly_dues_amount" value="{{ old('tenant_monthly_dues_amount', $settings->tenant_monthly_dues_amount ?? 50) }}">
                                 </div>
                                 <div>
@@ -870,7 +953,7 @@
                                     </select>
                                 </div>
                             </div>
-                            
+
                             <!-- TENANT AUTO-GENERATE & REMINDER CHECKBOXES -->
                             <div class="tenant-dependent-field grid grid-cols-1 md:grid-cols-2 gap-4" style="{{ ($settings->enable_tenant_invoicing ?? true) ? '' : 'display: none;' }}">
                                 <div class="p-3 border rounded" style="border-left: 3px solid var(--success); border-color: var(--border-color);">
@@ -881,7 +964,7 @@
                                                 <input type="checkbox"
                                                        id="auto_generate_tenant_invoices"
                                                        name="auto_generate_tenant_invoices"
-                                                       value="1" 
+                                                       value="1"
                                                        {{ old('auto_generate_tenant_invoices', $settings->auto_generate_tenant_invoices ?? 1) ? 'checked' : '' }}
                                                        class="mr-2 tenant-auto-invoice-toggle">
                                                 <span class="font-medium">Auto-generate tenant invoices</span>
@@ -900,7 +983,7 @@
                                                 <input type="checkbox"
                                                        id="send_tenant_payment_reminders"
                                                        name="send_tenant_payment_reminders"
-                                                       value="1" 
+                                                       value="1"
                                                        {{ old('send_tenant_payment_reminders', $settings->send_tenant_payment_reminders ?? 1) ? 'checked' : '' }}
                                                        class="mr-2 tenant-reminder-toggle">
                                                 <span class="font-medium">Send tenant payment reminders</span>
@@ -916,13 +999,13 @@
                             <div class="tenant-dependent-field grid grid-cols-1 md:grid-cols-2 gap-6" style="{{ ($settings->enable_tenant_invoicing ?? true) ? '' : 'display: none;' }}">
                                 <div>
                                     <label for="tenant_grace_period_days" class="block mb-2 font-medium" style="color: var(--text-primary);">Tenant Grace Period (Days)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="tenant_grace_period_days" 
+                                    <input type="number" class="w-full p-2 border rounded" id="tenant_grace_period_days"
                                            name="tenant_grace_period_days" value="{{ old('tenant_grace_period_days', $settings->tenant_grace_period_days ?? 7) }}" min="0" max="30">
                                     <p class="text-xs mt-1" style="color: var(--text-secondary);">Days after due date before late penalties apply to tenants</p>
                                 </div>
                                 <div>
                                     <label for="tenant_late_payment_percentage" class="block mb-2 font-medium" style="color: var(--text-primary);">Tenant Late Payment %</label>
-                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="tenant_late_payment_percentage" 
+                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="tenant_late_payment_percentage"
                                            name="tenant_late_payment_percentage" value="{{ old('tenant_late_payment_percentage', $settings->tenant_late_payment_percentage ?? 5) }}" min="0" max="100">
                                     <p class="text-xs mt-1" style="color: var(--text-secondary);">Percentage penalty for late tenant payments</p>
                                 </div>
@@ -932,12 +1015,12 @@
                             <div class="tenant-dependent-field" style="{{ ($settings->enable_tenant_invoicing ?? true) ? '' : 'display: none;' }}">
                                 <div>
                                     <label for="tenant_fixed_penalty_amount" class="block mb-2 font-medium" style="color: var(--text-primary);">Tenant Fixed Penalty Amount</label>
-                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="tenant_fixed_penalty_amount" 
+                                    <input type="number" step="0.01" class="w-full p-2 border rounded" id="tenant_fixed_penalty_amount"
                                            name="tenant_fixed_penalty_amount" value="{{ old('tenant_fixed_penalty_amount', $settings->tenant_fixed_penalty_amount ?? 0) }}">
                                     <p class="text-xs mt-1" style="color: var(--text-secondary);">Set to 0 to use percentage penalty only. Use this instead of percentage.</p>
                                 </div>
                             </div>
-                            
+
                             <!-- Preview Box -->
                             <div class="tenant-dependent-field p-4 border rounded" style="border: 1px dashed var(--info); {{ ($settings->enable_tenant_invoicing ?? true) ? '' : 'display: none;' }}">
                                 <div class="flex items-center text-sm mb-2">
@@ -957,6 +1040,161 @@
                     </div>
                 </div>
 
+                <!-- ==================== ✅ NEW: SECURITY TAB ==================== -->
+                <div class="tab-content hidden" id="tab-security">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <!-- Current 2FA Policy (read-only) -->
+                        <div class="card p-6">
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-lg font-semibold">
+                                    <i class="fas fa-shield-alt mr-2" style="color: var(--success);"></i>
+                                    System 2FA Policy
+                                </h3>
+                                @php
+                                    $policyBadgeClass = match ($twoFactorPolicy) {
+                                        'required'  => 'warning',
+                                        'encouraged' => 'info',
+                                        default     => 'secondary',
+                                    };
+                                @endphp
+                                <span class="text-xs px-2 py-1 rounded badge-{{ $policyBadgeClass }}"
+                                      style="padding: 0.25rem 0.625rem;">
+                                    {{ ucfirst($twoFactorPolicy) }}
+                                </span>
+                            </div>
+
+                            <div class="space-y-4">
+                                <div class="p-4 rounded-lg"
+                                     style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.15);">
+                                    <p class="text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                        What this policy means
+                                    </p>
+                                    <ul class="text-sm space-y-1" style="color: var(--text-secondary);">
+                                        @if($twoFactorPolicy === 'optional')
+                                            <li class="flex items-start">
+                                                <i class="fas fa-info-circle mr-2 mt-0.5" style="color: var(--info);"></i>
+                                                Users may enable 2FA on their own account. No prompts, no enforcement.
+                                            </li>
+                                        @elseif($twoFactorPolicy === 'encouraged')
+                                            <li class="flex items-start">
+                                                <i class="fas fa-info-circle mr-2 mt-0.5" style="color: var(--info);"></i>
+                                                Privileged users see a security banner until they enable 2FA. Non-blocking.
+                                            </li>
+                                        @else
+                                            <li class="flex items-start">
+                                                <i class="fas fa-exclamation-triangle mr-2 mt-0.5" style="color: var(--warning);"></i>
+                                                Users in the roles below <strong>must</strong> set up 2FA before they can use the system.
+                                            </li>
+                                        @endif
+                                    </ul>
+                                </div>
+
+                                @if($twoFactorPolicy === 'required' && !empty($twoFactorRequiredRoles))
+                                    <div>
+                                        <p class="text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Roles required to use 2FA
+                                        </p>
+                                        <div class="flex flex-wrap gap-2">
+                                            @foreach($twoFactorRequiredRoles as $roleType)
+                                                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium"
+                                                      style="background-color: rgba(var(--warning-rgb), 0.1);
+                                                             color: var(--warning);
+                                                             border: 1px solid rgba(var(--warning-rgb), 0.25);">
+                                                    <i class="fas fa-user-shield mr-1"></i>
+                                                    {{ $twoFactorRoleLabels[$roleType] ?? "Type {$roleType}" }}
+                                                </span>
+                                            @endforeach
+                                        </div>
+                                    </div>
+                                @endif
+
+                                <div class="pt-4 border-t" style="border-color: var(--border-color);">
+                                    <p class="text-xs" style="color: var(--text-secondary);">
+                                        <i class="fas fa-info-circle mr-1"></i>
+                                        System-wide 2FA policy is managed on the
+                                        <strong>Developer Settings</strong> page.
+                                        Changes take effect on the next login.
+                                    </p>
+                                </div>
+
+                                @if(Route::has('developer.settings.index'))
+                                    <a href="{{ route('developer.settings.index', ['section' => 'api']) }}"
+                                       class="btn-outline w-full justify-center flex items-center">
+                                        <i class="fas fa-cog mr-2"></i>Manage 2FA Policy in Developer Settings
+                                    </a>
+                                @endif
+                            </div>
+                        </div>
+
+                        <!-- Related Security Links -->
+                        <div class="card p-6">
+                            <h3 class="text-lg font-semibold mb-4">
+                                <i class="fas fa-lock mr-2" style="color: var(--primary);"></i>
+                                Security Resources
+                            </h3>
+
+                            <div class="space-y-3">
+                                @if(Route::has('developer.settings.index'))
+                                    <a href="{{ route('developer.settings.index', ['section' => 'api']) }}"
+                                       class="flex items-center justify-between p-3 rounded-lg transition"
+                                       style="background-color: rgba(var(--primary-rgb), 0.05); border: 1px solid rgba(var(--primary-rgb), 0.15);">
+                                        <div class="flex items-center gap-3">
+                                            <i class="fas fa-shield-alt text-lg" style="color: var(--primary);"></i>
+                                            <div>
+                                                <p class="text-sm font-medium" style="color: var(--text-primary);">
+                                                    Developer Security Settings
+                                                </p>
+                                                <p class="text-xs" style="color: var(--text-secondary);">
+                                                    Session timeout, login attempts, password expiry, 2FA policy
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <i class="fas fa-chevron-right" style="color: var(--text-secondary);"></i>
+                                    </a>
+                                @endif
+
+                                @if(Route::has('admin.sms-providers.index'))
+                                    <a href="{{ route('admin.sms-providers.index') }}"
+                                       class="flex items-center justify-between p-3 rounded-lg transition"
+                                       style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid rgba(var(--info-rgb), 0.15);">
+                                        <div class="flex items-center gap-3">
+                                            <i class="fas fa-mobile-alt text-lg" style="color: var(--info);"></i>
+                                            <div>
+                                                <p class="text-sm font-medium" style="color: var(--text-primary);">
+                                                    SMS Provider Configuration
+                                                </p>
+                                                <p class="text-xs" style="color: var(--text-secondary);">
+                                                    Required before enabling SMS notifications
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <i class="fas fa-chevron-right" style="color: var(--text-secondary);"></i>
+                                    </a>
+                                @endif
+
+                                @if(Route::has('2fa.setup'))
+                                    <a href="{{ route('2fa.setup') }}"
+                                       class="flex items-center justify-between p-3 rounded-lg transition"
+                                       style="background-color: rgba(var(--success-rgb), 0.05); border: 1px solid rgba(var(--success-rgb), 0.15);">
+                                        <div class="flex items-center gap-3">
+                                            <i class="fas fa-key text-lg" style="color: var(--success);"></i>
+                                            <div>
+                                                <p class="text-sm font-medium" style="color: var(--text-primary);">
+                                                    Your Account 2FA Setup
+                                                </p>
+                                                <p class="text-xs" style="color: var(--text-secondary);">
+                                                    Enroll your own account in two-factor authentication
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <i class="fas fa-chevron-right" style="color: var(--text-secondary);"></i>
+                                    </a>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- ==================== ADVANCED TAB ==================== -->
                 <div class="tab-content hidden" id="tab-advanced">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -968,24 +1206,25 @@
                                 <div>
                                     <label class="flex items-center" style="color: var(--text-primary);">
                                         <input type="hidden" name="enable_api_access" value="0">
-                                        <input type="checkbox" id="enable_api_access" name="enable_api_access" value="1" 
+                                        <input type="checkbox" id="enable_api_access" name="enable_api_access" value="1"
                                                {{ old('enable_api_access', $settings->enable_api_access ?? false) ? 'checked' : '' }} class="mr-2">
                                         <span class="font-medium">Enable API Access</span>
                                     </label>
                                 </div>
                                 <div>
                                     <label for="api_rate_limit" class="block mb-2 font-medium" style="color: var(--text-primary);">API Rate Limit (requests per minute)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="api_rate_limit" 
+                                    <input type="number" class="w-full p-2 border rounded" id="api_rate_limit"
                                            name="api_rate_limit" value="{{ old('api_rate_limit', $settings->api_rate_limit ?? 60) }}" min="1" max="1000">
                                 </div>
                                 <div>
                                     <label for="api_token_expiry_days" class="block mb-2 font-medium" style="color: var(--text-primary);">API Token Expiry (Days)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="api_token_expiry_days" 
+                                    <input type="number" class="w-full p-2 border rounded" id="api_token_expiry_days"
                                            name="api_token_expiry_days" value="{{ old('api_token_expiry_days', $settings->api_token_expiry_days ?? 30) }}" min="1" max="365">
                                 </div>
                             </div>
                         </div>
-                        
+
+                        <!-- Security Settings (Force 2FA field now links to Security tab) -->
                         <div class="card p-6">
                             <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary);">
                                 <i class="fas fa-shield-alt mr-2"></i> Security Settings
@@ -994,29 +1233,38 @@
                                 <div>
                                     <label class="flex items-center" style="color: var(--text-primary);">
                                         <input type="hidden" name="force_2fa" value="0">
-                                        <input type="checkbox" id="force_2fa" name="force_2fa" value="1" 
+                                        <input type="checkbox" id="force_2fa" name="force_2fa" value="1"
                                                {{ old('force_2fa', $settings->force_2fa ?? false) ? 'checked' : '' }} class="mr-2">
                                         <span class="font-medium">Force 2FA for Admin Users</span>
                                     </label>
+                                    <p class="text-xs mt-1 ml-6" style="color: var(--text-secondary);">
+                                        <i class="fas fa-info-circle mr-1"></i>
+                                        For role-targeted enforcement, use the
+                                        <button type="button"
+                                                class="text-blue-500 hover:underline"
+                                                onclick="document.querySelector('.tab-btn[data-tab=\'security\']')?.click();">
+                                            Security tab
+                                        </button>.
+                                    </p>
                                 </div>
                                 <div>
                                     <label for="password_expiry_days" class="block mb-2 font-medium" style="color: var(--text-primary);">Password Expiry (Days)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="password_expiry_days" 
+                                    <input type="number" class="w-full p-2 border rounded" id="password_expiry_days"
                                            name="password_expiry_days" value="{{ old('password_expiry_days', $settings->password_expiry_days ?? 90) }}" min="0" max="365">
                                 </div>
                                 <div>
                                     <label for="max_login_attempts" class="block mb-2 font-medium" style="color: var(--text-primary);">Max Login Attempts</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="max_login_attempts" 
+                                    <input type="number" class="w-full p-2 border rounded" id="max_login_attempts"
                                            name="max_login_attempts" value="{{ old('max_login_attempts', $settings->max_login_attempts ?? 5) }}" min="3" max="10">
                                 </div>
                                 <div>
                                     <label for="session_timeout_minutes" class="block mb-2 font-medium" style="color: var(--text-primary);">Session Timeout (Minutes)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="session_timeout_minutes" 
+                                    <input type="number" class="w-full p-2 border rounded" id="session_timeout_minutes"
                                            name="session_timeout_minutes" value="{{ old('session_timeout_minutes', $settings->session_timeout_minutes ?? 30) }}" min="5" max="120">
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="card p-6">
                             <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary);">
                                 <i class="fas fa-database mr-2"></i> Backup Settings
@@ -1025,7 +1273,7 @@
                                 <div>
                                     <label class="flex items-center" style="color: var(--text-primary);">
                                         <input type="hidden" name="auto_backup_enabled" value="0">
-                                        <input type="checkbox" id="auto_backup_enabled" name="auto_backup_enabled" value="1" 
+                                        <input type="checkbox" id="auto_backup_enabled" name="auto_backup_enabled" value="1"
                                                {{ old('auto_backup_enabled', $settings->auto_backup_enabled ?? true) ? 'checked' : '' }} class="mr-2">
                                         <span class="font-medium">Enable Automatic Backups</span>
                                     </label>
@@ -1040,12 +1288,12 @@
                                 </div>
                                 <div>
                                     <label for="backup_retention_days" class="block mb-2 font-medium" style="color: var(--text-primary);">Backup Retention (Days)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="backup_retention_days" 
+                                    <input type="number" class="w-full p-2 border rounded" id="backup_retention_days"
                                            name="backup_retention_days" value="{{ old('backup_retention_days', $settings->backup_retention_days ?? 30) }}" min="7" max="365">
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="card p-6">
                             <h3 class="text-lg font-semibold mb-4" style="color: var(--text-primary);">
                                 <i class="fas fa-chart-line mr-2"></i> Logging & Monitoring
@@ -1054,20 +1302,20 @@
                                 <div>
                                     <label class="flex items-center" style="color: var(--text-primary);">
                                         <input type="hidden" name="enable_audit_log" value="0">
-                                        <input type="checkbox" id="enable_audit_log" name="enable_audit_log" value="1" 
+                                        <input type="checkbox" id="enable_audit_log" name="enable_audit_log" value="1"
                                                {{ old('enable_audit_log', $settings->enable_audit_log ?? true) ? 'checked' : '' }} class="mr-2">
                                         <span class="font-medium">Enable Audit Log</span>
                                     </label>
                                 </div>
                                 <div>
                                     <label for="log_retention_days" class="block mb-2 font-medium" style="color: var(--text-primary);">Log Retention (Days)</label>
-                                    <input type="number" class="w-full p-2 border rounded" id="log_retention_days" 
+                                    <input type="number" class="w-full p-2 border rounded" id="log_retention_days"
                                            name="log_retention_days" value="{{ old('log_retention_days', $settings->log_retention_days ?? 90) }}" min="30" max="365">
                                 </div>
                                 <div>
                                     <label class="flex items-center" style="color: var(--text-primary);">
                                         <input type="hidden" name="enable_error_reporting" value="0">
-                                        <input type="checkbox" id="enable_error_reporting" name="enable_error_reporting" value="1" 
+                                        <input type="checkbox" id="enable_error_reporting" name="enable_error_reporting" value="1"
                                                {{ old('enable_error_reporting', $settings->enable_error_reporting ?? true) ? 'checked' : '' }} class="mr-2">
                                         <span class="font-medium">Enable Error Reporting</span>
                                     </label>
@@ -1095,17 +1343,16 @@
 </div>
 
 <!-- ========================================================== -->
-<!-- PREVIEW MODAL - THEME-AWARE -->
+<!-- PREVIEW MODAL - THEME-AWARE                                -->
 <!-- ========================================================== -->
 <div id="previewModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50" style="display: none;">
-    <div class="rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden" 
+    <div class="rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden"
          id="previewModalContainer"
          style="background-color: var(--card-bg);
                 border: 1px solid var(--border-color);
                 color: var(--text-primary);">
-        
-        <!-- Modal Header -->
-        <div class="flex justify-between items-center p-4 border-b" 
+
+        <div class="flex justify-between items-center p-4 border-b"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <h3 class="text-xl font-semibold" style="color: var(--text-primary);">
                 <i class="fas fa-eye mr-2" style="color: var(--primary);"></i> System Settings Preview
@@ -1114,18 +1361,16 @@
                 <i class="fas fa-times text-xl"></i>
             </button>
         </div>
-        
-        <!-- Modal Body -->
-        <div class="p-6 overflow-y-auto" 
+
+        <div class="p-6 overflow-y-auto"
              id="previewModalBody"
              style="max-height: calc(90vh - 120px);
                     background-color: var(--bg-primary);
                     color: var(--text-primary);">
             <div id="previewContent" class="space-y-4"></div>
         </div>
-        
-        <!-- Modal Footer -->
-        <div class="flex justify-end p-4 border-t" 
+
+        <div class="flex justify-end p-4 border-t"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <button type="button" id="submitFromModal" class="btn-primary mr-2">
                 <i class="fas fa-save mr-2"></i> Update Settings
@@ -1144,71 +1389,80 @@ window.SYSTEM_SETTINGS_FLAGS = {
     whatsappProviderConfigured: @json($whatsappProviderConfigured),
 };
 
+// ✅ NEW: 2FA policy snapshot for the preview modal
+window.SYSTEM_SETTINGS_2FA = {
+    policy: @json($twoFactorPolicy),
+    requiredRoles: @json($twoFactorRequiredRoles),
+    roleLabels: @json($twoFactorRoleLabels),
+};
+
 document.addEventListener('DOMContentLoaded', function() {
     // Tab Navigation
     const tabs = document.querySelectorAll('.tab-btn');
     const tabContents = document.querySelectorAll('.tab-content');
-    
+
     function activateTab(tabId) {
         tabContents.forEach(content => content.classList.add('hidden'));
         document.getElementById(`tab-${tabId}`).classList.remove('hidden');
-        
+
         tabs.forEach(tab => {
             tab.classList.remove('active-tab');
             tab.style.borderBottom = 'none';
             tab.style.color = '';
         });
-        
+
         const activeTab = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
-        activeTab.classList.add('active-tab');
-        activeTab.style.borderBottom = '2px solid var(--primary)';
-        activeTab.style.color = 'var(--primary)';
+        if (activeTab) {
+            activeTab.classList.add('active-tab');
+            activeTab.style.borderBottom = '2px solid var(--primary)';
+            activeTab.style.color = 'var(--primary)';
+        }
     }
-    
+
     tabs.forEach(tab => {
         tab.addEventListener('click', () => activateTab(tab.getAttribute('data-tab')));
     });
-    
+
     activateTab('general');
-    
+
     // Initialize all features
     initializeSlugGeneration();
     initializeCurrencySync();
     initializeCalculationFields();
     initializeTenantInvoiceFields();
     initializeLandlordInvoiceFields();
-    initializeNotificationChannels(); // owns SMS + WhatsApp init & listeners
+    initializeNotificationChannels();
     initializePaymentGatewayValidation();
     initializeLogoUpload();
     initializeFaviconUpload();
     initializeSmsSenderId();
     initializePreviewModal();
     initializeReminderDependentFields();
-    
+
     // Toggle switches styling
     document.querySelectorAll('.toggle-modern input').forEach(checkbox => {
         updateToggleSwitch(checkbox);
         checkbox.addEventListener('change', () => updateToggleSwitch(checkbox));
     });
-    
+
     const tenantToggle = document.getElementById('enable_tenant_invoicing');
     if (tenantToggle) {
         tenantToggle.addEventListener('change', function() {
             initializeTenantInvoiceFields();
         });
     }
-    
+
     const reminderToggle = document.getElementById('send_payment_reminders');
     if (reminderToggle) {
         reminderToggle.addEventListener('change', function() {
             initializeReminderDependentFields();
         });
     }
-    
+
     // Form submission
     const form = document.getElementById('systemSettingsForm');
     if (form) form.addEventListener('submit', handleFormSubmission);
-    
+
     // Real-time preview updates
     const previewInputs = [
         'monthly_dues_amount', 'tenant_monthly_dues_amount', 'currency_symbol',
@@ -1219,10 +1473,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const el = document.getElementById(id);
         if (el) el.addEventListener('input', updateTenantPreview);
     });
-    
-    // FIX: target the checkbox specifically (there is also a hidden value="0" input
-    // with the same name, so a bare querySelector would match the hidden one and
-    // always read as unchecked).
+
+    // Target the checkbox specifically (there is also a hidden value="0" input
+    // with the same name).
     document.querySelectorAll('input[type="checkbox"][name="auto_generate_tenant_invoices"], input[type="checkbox"][name="send_tenant_payment_reminders"]').forEach(el => {
         el.addEventListener('change', updateTenantPreview);
     });
@@ -1275,23 +1528,23 @@ function initializeSmsSenderId() {
 function initializeFaviconUpload() {
     const uploadArea = document.getElementById('faviconUploadArea');
     const faviconInput = document.getElementById('system_favicon');
-    
+
     if (uploadArea) {
         uploadArea.addEventListener('click', () => faviconInput?.click());
-        uploadArea.addEventListener('dragover', (e) => { 
-            e.preventDefault(); 
-            uploadArea.classList.add('border-primary'); 
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('border-primary');
         });
         uploadArea.addEventListener('dragleave', () => {
             uploadArea.classList.remove('border-primary');
         });
-        uploadArea.addEventListener('drop', (e) => { 
-            e.preventDefault(); 
-            uploadArea.classList.remove('border-primary'); 
-            if (e.dataTransfer.files[0]) { 
-                faviconInput.files = e.dataTransfer.files; 
-                previewFavicon(faviconInput); 
-            } 
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('border-primary');
+            if (e.dataTransfer.files[0]) {
+                faviconInput.files = e.dataTransfer.files;
+                previewFavicon(faviconInput);
+            }
         });
     }
 }
@@ -1303,23 +1556,23 @@ function previewFavicon(input) {
     const uploadArea = document.getElementById('faviconUploadArea');
     const currentContainer = document.getElementById('currentFaviconContainer');
     const removeBtn = document.getElementById('removeFaviconPreview');
-    
+
     if (input.files && input.files[0]) {
         const file = input.files[0];
-        
-        if (file.size > 100 * 1024) { 
+
+        if (file.size > 100 * 1024) {
             alert('Favicon size must be less than 100KB. Please compress or use a smaller file.');
-            input.value = ''; 
-            return; 
+            input.value = '';
+            return;
         }
-        
+
         const validTypes = ['image/x-icon', 'image/png', 'image/svg+xml', 'image/jpeg', 'image/gif'];
         if (!validTypes.includes(file.type) && !file.name.match(/\.(ico|png|svg|jpg|jpeg|gif)$/i)) {
             alert('Please select an ICO, PNG, SVG, JPG, or GIF file for favicon.');
-            input.value = ''; 
-            return; 
+            input.value = '';
+            return;
         }
-        
+
         const reader = new FileReader();
         reader.onload = (e) => {
             previewImage.src = e.target.result;
@@ -1329,7 +1582,7 @@ function previewFavicon(input) {
             if (currentContainer) currentContainer.style.display = 'none';
         };
         reader.readAsDataURL(file);
-        
+
         if (removeBtn) {
             removeBtn.onclick = () => {
                 preview.classList.add('hidden');
@@ -1347,11 +1600,11 @@ function removeFavicon() {
     const currentContainer = document.getElementById('currentFaviconContainer');
     const uploadArea = document.getElementById('faviconUploadArea');
     const preview = document.getElementById('faviconPreview');
-    
+
     if (currentContainer) currentContainer.style.display = 'none';
     if (uploadArea) uploadArea.style.display = 'block';
     if (preview) preview.classList.add('hidden');
-    
+
     const input = document.getElementById('system_favicon');
     if (input) input.value = '';
 }
@@ -1364,7 +1617,7 @@ function initializePreviewModal() {
     const previewBtns = document.querySelectorAll('#previewButtonHeader, #previewButtonFooter');
     const closeBtns = document.querySelectorAll('#closeModal, #closeModalBtn');
     const submitFromModal = document.getElementById('submitFromModal');
-    
+
     function getThemeStyles() {
         const root = document.documentElement;
         const styles = getComputedStyle(root);
@@ -1382,16 +1635,16 @@ function initializePreviewModal() {
             info: styles.getPropertyValue('--info').trim() || '#3b82f6',
         };
     }
-    
+
     function collectSettings() {
         const tenantEnabled = document.getElementById('enable_tenant_invoicing')?.checked || false;
-        
+
         const faviconInput = document.getElementById('system_favicon');
         const hasNewFavicon = faviconInput && faviconInput.files && faviconInput.files.length > 0;
         const hasExistingFavicon = document.getElementById('currentFaviconContainer') !== null;
         const hasFavicon = hasNewFavicon || hasExistingFavicon;
         const faviconName = hasNewFavicon ? faviconInput.files[0].name : (hasExistingFavicon ? 'Current favicon' : 'Not uploaded');
-        
+
         return {
             general: {
                 name: document.getElementById('system_name')?.value || 'Not set',
@@ -1428,7 +1681,6 @@ function initializePreviewModal() {
             tenant: tenantEnabled ? {
                 enabled: true,
                 amount: document.getElementById('tenant_monthly_dues_amount')?.value || '0',
-                // FIX: must target the checkbox, not the hidden value="0" input with the same name.
                 auto_generate: document.querySelector('input[type="checkbox"][name="auto_generate_tenant_invoices"]')?.checked || false,
                 send_reminders: document.querySelector('input[type="checkbox"][name="send_tenant_payment_reminders"]')?.checked || false,
                 grace_period: document.getElementById('tenant_grace_period_days')?.value || '7',
@@ -1441,13 +1693,13 @@ function initializePreviewModal() {
             }
         };
     }
-    
+
     function renderPreview() {
         const s = collectSettings();
         const previewContent = document.getElementById('previewContent');
         const styles = getThemeStyles();
         if (!previewContent) return;
-        
+
         const cardStyle = `
             background-color: ${styles.bgSecondary};
             border: 1px solid ${styles.borderColor};
@@ -1455,11 +1707,11 @@ function initializePreviewModal() {
             padding: 1rem;
         `;
         const titleStyle = `font-weight: bold; font-size: 1.125rem; margin-bottom: 0.75rem; color: ${styles.textPrimary};`;
-        
+
         const faviconHtml = s.general.has_favicon
             ? `<span style="color: ${styles.success};">✅ ${s.general.favicon_name}</span>`
             : `<span style="color: ${styles.textSecondary};">❌ Not uploaded (browser will use default)</span>`;
-        
+
         const tenantHtml = s.tenant.enabled ? `
             <div class="grid grid-cols-2 gap-2 text-sm">
                 <span style="color: ${styles.textSecondary};">Tenant Monthly Dues:</span>
@@ -1476,19 +1728,34 @@ function initializePreviewModal() {
                 <span style="color: ${styles.textPrimary};">${s.payment.symbol}${s.tenant.fixed_penalty}</span>
             </div>
         ` : `<div style="color: ${styles.textSecondary};">⚠️ Tenant invoicing is disabled</div>`;
-        
-        const gatewayHtml = s.gateways.length 
-            ? `<div class="mt-2"><span style="color: ${styles.textSecondary};">Enabled Gateways:</span> <span style="color: ${styles.textPrimary};">${s.gateways.join(', ')}</span></div>` 
+
+        const gatewayHtml = s.gateways.length
+            ? `<div class="mt-2"><span style="color: ${styles.textSecondary};">Enabled Gateways:</span> <span style="color: ${styles.textPrimary};">${s.gateways.join(', ')}</span></div>`
             : `<div class="mt-2" style="color: ${styles.danger};">⚠️ No payment gateways enabled</div>`;
-        
-        // SMS / WhatsApp provider status
+
         const smsHtml = s.notifications.sms_provider_configured
             ? `<span style="color: ${styles.textPrimary};">${s.notifications.sms}</span>`
             : `<span style="color: ${styles.danger};">⚠️ No SMS provider configured</span>`;
         const whatsappHtml = s.notifications.whatsapp_provider_configured
             ? `<span style="color: ${styles.textPrimary};">${s.notifications.whatsapp}</span>`
             : `<span style="color: ${styles.danger};">⚠️ No WhatsApp provider configured</span>`;
-        
+
+        // ✅ 2FA policy block for the preview
+        const policy2fa = window.SYSTEM_SETTINGS_2FA?.policy || 'optional';
+        const roles2fa = window.SYSTEM_SETTINGS_2FA?.requiredRoles || [];
+        const roleLabels2fa = window.SYSTEM_SETTINGS_2FA?.roleLabels || {};
+        const rolesText2fa = roles2fa.length
+            ? roles2fa.map(r => roleLabels2fa[r] || `Type ${r}`).join(', ')
+            : 'None';
+        const twoFaHtml = `
+            <div class="grid grid-cols-2 gap-2 text-sm">
+                <span style="color: ${styles.textSecondary};">System 2FA Policy:</span>
+                <span style="color: ${styles.textPrimary};">${policy2fa.charAt(0).toUpperCase() + policy2fa.slice(1)}</span>
+                <span style="color: ${styles.textSecondary};">Required Roles:</span>
+                <span style="color: ${policy2fa === 'required' ? styles.warning : styles.textPrimary};">${rolesText2fa}</span>
+            </div>
+        `;
+
         previewContent.innerHTML = `
             <div style="${cardStyle}">
                 <h4 style="${titleStyle}">📋 System Information</h4>
@@ -1538,6 +1805,10 @@ function initializePreviewModal() {
                 </div>
             </div>
             <div style="${cardStyle}">
+                <h4 style="${titleStyle}">🛡️ Security & 2FA Policy</h4>
+                ${twoFaHtml}
+            </div>
+            <div style="${cardStyle}">
                 <h4 style="${titleStyle}">👥 Tenant Dues Configuration</h4>
                 ${tenantHtml}
             </div>
@@ -1552,28 +1823,28 @@ function initializePreviewModal() {
             </div>
         `;
     }
-    
+
     function openModal() {
         renderPreview();
         if (modal) modal.style.display = 'flex';
         document.body.style.overflow = 'hidden';
     }
-    
+
     function closeModal() {
         if (modal) modal.style.display = 'none';
         document.body.style.overflow = '';
     }
-    
+
     previewBtns.forEach(btn => btn?.addEventListener('click', openModal));
     closeBtns.forEach(btn => btn?.addEventListener('click', closeModal));
     if (submitFromModal) {
-        submitFromModal.addEventListener('click', () => { 
-            closeModal(); 
-            document.getElementById('systemSettingsForm')?.submit(); 
+        submitFromModal.addEventListener('click', () => {
+            closeModal();
+            document.getElementById('systemSettingsForm')?.submit();
         });
     }
     window.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-    
+
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape' && modal && modal.style.display === 'flex') {
             closeModal();
@@ -1589,7 +1860,7 @@ function initializeLandlordInvoiceFields() {
     const reminderToggle = document.getElementById('send_payment_reminders');
     const reminderDaysField = document.getElementById('reminder_days_before');
     const gracePeriodField = document.getElementById('grace_period_days');
-    
+
     if (autoGenerateToggle) {
         autoGenerateToggle.addEventListener('change', function() {
             updateLandlordPreview();
@@ -1611,12 +1882,12 @@ function updateLandlordPreview() {
     const reminders = document.getElementById('send_payment_reminders')?.checked || false;
     const reminderDays = document.getElementById('reminder_days_before')?.value || '7';
     const gracePeriod = document.getElementById('grace_period_days')?.value || '7';
-    
+
     const previewAutoGenerate = document.getElementById('previewLandlordAutoGenerate');
     const previewReminders = document.getElementById('previewLandlordReminders');
     const previewReminderDays = document.getElementById('previewLandlordReminderDays');
     const previewGracePeriod = document.getElementById('previewLandlordGracePeriod');
-    
+
     if (previewAutoGenerate) {
         previewAutoGenerate.textContent = autoGenerate ? 'Yes ✅' : 'No ❌';
         previewAutoGenerate.style.color = autoGenerate ? 'rgb(22, 163, 74)' : 'rgb(220, 38, 38)';
@@ -1642,7 +1913,7 @@ function initializeTenantInvoiceFields() {
     const tenantToggle = document.getElementById('enable_tenant_invoicing');
     const tenantFields = document.querySelectorAll('.tenant-dependent-field');
     const tenantAmountField = document.getElementById('tenant_monthly_dues_amount');
-    
+
     function toggleTenantFields() {
         const enabled = tenantToggle?.checked || false;
         tenantFields.forEach(field => field.style.display = enabled ? 'block' : 'none');
@@ -1665,7 +1936,7 @@ function updateTenantPreview() {
         const previewLatePenalty = document.getElementById('previewTenantLatePenalty');
         const previewFixedPenalty = document.getElementById('previewTenantFixedPenalty');
         const previewTotalPenalty = document.getElementById('previewTenantTotalPenalty');
-        
+
         if (previewAmount) { previewAmount.textContent = 'Disabled'; previewAmount.style.color = 'var(--text-secondary)'; }
         if (previewAutoGenerate) { previewAutoGenerate.textContent = 'Disabled'; previewAutoGenerate.style.color = 'var(--text-secondary)'; }
         if (previewReminders) { previewReminders.textContent = 'Disabled'; previewReminders.style.color = 'var(--text-secondary)'; }
@@ -1675,18 +1946,17 @@ function updateTenantPreview() {
         if (previewTotalPenalty) { previewTotalPenalty.textContent = 'Disabled'; previewTotalPenalty.style.color = 'var(--text-secondary)'; }
         return;
     }
-    
+
     const currencySymbol = document.getElementById('currency_symbol')?.value || 'GH₵';
     const landlordAmount = parseFloat(document.getElementById('monthly_dues_amount')?.value) || 0;
     const tenantAmount = parseFloat(document.getElementById('tenant_monthly_dues_amount')?.value) || 0;
     const tenantMethod = document.getElementById('tenant_calculation_method')?.value || 'fixed';
-    // FIX: target checkbox specifically, otherwise the hidden value="0" wins.
     const autoGenerate = document.querySelector('input[type="checkbox"][name="auto_generate_tenant_invoices"]')?.checked || false;
     const sendReminders = document.querySelector('input[type="checkbox"][name="send_tenant_payment_reminders"]')?.checked || false;
     const gracePeriod = document.getElementById('tenant_grace_period_days')?.value || '7';
     const latePercentage = parseFloat(document.getElementById('tenant_late_payment_percentage')?.value) || 0;
     const fixedPenalty = parseFloat(document.getElementById('tenant_fixed_penalty_amount')?.value) || 0;
-    
+
     const previewLandlord = document.getElementById('previewLandlordAmount');
     const previewMethod = document.getElementById('previewTenantMethod');
     const previewAmount = document.getElementById('previewTenantAmount');
@@ -1696,7 +1966,7 @@ function updateTenantPreview() {
     const previewLatePenalty = document.getElementById('previewTenantLatePenalty');
     const previewFixedPenalty = document.getElementById('previewTenantFixedPenalty');
     const previewTotalPenalty = document.getElementById('previewTenantTotalPenalty');
-    
+
     if (previewLandlord) previewLandlord.textContent = formatCurrency(landlordAmount, currencySymbol);
     if (previewMethod) previewMethod.textContent = tenantMethod === 'fixed' ? 'Fixed Amount' : 'Per Property Unit';
     if (previewAmount) {
@@ -1712,7 +1982,7 @@ function updateTenantPreview() {
         previewReminders.style.color = sendReminders ? 'rgb(22, 163, 74)' : 'rgb(220, 38, 38)';
     }
     if (previewGracePeriod) previewGracePeriod.textContent = `${gracePeriod} days`;
-    
+
     const hasPercentagePenalty = latePercentage > 0;
     const hasFixedPenalty = fixedPenalty > 0;
     if (previewLatePenalty) {
@@ -1795,17 +2065,7 @@ function updateSlugPreview() {
 
 // ============================================================
 // SMS / WHATSAPP DEPENDENT FIELDS  (FIXED)
-// ------------------------------------------------------------
-// KEY BEHAVIOUR:
-//   • On page load, TRUST the server-rendered state. Never clear
-//     a checkbox that Blade rendered as checked.
-//   • Only enforce clearing when the user actively toggles the
-//     global switch off (userInitiated === true).
-//   • If the provider is not configured at all, the checkbox is
-//     always disabled and cleared — the server would reject it
-//     anyway via assertNotificationChannelsAreAllowed().
 // ============================================================
-
 function initializeSmsDependentFields() {
     const toggle = document.getElementById('sms_notifications_enabled');
     if (!toggle) return;
@@ -1817,18 +2077,13 @@ function initializeSmsDependentFields() {
         const enabled    = toggle.checked;
         const providerOk = window.SYSTEM_SETTINGS_FLAGS.smsProviderConfigured;
 
-        // Show/hide the SMS-dependent config fields
         fields.forEach(f => f.style.display = enabled ? 'block' : 'none');
 
         smsChannels.forEach(ch => {
             if (!providerOk) {
-                // No provider → never allow SMS channels
                 ch.checked  = false;
                 ch.disabled = true;
             } else if (!enabled) {
-                // Global SMS toggle is off.
-                // Only clear the check on explicit user action, so a
-                // saved selection survives a page reload.
                 if (userInitiated) ch.checked = false;
                 ch.disabled = true;
             } else {
@@ -1837,10 +2092,7 @@ function initializeSmsDependentFields() {
         });
     }
 
-    // Initial render: trust server state (do NOT clear checks)
     apply(false);
-
-    // Only enforce clearing when the user flips the switch
     toggle.addEventListener('change', () => apply(true));
 }
 
@@ -1874,9 +2126,6 @@ function initializeWhatsAppDependentFields() {
     toggle.addEventListener('change', () => apply(true));
 }
 
-// Single entry point — delegates to the two functions above.
-// Do NOT call the two functions separately elsewhere on page load,
-// or you will double-bind their change listeners.
 function initializeNotificationChannels() {
     initializeSmsDependentFields();
     initializeWhatsAppDependentFields();
@@ -1887,7 +2136,7 @@ function initializePaymentGatewayValidation() {
     const errorDiv = document.getElementById('payment-gateway-error');
     const countSpan = document.getElementById('enabled-gateways-count');
     const submitBtn = document.getElementById('submitButton');
-    
+
     function validate() {
         const enabled = Array.from(gateways).filter(g => g.checked).length;
         if (countSpan) countSpan.textContent = enabled;
@@ -1929,12 +2178,12 @@ function previewLogo(input) {
     const fileName = document.getElementById('logoFileName');
     const uploadArea = document.getElementById('logoUploadArea');
     const currentContainer = document.getElementById('currentLogoContainer');
-    
+
     if (input.files && input.files[0]) {
         const file = input.files[0];
         if (!file.type.startsWith('image/')) { alert('Please select an image'); input.value = ''; return; }
         if (file.size > 2 * 1024 * 1024) { alert('Max 2MB'); input.value = ''; return; }
-        
+
         const reader = new FileReader();
         reader.onload = e => {
             previewImage.src = e.target.result;
@@ -1944,7 +2193,7 @@ function previewLogo(input) {
             if (currentContainer) currentContainer.style.display = 'none';
         };
         reader.readAsDataURL(file);
-        
+
         const removeBtn = document.getElementById('removeLogoPreview');
         if (removeBtn) {
             removeBtn.onclick = () => {
@@ -2003,15 +2252,14 @@ function handleFormSubmission(e) {
         document.querySelector('.tab-btn[data-tab="payment"]')?.click();
         return false;
     }
-    
+
     const shortName = document.getElementById('system_short_name')?.value;
     if (shortName && !/^[a-z0-9-]+$/.test(shortName)) {
         e.preventDefault();
         alert('System short name can only contain lowercase letters, numbers, and hyphens.');
         return false;
     }
-    
-    // SMS Sender ID — client-side guard mirroring the server rules
+
     const senderId = document.getElementById('sms_sender_id')?.value || '';
     if (senderId.length > 11) {
         e.preventDefault();
@@ -2025,8 +2273,7 @@ function handleFormSubmission(e) {
         document.querySelector('.tab-btn[data-tab="general"]')?.click();
         return false;
     }
-    
-    // Block SMS/WhatsApp channels if provider isn't configured
+
     if (!window.SYSTEM_SETTINGS_FLAGS.smsProviderConfigured) {
         const smsChecked = document.querySelectorAll('input[name="invoice_notification_channels[]"][value="sms"]:checked, input[name="payment_reminder_channels[]"][value="sms"]:checked, input[name="overdue_notification_channels[]"][value="sms"]:checked, input[name="payment_confirmation_channels[]"][value="sms"]:checked');
         if (smsChecked.length > 0) {
@@ -2045,7 +2292,7 @@ function handleFormSubmission(e) {
             return false;
         }
     }
-    
+
     const tenantToggle = document.getElementById('enable_tenant_invoicing');
     if (tenantToggle?.checked) {
         const tenantAmount = document.getElementById('tenant_monthly_dues_amount')?.value;
@@ -2056,7 +2303,7 @@ function handleFormSubmission(e) {
             return false;
         }
     }
-    
+
     const reminderToggle = document.getElementById('send_payment_reminders');
     if (reminderToggle?.checked) {
         const reminderDays = document.getElementById('reminder_days_before')?.value;
@@ -2067,7 +2314,7 @@ function handleFormSubmission(e) {
             return false;
         }
     }
-    
+
     const gracePeriod = document.getElementById('grace_period_days')?.value;
     if (gracePeriod && parseInt(gracePeriod) < 0) {
         e.preventDefault();
@@ -2075,7 +2322,7 @@ function handleFormSubmission(e) {
         document.querySelector('.tab-btn[data-tab="general"]')?.click();
         return false;
     }
-    
+
     if (reminderToggle?.checked && reminderToggle.checked) {
         const reminderDays = parseInt(document.getElementById('reminder_days_before')?.value) || 0;
         const graceDays = parseInt(document.getElementById('grace_period_days')?.value) || 0;
@@ -2086,7 +2333,7 @@ function handleFormSubmission(e) {
             }
         }
     }
-    
+
     return true;
 }
 </script>
@@ -2118,6 +2365,11 @@ function handleFormSubmission(e) {
 .btn-secondary:hover { background-color: rgba(var(--secondary-rgb), 0.2); transform: translateY(-2px); }
 .btn-info { background-color: rgba(59, 130, 246, 0.1); color: rgb(59, 130, 246); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 10px; padding: 12px 24px; font-weight: 500; transition: all 0.2s; }
 .btn-info:hover { background-color: rgba(59, 130, 246, 0.2); transform: translateY(-2px); }
+.btn-outline { background-color: transparent; color: var(--primary); border: 1px solid var(--primary); border-radius: 10px; padding: 12px 24px; font-weight: 500; transition: all 0.2s; }
+.btn-outline:hover { background-color: rgba(var(--primary-rgb), 0.1); transform: translateY(-2px); }
+.btn-warning { background: linear-gradient(to right, var(--warning), #f59e0b); color: white; border-radius: 10px; padding: 12px 24px; font-weight: 500; transition: all 0.2s; border: none; }
+.btn-warning:hover { transform: translateY(-2px); box-shadow: 0 8px 15px rgba(245, 158, 11, 0.4); }
+.btn-sm { padding: 0.375rem 0.75rem; font-size: 0.875rem; }
 
 .card { border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); transition: transform 0.3s; background: var(--card-bg); border: 1px solid var(--border-color); overflow: hidden; }
 .card:hover { transform: translateY(-5px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }

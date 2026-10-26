@@ -5,45 +5,113 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\SystemSetting;
 use App\Models\User;
+use App\Http\Controllers\Admin\LogoController;
 use App\Services\PaymentService;
 use App\Services\EnvironmentConfigService;
 use App\Services\SmsService;
+use App\Services\WhatsAppService;
+use App\Jobs\UpdateSystemConfiguration;
+use App\Jobs\TestSystemConnection;
 use App\Traits\NotifiesUsers;
+use App\Traits\ChecksBillingAccess;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class SystemSettingController extends Controller
 {
-    use NotifiesUsers;
+    use NotifiesUsers, ChecksBillingAccess;
 
     protected $paymentService;
     protected $environmentService;
     protected $smsService;
+    protected $whatsappService;
 
     /** Cache key for public settings. */
     private const PUBLIC_CACHE_KEY = 'public_system_settings';
     private const PUBLIC_CACHE_TTL = 3600;
 
+    /** Single source of truth for boolean/checkbox fields. */
+    protected const BOOLEAN_FIELDS = [
+        'enable_tenant_invoicing',
+        'auto_generate_tenant_invoices',
+        'send_tenant_payment_reminders',
+        'sms_notifications_enabled',
+        'sms_reminder_enabled',
+        'sms_payment_confirmation_enabled',
+        'enable_whatsapp_notifications',
+        'whatsapp_reminder_enabled',
+        'enable_expresspay',
+        'enable_hubtel',
+        'enable_paystack',
+        'enable_flutterwave',
+        'enable_bulk_payments',
+        'allow_offline_payment',
+        'auto_generate_invoices',
+        'send_payment_reminders',
+        'allow_registration',
+    ];
+
+    /** Single source of truth for the four notification-channel array fields. */
+    protected const CHANNEL_FIELDS = [
+        'invoice_notification_channels',
+        'payment_reminder_channels',
+        'overdue_notification_channels',
+        'payment_confirmation_channels',
+    ];
+
     public function __construct(
         PaymentService $paymentService,
         EnvironmentConfigService $environmentService,
-        SmsService $smsService
+        SmsService $smsService,
+        WhatsAppService $whatsappService
     ) {
-        $this->paymentService = $paymentService;
+        $this->paymentService     = $paymentService;
         $this->environmentService = $environmentService;
-        $this->smsService = $smsService;
+        $this->smsService         = $smsService;
+        $this->whatsappService    = $whatsappService;
     }
 
-    // ==================== PUBLIC ENDPOINTS ====================
+    /* ============================================================
+     | ROLE HELPERS
+     * ============================================================ */
+
+    protected function isAdminOrSuperAdmin(?User $user = null): bool
+    {
+        $user = $user ?: auth()->user();
+        if (!$user) return false;
+
+        return in_array($user->type, [User::TYPE_SUPER_ADMIN, User::TYPE_ADMIN], true);
+    }
+
+    protected function isSuperAdmin(?User $user = null): bool
+    {
+        $user = $user ?: auth()->user();
+        return $user && $user->type === User::TYPE_SUPER_ADMIN;
+    }
+
+    protected function isDeveloper(?User $user = null): bool
+    {
+        $user = $user ?: auth()->user();
+        if (!$user) return false;
+
+        return $user->hasRole('developer') || (int) $user->type === 5;
+    }
+
+    /* ============================================================
+     | PUBLIC ENDPOINTS
+     * ============================================================ */
 
     /**
-     * Get public system settings for mobile app.
-     * Does NOT require authentication.
-     *
      * GET /api/v1/system-settings
+     * Public — no auth required.
      */
     public function getPublicSettings()
     {
@@ -62,7 +130,6 @@ class SystemSettingController extends Controller
             return response()->json([
                 'success' => true,
                 'data' => [
-                    // System identification
                     'system_name' => $settings->system_name ?? config('app.name', 'Hilltop Estate'),
                     'system_short_name' => $settings->system_short_name ?? 'HSM',
                     'system_email' => $settings->system_email ?? 'info@hilltopestate.com',
@@ -76,17 +143,14 @@ class SystemSettingController extends Controller
                         : null,
                     'favicon_url' => $settings->getFaviconUrl(),
 
-                    // Currency
                     'currency_code' => $settings->currency_code ?? 'GHS',
                     'currency_symbol' => $settings->currency_symbol ?? 'GH₵',
                     'currency_position' => $settings->currency_position ?? 'left',
                     'decimal_places' => $settings->decimal_places ?? 2,
 
-                    // Registration
                     'registration_allowed' => $this->isRegistrationAllowed($settings),
                     'registration_disabled_message' => $this->getRegistrationDisabledMessage($settings),
 
-                    // Payment gateways (public visibility)
                     'enabled_gateways' => [
                         'expresspay' => (bool) ($settings->enable_expresspay ?? false),
                         'hubtel' => (bool) ($settings->enable_hubtel ?? false),
@@ -94,7 +158,6 @@ class SystemSettingController extends Controller
                         'flutterwave' => (bool) ($settings->enable_flutterwave ?? false),
                     ],
 
-                    // Tenant invoicing (public visibility)
                     'tenant_invoicing' => [
                         'enabled' => (bool) ($settings->enable_tenant_invoicing ?? false),
                         'monthly_dues_amount' => $settings->tenant_monthly_dues_amount ?? 50.00,
@@ -106,7 +169,6 @@ class SystemSettingController extends Controller
                         'fixed_penalty_amount' => $settings->tenant_fixed_penalty_amount ?? 0.00,
                     ],
 
-                    // Notification channels (public visibility)
                     'notification_channels' => [
                         'invoice' => $settings->invoice_notification_channels ?? ['email'],
                         'reminder' => $settings->payment_reminder_channels ?? ['email'],
@@ -114,7 +176,6 @@ class SystemSettingController extends Controller
                         'confirmation' => $settings->payment_confirmation_channels ?? ['email'],
                     ],
 
-                    // SMS
                     'sms' => [
                         'enabled' => (bool) ($settings->sms_notifications_enabled ?? false),
                         'reminder_enabled' => (bool) ($settings->sms_reminder_enabled ?? false),
@@ -123,13 +184,11 @@ class SystemSettingController extends Controller
                         'hourly_limit_per_user' => $settings->sms_hourly_limit_per_user ?? 3,
                     ],
 
-                    // WhatsApp
                     'whatsapp' => [
                         'enabled' => (bool) ($settings->enable_whatsapp_notifications ?? false),
                         'reminder_enabled' => (bool) ($settings->whatsapp_reminder_enabled ?? false),
                     ],
 
-                    // App version info
                     'app_version' => config('app.version', '1.0.0'),
                     'api_version' => 'v1',
                     'min_app_version' => config('app.min_app_version', '1.0.0'),
@@ -139,7 +198,6 @@ class SystemSettingController extends Controller
                     'allow_user_registration' => $this->isRegistrationAllowed($settings),
                     'site_name' => $settings->system_name ?? 'Hilltop Estate Management',
 
-                    // Meta — so the client can detect staleness
                     'settings_id' => $settings->id,
                     'updated_at' => optional($settings->updated_at)->toISOString(),
                 ],
@@ -158,9 +216,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * Default settings response used when DB is empty or throws.
-     */
     protected function getDefaultSettingsResponse(string $source)
     {
         return response()->json([
@@ -233,12 +288,12 @@ class SystemSettingController extends Controller
         ]);
     }
 
-    // ==================== ADMIN: READ ====================
+    /* ============================================================
+     | ADMIN: READ
+     * ============================================================ */
 
     /**
      * GET /api/v1/admin/system-settings
-     *
-     * Full admin-facing payload. Admin or Super Admin.
      */
     public function getAdminSettings(Request $request)
     {
@@ -247,7 +302,6 @@ class SystemSettingController extends Controller
             if (!$user) {
                 return $this->unauthorizedResponse('Unauthenticated. Please login.');
             }
-
             if (!$this->isAdminOrSuperAdmin($user)) {
                 return $this->forbiddenResponse('Unauthorized. Admin access required.');
             }
@@ -261,15 +315,15 @@ class SystemSettingController extends Controller
                 ], 404);
             }
 
-            $paymentConfiguration = $this->paymentService->checkPaymentMethodConfiguration();
-            $notificationChannels = $this->getNotificationChannelStatus($settings);
-            $smsStatus = $this->smsService->getQuickStatus();
+            $paymentConfiguration    = $this->paymentService->checkPaymentMethodConfiguration();
+            $notificationChannels    = $this->getNotificationChannelStatus($settings);
+            $smsStatus               = $this->smsService->getQuickStatus();
             $invoiceGenerationStatus = $this->getInvoiceGenerationStatus($settings);
+            $providerFlags           = $this->resolveProviderFlags();
 
             return response()->json([
                 'success' => true,
                 'data' => [
-                    // System identification
                     'system_name' => $settings->system_name,
                     'system_short_name' => $settings->system_short_name,
                     'system_email' => $settings->system_email,
@@ -280,13 +334,11 @@ class SystemSettingController extends Controller
                         : null,
                     'favicon_url' => $settings->getFaviconUrl(),
 
-                    // Currency
                     'currency_code' => $settings->currency_code,
                     'currency_symbol' => $settings->currency_symbol,
                     'currency_position' => $settings->currency_position,
                     'decimal_places' => $settings->decimal_places,
 
-                    // Payment gateways
                     'payment_gateways' => [
                         'expresspay' => [
                             'enabled' => (bool) ($settings->enable_expresspay ?? false),
@@ -307,7 +359,6 @@ class SystemSettingController extends Controller
                     ],
                     'payment_configuration_summary' => $paymentConfiguration,
 
-                    // Tenant invoicing
                     'tenant_invoicing' => [
                         'enabled' => (bool) ($settings->enable_tenant_invoicing ?? false),
                         'monthly_dues_amount' => $settings->tenant_monthly_dues_amount ?? 50.00,
@@ -319,36 +370,34 @@ class SystemSettingController extends Controller
                         'fixed_penalty_amount' => $settings->tenant_fixed_penalty_amount ?? 0.00,
                     ],
 
-                    // Notification channels
                     'notification_channels' => $notificationChannels,
                     'sms_status' => $smsStatus,
                     'invoice_generation' => $invoiceGenerationStatus,
 
-                    // Legacy dues config (kept for backward compat)
+                    'provider_flags' => $providerFlags,
+
                     'monthly_dues_amount' => $settings->monthly_dues_amount,
                     'calculation_method' => $settings->calculation_method,
                     'per_property_amount' => $settings->per_property_amount,
 
-                    // Legacy payment terms
                     'grace_period_days' => $settings->grace_period_days,
                     'late_payment_percentage' => $settings->late_payment_percentage,
                     'fixed_penalty_amount' => $settings->fixed_penalty_amount,
 
-                    // Legacy system ops
                     'auto_generate_invoices' => (bool) ($settings->auto_generate_invoices ?? false),
                     'send_payment_reminders' => (bool) ($settings->send_payment_reminders ?? false),
                     'reminder_days_before' => $settings->reminder_days_before ?? 7,
 
-                    // Bulk payments
                     'enable_bulk_payments' => (bool) ($settings->enable_bulk_payments ?? false),
                     'max_bulk_months' => $settings->max_bulk_months ?? 6,
                     'bulk_payment_discount' => $settings->bulk_payment_discount ?? 0,
 
-                    // Registration
                     'allow_registration' => (bool) ($settings->allow_registration ?? true),
                     'registration_disabled_message' => $settings->registration_disabled_message,
 
-                    // Audit
+                    'allow_offline_payment' => (bool) ($settings->allow_offline_payment ?? false),
+                    'sms_sender_id' => $settings->sms_sender_id,
+
                     'created_by' => $settings->created_by,
                     'updated_by' => $settings->updated_by,
                     'created_at' => $settings->created_at,
@@ -368,12 +417,311 @@ class SystemSettingController extends Controller
         }
     }
 
-    // ==================== ADMIN: WRITE ====================
+    /**
+     * GET /api/v1/admin/system-settings/simple
+     * Lightweight payload (mobile bootstrap).
+     */
+    public function getSystemSettings(Request $request)
+    {
+        try {
+            $settings = SystemSetting::first();
+
+            if (!$settings) {
+                return response()->json([
+                    'system_name' => 'Hilltop Estate',
+                    'system_short_name' => 'hsm',
+                    'system_logo' => null,
+                    'system_favicon' => null,
+                    'sms_sender_id' => null,
+                    'registration_allowed' => true,
+                    'registration_disabled_message' => null,
+                    'auto_generate_invoices' => false,
+                    'send_payment_reminders' => false,
+                    'reminder_days_before' => 7,
+                    'allow_offline_payment' => false,
+                    'enabled_gateways' => [
+                        'expresspay' => false,
+                        'hubtel' => false,
+                        'paystack' => false,
+                        'flutterwave' => false,
+                    ],
+                ]);
+            }
+
+            return response()->json([
+                'system_name' => $settings->system_name,
+                'system_short_name' => $settings->system_short_name,
+                'system_logo' => $settings->system_logo,
+                'system_favicon' => $settings->getFaviconUrl(),
+                'system_email' => $settings->system_email,
+                'system_phone' => $settings->system_phone,
+                'sms_sender_id' => $settings->sms_sender_id,
+                'registration_allowed' => $settings->isRegistrationAllowed(),
+                'registration_disabled_message' => $settings->getRegistrationDisabledMessage(),
+                'auto_generate_invoices' => $settings->isAutoInvoiceGenerationEnabled(),
+                'send_payment_reminders' => $settings->shouldSendPaymentReminders(),
+                'reminder_days_before' => $settings->getReminderDaysBefore(),
+                'allow_offline_payment' => (bool) ($settings->allow_offline_payment ?? false),
+                'enabled_gateways' => [
+                    'expresspay' => $settings->enable_expresspay ?? false,
+                    'hubtel' => $settings->enable_hubtel ?? false,
+                    'paystack' => $settings->enable_paystack ?? false,
+                    'flutterwave' => $settings->enable_flutterwave ?? false,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'system_name' => 'Hilltop Estate',
+                'system_short_name' => 'hsm',
+                'system_logo' => null,
+                'system_favicon' => null,
+                'sms_sender_id' => null,
+                'registration_allowed' => true,
+                'registration_disabled_message' => null,
+                'auto_generate_invoices' => false,
+                'send_payment_reminders' => false,
+                'reminder_days_before' => 7,
+                'allow_offline_payment' => false,
+                'enabled_gateways' => [
+                    'expresspay' => false,
+                    'hubtel' => false,
+                    'paystack' => false,
+                    'flutterwave' => false,
+                ],
+            ]);
+        }
+    }
+
+    /* ============================================================
+     | PROVIDER FLAGS
+     * ============================================================ */
+
+    protected function resolveProviderFlags(): array
+    {
+        $smsConfigured      = false;
+        $whatsappConfigured = false;
+        $smsActiveName      = null;
+        $whatsappActiveName = null;
+
+        $knownSmsProviders      = ['arkesel', 'twilio', 'africastalking', 'hubtel', 'nalosolutions'];
+        $knownWhatsappProviders = ['twilio', 'vonage', 'custom', '360dialog', 'wati', 'vumaapi'];
+
+        try {
+            if (method_exists($this->smsService, 'getSystemStatus')) {
+                $status = $this->smsService->getSystemStatus();
+
+                if (is_array($status)) {
+                    $smsConfigured = (bool) (
+                        ($status['configured_providers'] ?? 0) > 0
+                        || ($status['enabled_providers'] ?? 0) > 0
+                        || ($status['can_send_sms'] ?? false)
+                        || ($status['system_ready'] ?? false)
+                    );
+
+                    $defaultKey = $status['default_provider'] ?? null;
+                    if ($defaultKey && !empty($status['available_providers'][0])) {
+                        $defaultKey = $status['available_providers'][0];
+                    }
+
+                    if ($defaultKey) {
+                        $providerMap = $this->smsService->checkSmsProviderConfiguration();
+                        $smsActiveName = $providerMap[$defaultKey]['name']
+                            ?? $providerMap[$defaultKey]['details']['name']
+                            ?? $defaultKey;
+                    }
+                }
+            }
+
+            if (!$smsConfigured && method_exists($this->smsService, 'checkSmsProviderConfiguration')) {
+                $map = $this->smsService->checkSmsProviderConfiguration();
+
+                if (is_array($map)) {
+                    foreach ($knownSmsProviders as $p) {
+                        $entry = $map[$p] ?? null;
+                        if (is_array($entry) && !empty($entry['configured'])) {
+                            $smsConfigured = true;
+                            $smsActiveName = $smsActiveName ?: ($entry['name'] ?? $p);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!$smsConfigured && method_exists($this->smsService, 'isConfigured')) {
+                try {
+                    $smsConfigured = (bool) $this->smsService->isConfigured();
+                } catch (\Throwable $e) {
+                    Log::debug('[API SystemSettings] isConfigured() fallback failed: ' . $e->getMessage());
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[API SystemSettings] Failed to resolve SMS provider flags', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            if (method_exists($this->whatsappService, 'getSystemStatus')) {
+                $status = $this->whatsappService->getSystemStatus();
+
+                if (is_array($status)) {
+                    $whatsappConfigured = (bool) (
+                        ($status['configured_providers'] ?? 0) > 0
+                        || ($status['enabled_providers'] ?? 0) > 0
+                        || ($status['can_send'] ?? false)
+                        || ($status['system_ready'] ?? false)
+                    );
+
+                    $whatsappActiveName = $status['default_provider']
+                        ?? $status['active_provider']
+                        ?? null;
+                }
+            }
+
+            if (!$whatsappConfigured && method_exists($this->whatsappService, 'checkWhatsAppConfiguration')) {
+                $map = $this->whatsappService->checkWhatsAppConfiguration();
+
+                if (is_array($map)) {
+                    foreach ($knownWhatsappProviders as $p) {
+                        $entry = $map[$p] ?? null;
+                        if (is_array($entry) && !empty($entry['configured'])) {
+                            $whatsappConfigured = true;
+                            $whatsappActiveName = $whatsappActiveName ?: ($entry['name'] ?? $p);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!$whatsappConfigured && method_exists($this->whatsappService, 'isConfigured')) {
+                try {
+                    $whatsappConfigured = (bool) $this->whatsappService->isConfigured();
+                } catch (\Throwable $e) {
+                    Log::debug('[API SystemSettings] WhatsApp isConfigured() fallback failed: ' . $e->getMessage());
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[API SystemSettings] Failed to resolve WhatsApp provider flags', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        Log::debug('[API SystemSettings] Provider flags resolved', [
+            'sms_provider_configured'      => $smsConfigured,
+            'sms_active_provider'          => $smsActiveName,
+            'whatsapp_provider_configured' => $whatsappConfigured,
+            'whatsapp_active_provider'     => $whatsappActiveName,
+        ]);
+
+        return [
+            'smsProviderConfigured'      => $smsConfigured,
+            'whatsappProviderConfigured' => $whatsappConfigured,
+            'smsActiveProviderName'      => $smsActiveName,
+            'whatsappActiveProviderName' => $whatsappActiveName,
+        ];
+    }
+
+    protected function normalizeChannelArray($value): array
+    {
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            $value   = is_array($decoded) ? $decoded : [];
+        }
+
+        if (!is_array($value)) {
+            $value = [];
+        }
+
+        $value = array_values(array_intersect($value, ['email', 'sms', 'whatsapp']));
+
+        if (!in_array('email', $value, true)) {
+            $value[] = 'email';
+        }
+
+        return array_values(array_unique($value));
+    }
+
+    protected function normalizeChannelFields(array $data, Request $request): array
+    {
+        foreach (self::CHANNEL_FIELDS as $field) {
+            $raw = $data[$field] ?? $request->input($field, []);
+            $data[$field] = $this->normalizeChannelArray($raw);
+        }
+
+        return $data;
+    }
+
+    protected function normalizeBooleanFields(array $data, Request $request): array
+    {
+        foreach (self::BOOLEAN_FIELDS as $field) {
+            if (array_key_exists($field, $data) || $request->has($field)) {
+                $raw = $data[$field] ?? $request->input($field);
+                $data[$field] = filter_var($raw, FILTER_VALIDATE_BOOLEAN);
+            }
+        }
+
+        return $data;
+    }
+
+    /**
+     * Throws ValidationException if sms/whatsapp is selected without a configured provider.
+     */
+    protected function assertNotificationChannelsAreAllowed(array $data): void
+    {
+        $flags = $this->resolveProviderFlags();
+
+        $errors = [];
+
+        if (!$flags['smsProviderConfigured']) {
+            foreach (self::CHANNEL_FIELDS as $field) {
+                $channels = $data[$field] ?? [];
+                if (is_string($channels)) {
+                    $decoded = json_decode($channels, true);
+                    if (is_array($decoded)) $channels = $decoded;
+                }
+
+                if (is_array($channels) && in_array('sms', $channels, true)) {
+                    $errors[$field] = 'SMS notifications cannot be enabled because no SMS provider is configured. Configure an SMS provider first.';
+                }
+            }
+
+            if (!empty($data['sms_notifications_enabled'])
+                && filter_var($data['sms_notifications_enabled'], FILTER_VALIDATE_BOOLEAN)) {
+                $errors['sms_notifications_enabled'] = 'Enable SMS notifications after configuring an SMS provider.';
+            }
+        }
+
+        if (!$flags['whatsappProviderConfigured']) {
+            foreach (self::CHANNEL_FIELDS as $field) {
+                $channels = $data[$field] ?? [];
+                if (is_string($channels)) {
+                    $decoded = json_decode($channels, true);
+                    if (is_array($decoded)) $channels = $decoded;
+                }
+
+                if (is_array($channels) && in_array('whatsapp', $channels, true)) {
+                    $errors[$field] = 'WhatsApp notifications cannot be enabled because no WhatsApp provider is configured. Configure a WhatsApp provider first.';
+                }
+            }
+
+            if (!empty($data['enable_whatsapp_notifications'])
+                && filter_var($data['enable_whatsapp_notifications'], FILTER_VALIDATE_BOOLEAN)) {
+                $errors['enable_whatsapp_notifications'] = 'Enable WhatsApp notifications after configuring a WhatsApp provider.';
+            }
+        }
+
+        if (!empty($errors)) {
+            throw ValidationException::withMessages($errors);
+        }
+    }
+
+    /* ============================================================
+     | ADMIN: WRITE — full settings update
+     * ============================================================ */
 
     /**
      * PUT /api/v1/admin/system-settings
-     *
-     * Super Admin only. Updates any of the whitelisted fields.
+     * Super Admin only. Supports multipart/form-data for logo/favicon.
      */
     public function updateSettings(Request $request)
     {
@@ -386,7 +734,9 @@ class SystemSettingController extends Controller
                 return $this->forbiddenResponse('Unauthorized. Super Admin access required.');
             }
 
-            // Validate the incoming request against the whitelist + types.
+            // ✅ BILLING: block write when system billing is overdue
+            $this->assertBillingAllowsWrite('api_update_system_settings');
+
             $validator = $this->validateUpdateRequest($request);
             if ($validator->fails()) {
                 return response()->json([
@@ -407,7 +757,42 @@ class SystemSettingController extends Controller
             }
 
             $oldSettings = $settings->toArray();
-            $updateData = $this->buildUpdateData($request);
+            $updateData  = $this->buildUpdateData($request);
+
+            // Normalize channel arrays via the shared helper.
+            $updateData = $this->normalizeChannelFields($updateData, $request);
+
+            // Normalize booleans.
+            $updateData = $this->normalizeBooleanFields($updateData, $request);
+
+            // Favicon / logo removal flags
+            if ($request->boolean('remove_logo') && $settings->system_logo) {
+                $logoController = app(LogoController::class);
+                $logoController->deleteLogoFile($settings->system_logo);
+                $updateData['system_logo'] = null;
+            }
+
+            if ($request->boolean('remove_favicon') && $settings->hasFavicon()) {
+                $this->deleteFaviconFile($settings->system_favicon);
+                $updateData['system_favicon'] = null;
+            }
+
+            // File uploads (logo/favicon)
+            if ($request->hasFile('system_logo')) {
+                if ($settings->system_logo) {
+                    $logoController = app(LogoController::class);
+                    $logoController->deleteLogoFile($settings->system_logo);
+                }
+                $logoController = app(LogoController::class);
+                $updateData['system_logo'] = $logoController->handleLogoUpload($request->file('system_logo'));
+            }
+
+            if ($request->hasFile('system_favicon')) {
+                if ($settings->hasFavicon()) {
+                    $this->deleteFaviconFile($settings->system_favicon);
+                }
+                $updateData['system_favicon'] = $this->handleFaviconUpload($request->file('system_favicon'));
+            }
 
             if (empty($updateData)) {
                 return response()->json([
@@ -426,12 +811,27 @@ class SystemSettingController extends Controller
                 ], 422);
             }
 
+            // Provider-availability check for notification channels.
+            $this->assertNotificationChannelsAreAllowed($updateData);
+
             $updateData['updated_by'] = $user->id;
             $settings->update($updateData);
             $settings->refresh();
 
             $this->clearPublicSettingsCache();
+            $this->clearSettingsReminders();
             $this->trackAndNotifyChanges($settings, $oldSettings, $user);
+
+            // Queue env propagation (APP_NAME, MAIL_FROM_ADDRESS, SMS sender)
+            $this->queueSystemConfigurationUpdate(
+                $settings,
+                array_merge($request->all(), [
+                    'system_name'       => $settings->system_name,
+                    'system_short_name' => $settings->system_short_name,
+                    'system_email'      => $settings->system_email,
+                ]),
+                'update'
+            );
 
             Log::info('System settings updated via API', [
                 'updated_by' => $user->id,
@@ -447,7 +847,7 @@ class SystemSettingController extends Controller
                     'updated_at' => $settings->updated_at,
                 ],
             ]);
-        } catch (\Illuminate\Validation\ValidationException $e) {
+        } catch (ValidationException $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
@@ -467,11 +867,231 @@ class SystemSettingController extends Controller
         }
     }
 
-    // ==================== NOTIFICATION CHANNELS ====================
+    /* ============================================================
+     | ADMIN: SMS SENDER ID
+     * ============================================================ */
 
     /**
-     * PUT /api/v1/admin/notification-channels
+     * PUT /api/v1/admin/sms-sender-id
+     *
+     * Allowed for Admin + Super Admin (matches restricted-admin semantics).
+     * Intentionally NOT billing-gated (see web controller rationale).
      */
+    public function updateSenderId(Request $request)
+    {
+        try {
+            $user = $request->user();
+            if (!$user) {
+                return $this->unauthorizedResponse('Unauthenticated.');
+            }
+            if (!$this->isAdminOrSuperAdmin($user)) {
+                return $this->forbiddenResponse('Unauthorized. Admin access required.');
+            }
+
+            $validator = Validator::make($request->all(), [
+                'sms_sender_id' => [
+                    'nullable',
+                    'string',
+                    'max:11',
+                    'regex:/^[A-Za-z0-9 _\-]*$/',
+                ],
+            ], [
+                'sms_sender_id.max'   => 'SMS Sender ID cannot exceed 11 characters.',
+                'sms_sender_id.regex' => 'SMS Sender ID may only contain letters, numbers, spaces, hyphens, and underscores.',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed',
+                    'errors'  => $validator->errors(),
+                    'error_code' => 'VALIDATION_ERROR',
+                ], 422);
+            }
+
+            $settings = SystemSetting::first();
+            if (!$settings) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'System settings not found.',
+                    'error_code' => 'SETTINGS_NOT_FOUND',
+                ], 404);
+            }
+
+            $oldSenderId = $settings->sms_sender_id;
+            $newSenderId = filled($request->input('sms_sender_id'))
+                ? trim((string) $request->input('sms_sender_id'))
+                : null;
+
+            $settings->sms_sender_id = $newSenderId;
+            $settings->updated_by    = $user->id;
+            $settings->save();
+
+            Cache::forget('system_settings');
+            Cache::forget('system_settings.sms_sender_id');
+            Cache::forget('sms_default_sender_id');
+            $this->clearPublicSettingsCache();
+
+            try {
+                $this->smsService->forgetGlobalSenderIdCache();
+            } catch (\Throwable $e) {
+                Log::debug('SmsService cache flush skipped: ' . $e->getMessage());
+            }
+
+            Log::info('SMS sender ID updated via API', [
+                'user_id'       => $user->id,
+                'old_sender_id' => $oldSenderId,
+                'new_sender_id' => $newSenderId,
+            ]);
+
+            try {
+                $this->notifySuperAdminsAboutSenderIdChange(
+                    $settings,
+                    $user,
+                    $oldSenderId,
+                    $newSenderId
+                );
+            } catch (\Throwable $e) {
+                Log::warning('Failed to notify about sender ID change: ' . $e->getMessage());
+            }
+
+            return response()->json([
+                'success'   => true,
+                'message'   => 'Default SMS sender ID updated successfully.',
+                'sender_id' => $newSenderId,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to update SMS sender ID: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update sender ID: ' . $e->getMessage(),
+                'error_code' => 'SERVER_ERROR',
+            ], 500);
+        }
+    }
+
+    protected function notifySuperAdminsAboutSenderIdChange(
+        SystemSetting $settings,
+        User $updater,
+        ?string $oldSenderId,
+        ?string $newSenderId
+    ): void {
+        $superAdmins = $this->getActiveSuperAdmins();
+        if ($superAdmins->isEmpty()) {
+            return;
+        }
+
+        $notificationData = [
+            'title'    => '📱 SMS Sender ID Updated',
+            'message'  => "Default SMS sender ID changed by {$updater->name} " .
+                          "from '" . ($oldSenderId ?: '(empty)') . "' " .
+                          "to '" . ($newSenderId ?: '(empty)') . "'.",
+            'icon'     => 'fas fa-comment-dots text-info',
+            'category' => 'system_settings',
+            'action_url' => route('admin.system-settings.index'),
+            'priority' => 2,
+            'data'     => [
+                'type'          => 'sms_sender_id_changed',
+                'old_sender_id' => $oldSenderId,
+                'new_sender_id' => $newSenderId,
+                'changed_by'    => $updater->id,
+                'changed_by_name' => $updater->name,
+                'timestamp'     => now()->toISOString(),
+                'notification_type' => 'in_app_only',
+            ],
+        ];
+
+        foreach ($superAdmins as $admin) {
+            $this->notifyUserWithData($admin, $notificationData);
+        }
+    }
+
+    /* ============================================================
+     | ADMIN: OFFLINE PAYMENT TOGGLE
+     * ============================================================ */
+
+    /**
+     * POST /api/v1/admin/toggle-offline-payment
+     *
+     * Intentionally NOT billing-gated (matches web controller rationale:
+     * blocking it would prevent in-person payments when landlord owes money).
+     */
+    public function toggleOfflinePayment(Request $request)
+    {
+        try {
+            $user = $request->user();
+            if (!$user) {
+                return $this->unauthorizedResponse('Unauthenticated.');
+            }
+            if (!$this->isSuperAdmin($user) && !$this->isAdminOrSuperAdmin($user)) {
+                return $this->forbiddenResponse('Unauthorized access.');
+            }
+
+            $validator = Validator::make($request->all(), [
+                'allow_offline_payment' => 'required|boolean',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed',
+                    'errors'  => $validator->errors(),
+                    'error_code' => 'VALIDATION_ERROR',
+                ], 422);
+            }
+
+            $settings = SystemSetting::first();
+            if (!$settings) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'System settings not found.',
+                    'error_code' => 'SETTINGS_NOT_FOUND',
+                ], 404);
+            }
+
+            $oldValue = (bool) ($settings->allow_offline_payment ?? false);
+            $newValue = (bool) $request->allow_offline_payment;
+
+            $settings->allow_offline_payment = $newValue;
+            $settings->updated_by            = $user->id;
+            $settings->save();
+
+            $this->clearPublicSettingsCache();
+
+            Log::info('Offline payment setting toggled via API', [
+                'old_value' => $oldValue,
+                'new_value' => $newValue,
+                'user_id'   => $user->id,
+                'user_name' => $user->name,
+            ]);
+
+            $message = $newValue
+                ? 'Office payments enabled. Admins can now mark invoices as paid manually.'
+                : 'Office payments blocked. Landlords must use the online payment gateway.';
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'data' => [
+                    'allow_offline_payment' => $newValue,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to toggle offline payment: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update offline payment setting.',
+                'error_code' => 'SERVER_ERROR',
+            ], 500);
+        }
+    }
+
+    /* ============================================================
+     | NOTIFICATION CHANNELS
+     * ============================================================ */
+
     public function updateNotificationChannels(Request $request)
     {
         try {
@@ -482,6 +1102,9 @@ class SystemSettingController extends Controller
             if (!$this->isSuperAdmin($user)) {
                 return $this->forbiddenResponse('Unauthorized. Super Admin access required.');
             }
+
+            // ✅ BILLING: block write when system billing is overdue
+            $this->assertBillingAllowsWrite('api_update_notification_channels');
 
             $validator = Validator::make($request->all(), [
                 'invoice_notification_channels' => 'nullable|array',
@@ -511,8 +1134,7 @@ class SystemSettingController extends Controller
                 ], 422);
             }
 
-            // Extra cross-field check: hourly must be <= daily.
-            $daily = $request->input('sms_daily_limit_per_user');
+            $daily  = $request->input('sms_daily_limit_per_user');
             $hourly = $request->input('sms_hourly_limit_per_user');
             if ($daily !== null && $hourly !== null && $hourly > $daily) {
                 return response()->json([
@@ -535,44 +1157,20 @@ class SystemSettingController extends Controller
             }
 
             $oldSettings = $settings->toArray();
-            $updateData = [];
+            $updateData  = [];
 
-            // Channel arrays
-            $channelFields = [
-                'invoice_notification_channels',
-                'payment_reminder_channels',
-                'overdue_notification_channels',
-                'payment_confirmation_channels',
-            ];
-
-            foreach ($channelFields as $field) {
+            foreach (self::CHANNEL_FIELDS as $field) {
                 if ($request->has($field)) {
-                    $channels = $request->input($field, ['email']);
-                    if (!is_array($channels)) {
-                        $channels = ['email'];
-                    }
-                    if (!in_array('email', $channels, true)) {
-                        $channels[] = 'email';
-                    }
-                    $updateData[$field] = array_values(array_unique($channels));
+                    $updateData[$field] = $this->normalizeChannelArray($request->input($field, ['email']));
                 }
             }
 
-            // SMS
             foreach ([
                 'sms_notifications_enabled',
                 'sms_reminder_enabled',
                 'sms_payment_confirmation_enabled',
                 'sms_daily_limit_per_user',
                 'sms_hourly_limit_per_user',
-            ] as $field) {
-                if ($request->has($field)) {
-                    $updateData[$field] = $request->input($field);
-                }
-            }
-
-            // WhatsApp
-            foreach ([
                 'enable_whatsapp_notifications',
                 'whatsapp_reminder_enabled',
                 'whatsapp_provider',
@@ -589,6 +1187,8 @@ class SystemSettingController extends Controller
                     'data' => $this->getNotificationChannelStatus($settings),
                 ]);
             }
+
+            $this->assertNotificationChannelsAreAllowed($updateData);
 
             $updateData['updated_by'] = $user->id;
             $settings->update($updateData);
@@ -610,6 +1210,13 @@ class SystemSettingController extends Controller
                 'message' => 'Notification channels updated successfully',
                 'data' => $this->getNotificationChannelStatus($settings),
             ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $e->errors(),
+                'error_code' => 'VALIDATION_ERROR',
+            ], 422);
         } catch (\Exception $e) {
             Log::error('Failed to update notification channels via API: ' . $e->getMessage());
 
@@ -621,9 +1228,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * GET /api/v1/admin/notification-channels
-     */
     public function getNotificationChannelSettings(Request $request)
     {
         try {
@@ -641,12 +1245,15 @@ class SystemSettingController extends Controller
                 ], 404);
             }
 
+            $flags = $this->resolveProviderFlags();
+
             return response()->json([
                 'success' => true,
                 'data' => $this->getNotificationChannelStatus($settings),
                 'sms_providers' => $this->smsService->getAllProvidersWithStatus(),
-                'sms_configured' => $this->smsService->isConfigured(),
+                'sms_configured' => $flags['smsProviderConfigured'],
                 'sms_quick_status' => $this->smsService->getQuickStatus(),
+                'provider_flags' => $flags,
             ]);
         } catch (\Exception $e) {
             Log::error('Failed to get notification channel settings: ' . $e->getMessage());
@@ -659,9 +1266,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * POST /api/v1/admin/test-notification-channels
-     */
     public function testNotificationChannels(Request $request)
     {
         try {
@@ -688,7 +1292,6 @@ class SystemSettingController extends Controller
 
             $channels = $request->input('channels', ['email']);
 
-            // Require destination per requested channel.
             if (in_array('email', $channels, true) && !$request->filled('email')) {
                 return response()->json([
                     'success' => false,
@@ -707,11 +1310,13 @@ class SystemSettingController extends Controller
                 ], 422);
             }
 
-            $settings = SystemSetting::first();
+            $settings   = SystemSetting::first();
             $systemName = $settings->system_name ?? config('app.name', 'System');
             $testMessage = "🔔 This is a test notification from {$systemName}. Time: " . now()->format('Y-m-d H:i:s');
 
+            $flags   = $this->resolveProviderFlags();
             $results = [];
+
             foreach ($channels as $channel) {
                 switch ($channel) {
                     case 'email':
@@ -719,10 +1324,26 @@ class SystemSettingController extends Controller
                         break;
 
                     case 'sms':
+                        if (!$flags['smsProviderConfigured']) {
+                            $results['sms'] = [
+                                'success' => false,
+                                'message' => 'No SMS provider configured',
+                                'channel' => 'sms',
+                            ];
+                            break;
+                        }
                         $results['sms'] = $this->testSmsChannel($request->input('phone_number'), $testMessage);
                         break;
 
                     case 'whatsapp':
+                        if (!$flags['whatsappProviderConfigured']) {
+                            $results['whatsapp'] = [
+                                'success' => false,
+                                'message' => 'No WhatsApp provider configured',
+                                'channel' => 'whatsapp',
+                            ];
+                            break;
+                        }
                         $results['whatsapp'] = $this->testWhatsAppChannel($request->input('phone_number'), $testMessage);
                         break;
                 }
@@ -749,11 +1370,10 @@ class SystemSettingController extends Controller
         }
     }
 
-    // ==================== INVOICE / REMINDER SETTINGS ====================
+    /* ============================================================
+     | INVOICE / REMINDER SETTINGS
+     * ============================================================ */
 
-    /**
-     * GET /api/v1/admin/invoice-settings
-     */
     public function getInvoiceSettings(Request $request)
     {
         try {
@@ -786,9 +1406,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * POST /api/v1/admin/toggle-auto-invoice
-     */
     public function toggleAutoInvoiceGeneration(Request $request)
     {
         try {
@@ -799,6 +1416,9 @@ class SystemSettingController extends Controller
             if (!$this->isSuperAdmin($user)) {
                 return $this->forbiddenResponse('Unauthorized. Super Admin access required.');
             }
+
+            // ✅ BILLING: block write when system billing is overdue
+            $this->assertBillingAllowsWrite('api_toggle_auto_invoice_generation');
 
             $validator = Validator::make($request->all(), [
                 'enabled' => 'required|boolean',
@@ -864,11 +1484,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * POST /api/v1/admin/reminder-settings
-     *
-     * Mirrors the admin controller's updateReminderSettings. Was missing.
-     */
     public function updateReminderSettings(Request $request)
     {
         try {
@@ -879,6 +1494,9 @@ class SystemSettingController extends Controller
             if (!$this->isSuperAdmin($user)) {
                 return $this->forbiddenResponse('Unauthorized. Super Admin access required.');
             }
+
+            // ✅ BILLING: block write when system billing is overdue
+            $this->assertBillingAllowsWrite('api_update_reminder_settings');
 
             $validator = Validator::make($request->all(), [
                 'enabled' => 'required|boolean',
@@ -904,12 +1522,12 @@ class SystemSettingController extends Controller
             }
 
             $oldEnabled = (bool) $settings->send_payment_reminders;
-            $oldDays = (int) $settings->reminder_days_before;
+            $oldDays    = (int) $settings->reminder_days_before;
             $newEnabled = (bool) $request->enabled;
-            $newDays = (int) $request->days_before;
+            $newDays    = (int) $request->days_before;
 
             $settings->send_payment_reminders = $newEnabled;
-            $settings->reminder_days_before = $newDays;
+            $settings->reminder_days_before   = $newDays;
             $settings->updated_by = $user->id;
             $settings->save();
 
@@ -918,15 +1536,15 @@ class SystemSettingController extends Controller
             Log::info('Reminder settings updated via API', [
                 'old_enabled' => $oldEnabled,
                 'new_enabled' => $newEnabled,
-                'old_days' => $oldDays,
-                'new_days' => $newDays,
-                'updated_by' => $user->id,
+                'old_days'    => $oldDays,
+                'new_days'    => $newDays,
+                'updated_by'  => $user->id,
             ]);
 
             if ($oldEnabled !== $newEnabled || $oldDays !== $newDays) {
                 $this->notifyAboutReminderSettingChange($settings, [
                     'send_payment_reminders' => $oldEnabled,
-                    'reminder_days_before' => $oldDays,
+                    'reminder_days_before'   => $oldDays,
                 ]);
             }
 
@@ -951,11 +1569,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * POST /api/v1/admin/validate-invoice-settings
-     *
-     * Dry-run validation. Mirrors admin controller.
-     */
     public function validateInvoiceSettings(Request $request)
     {
         try {
@@ -999,11 +1612,10 @@ class SystemSettingController extends Controller
         }
     }
 
-    // ==================== REGISTRATION ====================
+    /* ============================================================
+     | REGISTRATION
+     * ============================================================ */
 
-    /**
-     * GET /api/v1/registration-status
-     */
     public function getRegistrationStatus()
     {
         try {
@@ -1029,7 +1641,6 @@ class SystemSettingController extends Controller
         } catch (\Exception $e) {
             Log::error('Failed to get registration status: ' . $e->getMessage());
 
-            // On failure, default to "allowed" so users aren't locked out.
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -1040,9 +1651,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * POST /api/v1/admin/toggle-registration
-     */
     public function toggleRegistration(Request $request)
     {
         try {
@@ -1053,6 +1661,9 @@ class SystemSettingController extends Controller
             if (!$this->isSuperAdmin($user)) {
                 return $this->forbiddenResponse('Unauthorized. Super Admin access required.');
             }
+
+            // ✅ BILLING: block write when system billing is overdue
+            $this->assertBillingAllowsWrite('api_toggle_registration');
 
             $validator = Validator::make($request->all(), [
                 'allow_registration' => 'required|boolean',
@@ -1096,11 +1707,7 @@ class SystemSettingController extends Controller
             ]);
 
             if ($oldStatus !== (bool) $settings->allow_registration) {
-                $this->notifySuperAdminsAboutRegistrationToggle(
-                    $settings,
-                    $user,
-                    $oldStatus
-                );
+                $this->notifySuperAdminsAboutRegistrationToggle($settings, $user, $oldStatus);
             }
 
             return response()->json([
@@ -1126,11 +1733,10 @@ class SystemSettingController extends Controller
         }
     }
 
-    // ==================== PAYMENT GATEWAYS ====================
+    /* ============================================================
+     | PAYMENT GATEWAYS
+     * ============================================================ */
 
-    /**
-     * GET /api/v1/admin/payment-gateways
-     */
     public function getPaymentGateways(Request $request)
     {
         try {
@@ -1185,9 +1791,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * PUT /api/v1/admin/payment-gateways
-     */
     public function updatePaymentGateways(Request $request)
     {
         try {
@@ -1195,6 +1798,9 @@ class SystemSettingController extends Controller
             if (!$user || !$this->isSuperAdmin($user)) {
                 return $this->forbiddenResponse('Unauthorized. Super Admin access required.');
             }
+
+            // ✅ BILLING: block write when system billing is overdue
+            $this->assertBillingAllowsWrite('api_update_payment_gateways');
 
             $validator = Validator::make($request->all(), [
                 'enable_expresspay' => 'nullable|boolean',
@@ -1292,11 +1898,10 @@ class SystemSettingController extends Controller
         }
     }
 
-    // ==================== TESTS ====================
+    /* ============================================================
+     | TESTS
+     * ============================================================ */
 
-    /**
-     * POST /api/v1/admin/test-configuration
-     */
     public function testSystemConfiguration(Request $request)
     {
         try {
@@ -1310,6 +1915,7 @@ class SystemSettingController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'test_type' => 'required|in:email,payments,all,invoice',
+                'queue' => 'sometimes|boolean',
             ]);
 
             if ($validator->fails()) {
@@ -1321,7 +1927,22 @@ class SystemSettingController extends Controller
                 ], 422);
             }
 
-            $testType = $request->test_type;
+            $testType  = $request->test_type;
+            $queueTest = $request->boolean('queue', false);
+
+            if ($queueTest && config('queue.default') !== 'sync') {
+                TestSystemConnection::dispatch($testType, $user->id);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'System configuration test queued for background processing',
+                    'test_type' => $testType,
+                    'queued' => true,
+                    'timestamp' => now()->toISOString(),
+                ]);
+            }
+
+            Artisan::call('config:clear');
             $result = $this->runSystemConfigurationTest($testType);
 
             $this->notifySuperAdminsAboutTestResults($result, $testType, $user);
@@ -1333,7 +1954,8 @@ class SystemSettingController extends Controller
                 'details' => $result['details'] ?? [],
                 'error_code' => $result['error_code'] ?? null,
                 'timestamp' => now()->toISOString(),
-            ]);
+                'queued' => false,
+            ], $result['success'] ? 200 : 400);
         } catch (\Exception $e) {
             Log::error('System configuration test failed: ' . $e->getMessage());
 
@@ -1345,11 +1967,6 @@ class SystemSettingController extends Controller
         }
     }
 
-    /**
-     * POST /api/v1/admin/test-reminder-system
-     *
-     * Mirrors the admin controller method. Was missing.
-     */
     public function testReminderSystem(Request $request)
     {
         try {
@@ -1383,217 +2000,292 @@ class SystemSettingController extends Controller
         }
     }
 
-    // ==================== HELPERS ====================
-
-    private function isAdminOrSuperAdmin(User $user): bool
+    /**
+     * POST /api/v1/admin/test-notification-system
+     * Fires an in-app test notification to the caller.
+     */
+    public function testNotificationSystem(Request $request)
     {
-        return in_array($user->type, [User::TYPE_SUPER_ADMIN, User::TYPE_ADMIN], true);
+        try {
+            $user = $request->user();
+            if (!$user) {
+                return $this->unauthorizedResponse('Unauthenticated.');
+            }
+
+            $settings = SystemSetting::first();
+
+            $testData = [
+                'title' => '🔔 Test Notification',
+                'message' => 'This is a test notification from the system settings API. Registration: ' .
+                             ($this->isRegistrationAllowed($settings) ? 'enabled' : 'disabled') .
+                             ', Auto Invoice: ' . (($settings?->auto_generate_invoices) ? 'enabled' : 'disabled') .
+                             ', Reminders: ' . (($settings?->send_payment_reminders) ? 'enabled' : 'disabled'),
+                'icon' => 'fas fa-bell text-primary',
+                'category' => 'test',
+                'action_url' => route('admin.system-settings.index'),
+                'priority' => 1,
+                'data' => [
+                    'type' => 'test',
+                    'timestamp' => now()->toISOString(),
+                    'notification_type' => 'in_app_only',
+                ],
+            ];
+
+            $this->notifyUserWithData($user, $testData);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Test notification sent. Check your notifications panel.',
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to send test notification: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to send test notification: ' . $e->getMessage(),
+                'error_code' => 'SERVER_ERROR',
+            ], 500);
+        }
     }
 
-    private function isSuperAdmin(User $user): bool
-    {
-        return $user->type === User::TYPE_SUPER_ADMIN;
-    }
+    /* ============================================================
+     | ENV SYNC DIAGNOSTICS
+     * ============================================================ */
 
-    private function unauthorizedResponse(string $message = 'Unauthenticated.')
+    /**
+     * GET /api/v1/admin/system-settings/update-status
+     * Returns whether the DB settings have been propagated to .env.
+     */
+    public function updateStatus(Request $request)
     {
-        return response()->json([
-            'success' => false,
-            'message' => $message,
-            'error_code' => 'UNAUTHENTICATED',
-        ], 401);
-    }
+        try {
+            $user = $request->user();
+            if (!$user) {
+                return $this->unauthorizedResponse('Unauthenticated.');
+            }
+            if (!$this->isAdminOrSuperAdmin($user)) {
+                return $this->forbiddenResponse('Unauthorized. Admin access required.');
+            }
 
-    private function forbiddenResponse(string $message = 'Unauthorized.')
-    {
-        return response()->json([
-            'success' => false,
-            'message' => $message,
-            'error_code' => 'UNAUTHORIZED',
-        ], 403);
-    }
+            $settings = SystemSetting::first();
+            $envAppName = env('APP_NAME');
+            $dbAppName  = $settings?->system_name;
 
-    private function clearPublicSettingsCache(): void
-    {
-        Cache::forget(self::PUBLIC_CACHE_KEY);
+            $done = $dbAppName && $envAppName &&
+                trim($envAppName, " \t\n\r\0\x0B\"'") === trim($dbAppName, " \t\n\r\0\x0B\"'");
+
+            $pendingJobs = \DB::table('jobs')
+                ->where('queue', 'system_configuration')
+                ->count();
+
+            $failedJobs = \DB::table('failed_jobs')
+                ->where('queue', 'system_configuration')
+                ->count();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'done'         => (bool) $done,
+                    'app_name'     => $envAppName,
+                    'db_name'      => $dbAppName,
+                    'pending_jobs' => $pendingJobs,
+                    'failed_jobs'  => $failedJobs,
+                    'queue_driver' => config('queue.default'),
+                    'checked_at'   => now()->toISOString(),
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'done'  => false,
+                'error' => $e->getMessage(),
+                'error_code' => 'SERVER_ERROR',
+            ], 500);
+        }
     }
 
     /**
-     * True if enabling/disabling the given gateways still leaves at least
-     * one gateway enabled (considering values not in $updateData).
+     * POST /api/v1/admin/system-settings/retry-env-update
      */
-    private function wouldKeepAtLeastOneGateway(array $updateData, array $oldSettings): bool
+    public function retryEnvUpdate(Request $request)
     {
-        $gateways = [
-            'enable_expresspay',
-            'enable_hubtel',
-            'enable_paystack',
-            'enable_flutterwave',
-        ];
+        try {
+            $user = $request->user();
+            if (!$user) {
+                return $this->unauthorizedResponse('Unauthenticated.');
+            }
+            if (!$this->isSuperAdmin($user)) {
+                return $this->forbiddenResponse('Unauthorized. Super Admin access required.');
+            }
 
-        $enabledCount = 0;
-        foreach ($gateways as $field) {
-            $value = array_key_exists($field, $updateData)
-                ? (bool) $updateData[$field]
-                : (bool) ($oldSettings[$field] ?? false);
-            if ($value) {
-                $enabledCount++;
+            // ✅ BILLING: block write when system billing is overdue
+            $this->assertBillingAllowsWrite('api_retry_env_update');
+
+            $settings = SystemSetting::first();
+            if (!$settings) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'System settings not found.',
+                    'error_code' => 'SETTINGS_NOT_FOUND',
+                ], 404);
+            }
+
+            $envData = [
+                'APP_NAME'          => $settings->system_name,
+                'APP_SHORT_NAME'    => $settings->system_short_name,
+                'MAIL_FROM_ADDRESS' => $settings->system_email,
+            ];
+
+            if (!empty($settings->sms_sender_id)) {
+                $envData['DEFAULT_SMS_SENDER_ID'] = $settings->sms_sender_id;
+            }
+
+            UpdateSystemConfiguration::dispatch(
+                $settings,
+                $envData,
+                $user->id,
+                'manual_retry'
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Configuration update queued for background processing.',
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to queue configuration update: ' . $e->getMessage(),
+                'error_code' => 'SERVER_ERROR',
+            ], 500);
+        }
+    }
+
+    /* ============================================================
+     | ENV PROPAGATION HELPERS
+     * ============================================================ */
+
+    protected function queueSystemConfigurationUpdate($settings, $requestData, $action = 'update'): array
+    {
+        try {
+            $envData = $this->getSystemEnvData($settings, $requestData, $action);
+
+            if (empty($envData)) {
+                return [
+                    'success' => true,
+                    'message' => 'No environment variables required updating',
+                    'method'  => 'noop',
+                ];
+            }
+
+            if (config('queue.default') === 'sync') {
+                dispatch(function () use ($settings, $envData, $action) {
+                    (new UpdateSystemConfiguration(
+                        $settings,
+                        $envData,
+                        auth()->id(),
+                        $action
+                    ))->handle();
+                })->afterResponse();
+
+                return [
+                    'success' => true,
+                    'message' => 'System configuration update scheduled after response',
+                    'method'  => 'after_response',
+                ];
+            }
+
+            UpdateSystemConfiguration::dispatch(
+                $settings,
+                $envData,
+                auth()->id(),
+                $action
+            );
+
+            return [
+                'success' => true,
+                'message' => 'System configuration update queued successfully',
+                'method'  => 'queue',
+            ];
+        } catch (\Throwable $e) {
+            Log::error('Failed to dispatch system configuration update', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Failed to schedule system configuration update: ' . $e->getMessage(),
+            ];
+        }
+    }
+
+    protected function getSystemEnvData($settings, $requestData, $action): array
+    {
+        $envData = [];
+
+        $systemName = $requestData['system_name']
+            ?? $settings->system_name
+            ?? config('app.name')
+            ?? 'Property Management System';
+
+        $systemShortName = $requestData['system_short_name']
+            ?? $settings->system_short_name
+            ?? Str::slug($systemName);
+
+        if (!empty($systemName)) {
+            $envData['APP_NAME']       = $systemName;
+            $envData['APP_SHORT_NAME'] = $systemShortName;
+        }
+
+        if (isset($requestData['system_email']) || isset($settings->system_email)) {
+            $envData['MAIL_FROM_ADDRESS'] = $requestData['system_email'] ?? $settings->system_email;
+
+            if (isset($requestData['system_email_password']) && !empty($requestData['system_email_password'])) {
+                $envData['MAIL_PASSWORD'] = $requestData['system_email_password'];
             }
         }
 
-        return $enabledCount > 0;
-    }
-
-    /**
-     * Validate the update payload. Only fields in `getUpdatableFields()`
-     * are considered; each has a proper rule.
-     */
-    private function validateUpdateRequest(Request $request): \Illuminate\Validation\Validator
-    {
-        return Validator::make($request->all(), [
-            // System identification
-            'system_name' => 'sometimes|string|max:255',
-            'system_short_name' => 'sometimes|string|max:50|alpha_dash',
-            'system_email' => 'sometimes|email|max:255',
-            'system_phone' => 'sometimes|string|max:20',
-            'system_address' => 'sometimes|nullable|string|max:500',
-
-            // Currency
-            'currency_code' => 'sometimes|string|size:3',
-            'currency_symbol' => 'sometimes|string|max:5',
-            'currency_position' => 'sometimes|in:left,right,left_with_space,right_with_space',
-            'decimal_places' => 'sometimes|integer|min:0|max:4',
-
-            // Payment gateways
-            'enable_expresspay' => 'sometimes|boolean',
-            'enable_hubtel' => 'sometimes|boolean',
-            'enable_paystack' => 'sometimes|boolean',
-            'enable_flutterwave' => 'sometimes|boolean',
-
-            // Tenant invoicing
-            'enable_tenant_invoicing' => 'sometimes|boolean',
-            'tenant_monthly_dues_amount' => 'sometimes|nullable|numeric|min:0',
-            'tenant_calculation_method' => 'sometimes|nullable|in:fixed,per_property_unit',
-            'auto_generate_tenant_invoices' => 'sometimes|boolean',
-            'send_tenant_payment_reminders' => 'sometimes|boolean',
-            'tenant_grace_period_days' => 'sometimes|nullable|integer|min:0|max:30',
-            'tenant_late_payment_percentage' => 'sometimes|nullable|numeric|min:0|max:100',
-            'tenant_fixed_penalty_amount' => 'sometimes|nullable|numeric|min:0',
-
-            // Notification channels
-            'invoice_notification_channels' => 'sometimes|array',
-            'invoice_notification_channels.*' => 'in:email,sms,whatsapp',
-            'payment_reminder_channels' => 'sometimes|array',
-            'payment_reminder_channels.*' => 'in:email,sms,whatsapp',
-            'overdue_notification_channels' => 'sometimes|array',
-            'overdue_notification_channels.*' => 'in:email,sms,whatsapp',
-            'payment_confirmation_channels' => 'sometimes|array',
-            'payment_confirmation_channels.*' => 'in:email,sms,whatsapp',
-
-            // SMS
-            'sms_notifications_enabled' => 'sometimes|boolean',
-            'sms_reminder_enabled' => 'sometimes|boolean',
-            'sms_payment_confirmation_enabled' => 'sometimes|boolean',
-            'sms_daily_limit_per_user' => 'sometimes|integer|min:1|max:100',
-            'sms_hourly_limit_per_user' => 'sometimes|integer|min:1|max:20',
-
-            // WhatsApp
-            'enable_whatsapp_notifications' => 'sometimes|boolean',
-            'whatsapp_reminder_enabled' => 'sometimes|boolean',
-            'whatsapp_provider' => 'sometimes|nullable|in:twilio,vonage,custom',
-
-            // Legacy dues
-            'monthly_dues_amount' => 'sometimes|numeric|min:0',
-            'calculation_method' => 'sometimes|in:fixed,per_property',
-            'per_property_amount' => 'sometimes|nullable|numeric|min:0',
-            'grace_period_days' => 'sometimes|integer|min:0|max:30',
-            'late_payment_percentage' => 'sometimes|numeric|min:0|max:100',
-            'fixed_penalty_amount' => 'sometimes|nullable|numeric|min:0',
-            'auto_generate_invoices' => 'sometimes|boolean',
-            'send_payment_reminders' => 'sometimes|boolean',
-            'reminder_days_before' => 'sometimes|integer|min:1|max:30',
-            'enable_bulk_payments' => 'sometimes|boolean',
-            'max_bulk_months' => 'sometimes|integer|min:1|max:12',
-            'bulk_payment_discount' => 'sometimes|nullable|numeric|min:0|max:100',
-
-            // Registration
-            'allow_registration' => 'sometimes|boolean',
-            'registration_disabled_message' => 'sometimes|nullable|string|max:500',
-        ]);
-    }
-
-    /**
-     * Build the $updateData payload from a validated request.
-     * Only whitelisted fields are included.
-     */
-    private function buildUpdateData(Request $request): array
-    {
-        $updateData = [];
-
-        foreach ($this->getUpdatableFields() as $field) {
-            if (!$request->has($field)) {
-                continue;
-            }
-
-            $value = $request->input($field);
-
-            // Boolean coercion
-            if ($this->isBooleanField($field)) {
-                $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
-            }
-
-            // Channel arrays: ensure email present, dedupe, reindex.
-            if (in_array($field, [
-                'invoice_notification_channels',
-                'payment_reminder_channels',
-                'overdue_notification_channels',
-                'payment_confirmation_channels',
-            ], true)) {
-                if (is_string($value)) {
-                    $value = json_decode($value, true) ?: ['email'];
-                }
-                if (!is_array($value) || empty($value)) {
-                    $value = ['email'];
-                }
-                if (!in_array('email', $value, true)) {
-                    $value[] = 'email';
-                }
-                $value = array_values(array_unique($value));
-            }
-
-            $updateData[$field] = $value;
+        if (!empty($settings->sms_sender_id)) {
+            $envData['DEFAULT_SMS_SENDER_ID'] = $settings->sms_sender_id;
         }
 
-        return $updateData;
+        return $envData;
     }
 
-    /**
-     * Whitelist of fields the API is allowed to update.
-     * Mirrors the admin controller's list.
-     */
-    private function getUpdatableFields(): array
+    /* ============================================================
+     | CHANGE TRACKING + NOTIFICATION
+     * ============================================================ */
+
+    protected function trackAndNotifyChanges(SystemSetting $settings, array $oldSettings, User $user): void
     {
-        return [
-            // System identification
-            'system_name',
-            'system_short_name',
-            'system_email',
-            'system_phone',
-            'system_address',
+        if ($this->trackNotificationChannelChanges($oldSettings, $settings->toArray())) {
+            $this->notifyAboutNotificationChannelChange($settings, $oldSettings);
+        }
 
-            // Currency
-            'currency_code',
-            'currency_symbol',
-            'currency_position',
-            'decimal_places',
+        if ($this->trackTenantInvoiceChanges($oldSettings, $settings->toArray())) {
+            $this->notifyAboutTenantInvoiceChange($settings, $oldSettings);
+        }
 
-            // Payment gateways
-            'enable_expresspay',
-            'enable_hubtel',
-            'enable_paystack',
-            'enable_flutterwave',
+        if ($this->trackInvoiceSettingsChanges($oldSettings, $settings->toArray())) {
+            $this->notifyAboutInvoiceSettingChange($settings, $oldSettings);
+        }
 
-            // Tenant invoicing
+        if ($this->trackReminderSettingsChanges($oldSettings, $settings->toArray())) {
+            $this->notifyAboutReminderSettingChange($settings, $oldSettings);
+        }
+
+        if (($oldSettings['allow_registration'] ?? true) != ($settings->allow_registration ?? true)) {
+            $this->notifySuperAdminsAboutRegistrationToggle(
+                $settings,
+                $user,
+                (bool) ($oldSettings['allow_registration'] ?? true)
+            );
+        }
+    }
+
+    private function trackTenantInvoiceChanges(array $oldSettings, array $newSettings): bool
+    {
+        $tenantFields = [
             'enable_tenant_invoicing',
             'tenant_monthly_dues_amount',
             'tenant_calculation_method',
@@ -1602,168 +2294,51 @@ class SystemSettingController extends Controller
             'tenant_grace_period_days',
             'tenant_late_payment_percentage',
             'tenant_fixed_penalty_amount',
-
-            // Notification channels
-            'invoice_notification_channels',
-            'payment_reminder_channels',
-            'overdue_notification_channels',
-            'payment_confirmation_channels',
-
-            // SMS
-            'sms_notifications_enabled',
-            'sms_reminder_enabled',
-            'sms_payment_confirmation_enabled',
-            'sms_daily_limit_per_user',
-            'sms_hourly_limit_per_user',
-
-            // WhatsApp
-            'enable_whatsapp_notifications',
-            'whatsapp_reminder_enabled',
-            'whatsapp_provider',
-
-            // Legacy / misc
-            'monthly_dues_amount',
-            'calculation_method',
-            'per_property_amount',
-            'grace_period_days',
-            'late_payment_percentage',
-            'fixed_penalty_amount',
-            'auto_generate_invoices',
-            'send_payment_reminders',
-            'reminder_days_before',
-            'enable_bulk_payments',
-            'max_bulk_months',
-            'bulk_payment_discount',
-            'allow_registration',
-            'registration_disabled_message',
-        ];
-    }
-
-    private function isBooleanField(string $field): bool
-    {
-        static $booleanFields = [
-            'enable_expresspay',
-            'enable_hubtel',
-            'enable_paystack',
-            'enable_flutterwave',
-            'enable_tenant_invoicing',
-            'auto_generate_tenant_invoices',
-            'send_tenant_payment_reminders',
-            'sms_notifications_enabled',
-            'sms_reminder_enabled',
-            'sms_payment_confirmation_enabled',
-            'enable_whatsapp_notifications',
-            'whatsapp_reminder_enabled',
-            'auto_generate_invoices',
-            'send_payment_reminders',
-            'enable_bulk_payments',
-            'allow_registration',
         ];
 
-        return in_array($field, $booleanFields, true);
-    }
-
-    // ==================== REGISTRATION HELPERS ====================
-
-    private function isRegistrationAllowed($settings): bool
-    {
-        if (!$settings) {
-            return true;
+        foreach ($tenantFields as $field) {
+            if (isset($oldSettings[$field], $newSettings[$field]) &&
+                $oldSettings[$field] != $newSettings[$field]) {
+                return true;
+            }
+            if (isset($newSettings[$field]) && !isset($oldSettings[$field])) {
+                return true;
+            }
+            if (isset($oldSettings[$field]) && !isset($newSettings[$field])) {
+                return true;
+            }
         }
-        if (method_exists($settings, 'isRegistrationAllowed')) {
-            return (bool) $settings->isRegistrationAllowed();
+
+        return false;
+    }
+
+    private function trackInvoiceSettingsChanges(array $oldSettings, array $newSettings): bool
+    {
+        foreach (['auto_generate_invoices'] as $field) {
+            if (isset($oldSettings[$field], $newSettings[$field]) &&
+                $oldSettings[$field] != $newSettings[$field]) {
+                return true;
+            }
         }
-        return (bool) ($settings->allow_registration ?? true);
+
+        return false;
     }
 
-    private function getRegistrationDisabledMessage($settings): ?string
+    private function trackReminderSettingsChanges(array $oldSettings, array $newSettings): bool
     {
-        if (!$settings) {
-            return null;
+        foreach (['send_payment_reminders', 'reminder_days_before'] as $field) {
+            if (isset($oldSettings[$field], $newSettings[$field]) &&
+                $oldSettings[$field] != $newSettings[$field]) {
+                return true;
+            }
         }
-        if (method_exists($settings, 'getRegistrationDisabledMessage')) {
-            return $settings->getRegistrationDisabledMessage();
-        }
-        return $settings->registration_disabled_message ?? null;
+
+        return false;
     }
 
-    // ==================== NOTIFICATION HELPERS ====================
-
-    /**
-     * Channel status snapshot used by GET endpoints.
-     */
-    protected function getNotificationChannelStatus(SystemSetting $settings): array
-    {
-        return [
-            'invoice_notification_channels' => $settings->invoice_notification_channels ?? ['email'],
-            'invoice_notification_summary' => $this->formatChannelSummary($settings->invoice_notification_channels ?? ['email']),
-            'payment_reminder_channels' => $settings->payment_reminder_channels ?? ['email'],
-            'payment_reminder_summary' => $this->formatChannelSummary($settings->payment_reminder_channels ?? ['email']),
-            'overdue_notification_channels' => $settings->overdue_notification_channels ?? ['email', 'sms'],
-            'overdue_notification_summary' => $this->formatChannelSummary($settings->overdue_notification_channels ?? ['email', 'sms']),
-            'payment_confirmation_channels' => $settings->payment_confirmation_channels ?? ['email'],
-            'payment_confirmation_summary' => $this->formatChannelSummary($settings->payment_confirmation_channels ?? ['email']),
-            'sms_notifications_enabled' => (bool) ($settings->sms_notifications_enabled ?? false),
-            'sms_reminder_enabled' => (bool) ($settings->sms_reminder_enabled ?? false),
-            'sms_payment_confirmation_enabled' => (bool) ($settings->sms_payment_confirmation_enabled ?? false),
-            'sms_daily_limit_per_user' => $settings->sms_daily_limit_per_user ?? 10,
-            'sms_hourly_limit_per_user' => $settings->sms_hourly_limit_per_user ?? 3,
-            'enable_whatsapp_notifications' => (bool) ($settings->enable_whatsapp_notifications ?? false),
-            'whatsapp_reminder_enabled' => (bool) ($settings->whatsapp_reminder_enabled ?? false),
-            'whatsapp_provider' => $settings->whatsapp_provider ?? null,
-            'email_notifications_enabled' => true,
-        ];
-    }
-
-    protected function formatChannelSummary(array $channels): string
-    {
-        $channelNames = [
-            'email' => '📧 Email',
-            'sms' => '📱 SMS',
-            'whatsapp' => '💬 WhatsApp',
-        ];
-
-        $names = array_map(
-            fn($channel) => $channelNames[$channel] ?? $channel,
-            $channels
-        );
-
-        return implode(' + ', $names);
-    }
-
-    /**
-     * Invoice generation status snapshot.
-     */
-    private function getInvoiceGenerationStatus(SystemSetting $settings): array
-    {
-        $nextMonth = now()->addMonth();
-        $dueDate = $settings->calculateDueDateForPeriod($nextMonth);
-
-        $readiness = $settings->isReadyForAutoInvoiceGeneration();
-
-        return [
-            'auto_generate_enabled' => $settings->isAutoInvoiceGenerationEnabled(),
-            'next_generation_month' => $nextMonth->format('F Y'),
-            'next_generation_date' => $settings->getNextInvoiceGenerationDate()->format('F j, Y'),
-            'next_due_date' => $dueDate->format('F j, Y'),
-            'reminders_enabled' => $settings->shouldSendPaymentReminders(),
-            'reminder_days' => $settings->getReminderDaysBefore(),
-            'grace_period' => $settings->grace_period_days,
-            'is_ready' => $readiness['ready'] ?? false,
-            'readiness_issues' => $readiness['issues'] ?? [],
-        ];
-    }
-
-    /**
-     * Detect notification channel changes.
-     */
     protected function trackNotificationChannelChanges(array $oldSettings, array $newSettings): bool
     {
-        $channelFields = [
-            'invoice_notification_channels',
-            'payment_reminder_channels',
-            'overdue_notification_channels',
-            'payment_confirmation_channels',
+        $channelFields = array_merge(self::CHANNEL_FIELDS, [
             'sms_notifications_enabled',
             'sms_reminder_enabled',
             'sms_payment_confirmation_enabled',
@@ -1771,18 +2346,14 @@ class SystemSettingController extends Controller
             'sms_hourly_limit_per_user',
             'enable_whatsapp_notifications',
             'whatsapp_reminder_enabled',
-        ];
+        ]);
 
         foreach ($channelFields as $field) {
             $oldValue = $oldSettings[$field] ?? null;
             $newValue = $newSettings[$field] ?? null;
 
-            if (is_array($oldValue)) {
-                $oldValue = json_encode($oldValue);
-            }
-            if (is_array($newValue)) {
-                $newValue = json_encode($newValue);
-            }
+            if (is_array($oldValue)) $oldValue = json_encode($oldValue);
+            if (is_array($newValue)) $newValue = json_encode($newValue);
 
             if ($oldValue != $newValue) {
                 return true;
@@ -1792,9 +2363,6 @@ class SystemSettingController extends Controller
         return false;
     }
 
-    /**
-     * Notify super admins about notification-channel changes.
-     */
     protected function notifyAboutNotificationChannelChange(SystemSetting $settings, array $oldSettings): void
     {
         try {
@@ -1805,8 +2373,8 @@ class SystemSettingController extends Controller
 
             $oldInvoiceChannels = $oldSettings['invoice_notification_channels'] ?? ['email'];
             $newInvoiceChannels = $settings->invoice_notification_channels ?? ['email'];
-            $oldSmsEnabled = $oldSettings['sms_notifications_enabled'] ?? false;
-            $newSmsEnabled = $settings->sms_notifications_enabled ?? false;
+            $oldSmsEnabled      = $oldSettings['sms_notifications_enabled'] ?? false;
+            $newSmsEnabled      = $settings->sms_notifications_enabled ?? false;
             $oldWhatsAppEnabled = $oldSettings['enable_whatsapp_notifications'] ?? false;
             $newWhatsAppEnabled = $settings->enable_whatsapp_notifications ?? false;
 
@@ -1853,19 +2421,65 @@ class SystemSettingController extends Controller
             foreach ($superAdmins as $admin) {
                 $this->notifyUserWithData($admin, $notificationData);
             }
-
-            Log::info('Notification channel change notification sent', [
-                'admin_count' => $superAdmins->count(),
-                'changes' => $changes,
-            ]);
         } catch (\Exception $e) {
             Log::error('Failed to notify about notification channel change: ' . $e->getMessage());
         }
     }
 
-    /**
-     * Notify super admins about invoice settings change.
-     */
+    protected function notifyAboutTenantInvoiceChange(SystemSetting $settings, array $oldSettings): void
+    {
+        try {
+            $superAdmins = $this->getActiveSuperAdmins();
+            if ($superAdmins->isEmpty()) {
+                return;
+            }
+
+            $oldEnabled = $oldSettings['enable_tenant_invoicing'] ?? false;
+            $newEnabled = (bool) $settings->enable_tenant_invoicing;
+
+            $title = $newEnabled ? '👥 Tenant Invoicing Enabled' : '👥 Tenant Invoicing Disabled';
+            $icon  = $newEnabled ? 'fas fa-users text-info' : 'fas fa-users-slash text-warning';
+
+            $message = "Tenant invoicing has been " . ($newEnabled ? 'enabled' : 'disabled') . ". ";
+
+            if ($newEnabled) {
+                $amount = method_exists($settings, 'formatAmount')
+                    ? $settings->formatAmount($settings->tenant_monthly_dues_amount ?? 0)
+                    : ($settings->tenant_monthly_dues_amount ?? 0);
+                $method = method_exists($settings, 'getTenantCalculationMethodText')
+                    ? $settings->getTenantCalculationMethodText()
+                    : ($settings->tenant_calculation_method ?? 'fixed');
+                $message .= "Monthly dues: {$amount}, Calculation: {$method}.";
+            }
+
+            $notificationData = [
+                'title' => $title,
+                'message' => $message,
+                'icon' => $icon,
+                'category' => 'tenant_invoice_settings',
+                'action_url' => route('admin.system-settings.index'),
+                'priority' => 2,
+                'data' => [
+                    'type' => 'tenant_invoice_change',
+                    'old_enabled' => $oldEnabled,
+                    'new_enabled' => $newEnabled,
+                    'old_amount' => $oldSettings['tenant_monthly_dues_amount'] ?? 0,
+                    'new_amount' => $settings->tenant_monthly_dues_amount,
+                    'old_method' => $oldSettings['tenant_calculation_method'] ?? 'fixed',
+                    'new_method' => $settings->tenant_calculation_method,
+                    'changed_by' => auth()->id(),
+                    'timestamp' => now()->toISOString(),
+                ],
+            ];
+
+            foreach ($superAdmins as $admin) {
+                $this->notifyUserWithData($admin, $notificationData);
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to notify about tenant invoice change: ' . $e->getMessage());
+        }
+    }
+
     protected function notifyAboutInvoiceSettingChange(SystemSetting $settings, array $oldSettings): void
     {
         try {
@@ -1909,19 +2523,11 @@ class SystemSettingController extends Controller
             foreach ($superAdmins as $admin) {
                 $this->notifyUserWithData($admin, $notificationData);
             }
-
-            Log::info('Invoice setting change notification sent', [
-                'admin_count' => $superAdmins->count(),
-                'new_status' => $newStatus,
-            ]);
         } catch (\Exception $e) {
             Log::error('Failed to notify about invoice setting change: ' . $e->getMessage());
         }
     }
 
-    /**
-     * Notify super admins about reminder settings change.
-     */
     protected function notifyAboutReminderSettingChange(SystemSetting $settings, array $oldSettings): void
     {
         try {
@@ -1932,8 +2538,8 @@ class SystemSettingController extends Controller
 
             $oldEnabled = $oldSettings['send_payment_reminders'] ?? false;
             $newEnabled = (bool) $settings->send_payment_reminders;
-            $oldDays = $oldSettings['reminder_days_before'] ?? 7;
-            $newDays = (int) $settings->reminder_days_before;
+            $oldDays    = $oldSettings['reminder_days_before'] ?? 7;
+            $newDays    = (int) $settings->reminder_days_before;
 
             if ((bool) $oldEnabled === $newEnabled && $oldDays === $newDays) {
                 return;
@@ -1972,20 +2578,11 @@ class SystemSettingController extends Controller
             foreach ($superAdmins as $admin) {
                 $this->notifyUserWithData($admin, $notificationData);
             }
-
-            Log::info('Reminder setting change notification sent', [
-                'admin_count' => $superAdmins->count(),
-                'new_enabled' => $newEnabled,
-                'new_days' => $newDays,
-            ]);
         } catch (\Exception $e) {
             Log::error('Failed to notify about reminder setting change: ' . $e->getMessage());
         }
     }
 
-    /**
-     * Notify super admins about registration toggle.
-     */
     protected function notifySuperAdminsAboutRegistrationToggle(SystemSetting $settings, User $toggler, bool $oldStatus): void
     {
         try {
@@ -1995,7 +2592,7 @@ class SystemSettingController extends Controller
             }
 
             $newStatus = (bool) $settings->allow_registration;
-            $action = $newStatus ? 'enabled' : 'disabled';
+            $action    = $newStatus ? 'enabled' : 'disabled';
 
             $notificationData = [
                 'title' => $newStatus ? '🔓 Registration Enabled' : '🔒 Registration Disabled',
@@ -2021,20 +2618,11 @@ class SystemSettingController extends Controller
             foreach ($superAdmins as $admin) {
                 $this->notifyUserWithData($admin, $notificationData);
             }
-
-            Log::info('Notified super admins about registration toggle', [
-                'admin_count' => $superAdmins->count(),
-                'new_status' => $newStatus,
-                'toggler_id' => $toggler->id,
-            ]);
         } catch (\Exception $e) {
             Log::error('Failed to notify super admins about registration toggle: ' . $e->getMessage());
         }
     }
 
-    /**
-     * Notify super admins about test results.
-     */
     protected function notifySuperAdminsAboutTestResults(array $testResults, string $testType, User $tester): void
     {
         try {
@@ -2066,49 +2654,89 @@ class SystemSettingController extends Controller
             foreach ($superAdmins as $admin) {
                 $this->notifyUserWithData($admin, $notificationData);
             }
-
-            Log::info('Notified super admins about test results', [
-                'admin_count' => $superAdmins->count(),
-                'test_type' => $testType,
-                'success' => $testResults['success'],
-            ]);
         } catch (\Exception $e) {
             Log::error('Failed to notify super admins about test results: ' . $e->getMessage());
         }
     }
 
-    /**
-     * Track and notify all relevant change categories.
-     */
-    protected function trackAndNotifyChanges(SystemSetting $settings, array $oldSettings, User $user): void
+    /* ============================================================
+     | SETTINGS REMINDER CLEANUP
+     * ============================================================ */
+
+    protected function clearSettingsReminders(): void
     {
-        if ($this->trackNotificationChannelChanges($oldSettings, $settings->toArray())) {
-            $this->notifyAboutNotificationChannelChange($settings, $oldSettings);
-        }
+        try {
+            $superAdmins = $this->getActiveSuperAdmins();
 
-        if (($oldSettings['auto_generate_invoices'] ?? false) != ($settings->auto_generate_invoices ?? false)) {
-            $this->notifyAboutInvoiceSettingChange($settings, $oldSettings);
-        }
+            foreach ($superAdmins as $admin) {
+                Cache::forget("user_{$admin->id}_last_settings_reminder");
+                Cache::forget("user_{$admin->id}_last_reminder_type");
 
-        if (
-            ($oldSettings['send_payment_reminders'] ?? false) != ($settings->send_payment_reminders ?? false) ||
-            ($oldSettings['reminder_days_before'] ?? 7) != ($settings->reminder_days_before ?? 7)
-        ) {
-            $this->notifyAboutReminderSettingChange($settings, $oldSettings);
-        }
+                if (session()->has("settings_reminder_{$admin->id}")) {
+                    session()->forget("settings_reminder_{$admin->id}");
+                }
+            }
 
-        if (($oldSettings['allow_registration'] ?? true) != ($settings->allow_registration ?? true)) {
-            $this->notifySuperAdminsAboutRegistrationToggle(
-                $settings,
-                $user,
-                (bool) ($oldSettings['allow_registration'] ?? true)
-            );
+            Cache::forget('last_settings_reminder_sent');
+            Cache::forget('settings_reminder_active');
+
+            if (session()->has('pending_system_update')) {
+                session()->forget('pending_system_update');
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to clear settings reminders: ' . $e->getMessage());
         }
     }
 
-    /**
-     * Cache-friendly super admin lookup.
-     */
+    /* ============================================================
+     | HELPERS
+     * ============================================================ */
+
+    protected function unauthorizedResponse(string $message = 'Unauthenticated.')
+    {
+        return response()->json([
+            'success' => false,
+            'message' => $message,
+            'error_code' => 'UNAUTHENTICATED',
+        ], 401);
+    }
+
+    protected function forbiddenResponse(string $message = 'Unauthorized.')
+    {
+        return response()->json([
+            'success' => false,
+            'message' => $message,
+            'error_code' => 'UNAUTHORIZED',
+        ], 403);
+    }
+
+    protected function clearPublicSettingsCache(): void
+    {
+        Cache::forget(self::PUBLIC_CACHE_KEY);
+    }
+
+    private function wouldKeepAtLeastOneGateway(array $updateData, array $oldSettings): bool
+    {
+        $gateways = [
+            'enable_expresspay',
+            'enable_hubtel',
+            'enable_paystack',
+            'enable_flutterwave',
+        ];
+
+        $enabledCount = 0;
+        foreach ($gateways as $field) {
+            $value = array_key_exists($field, $updateData)
+                ? (bool) $updateData[$field]
+                : (bool) ($oldSettings[$field] ?? false);
+            if ($value) {
+                $enabledCount++;
+            }
+        }
+
+        return $enabledCount > 0;
+    }
+
     private function getActiveSuperAdmins()
     {
         return User::where('type', User::TYPE_SUPER_ADMIN)
@@ -2116,7 +2744,270 @@ class SystemSettingController extends Controller
             ->get();
     }
 
-    // ==================== TEST HELPERS ====================
+    private function isRegistrationAllowed($settings): bool
+    {
+        if (!$settings) {
+            return true;
+        }
+        if (method_exists($settings, 'isRegistrationAllowed')) {
+            return (bool) $settings->isRegistrationAllowed();
+        }
+        return (bool) ($settings->allow_registration ?? true);
+    }
+
+    private function getRegistrationDisabledMessage($settings): ?string
+    {
+        if (!$settings) {
+            return null;
+        }
+        if (method_exists($settings, 'getRegistrationDisabledMessage')) {
+            return $settings->getRegistrationDisabledMessage();
+        }
+        return $settings->registration_disabled_message ?? null;
+    }
+
+    protected function getNotificationChannelStatus(SystemSetting $settings): array
+    {
+        return [
+            'invoice_notification_channels' => $settings->invoice_notification_channels ?? ['email'],
+            'invoice_notification_summary' => $this->formatChannelSummary($settings->invoice_notification_channels ?? ['email']),
+            'payment_reminder_channels' => $settings->payment_reminder_channels ?? ['email'],
+            'payment_reminder_summary' => $this->formatChannelSummary($settings->payment_reminder_channels ?? ['email']),
+            'overdue_notification_channels' => $settings->overdue_notification_channels ?? ['email', 'sms'],
+            'overdue_notification_summary' => $this->formatChannelSummary($settings->overdue_notification_channels ?? ['email', 'sms']),
+            'payment_confirmation_channels' => $settings->payment_confirmation_channels ?? ['email'],
+            'payment_confirmation_summary' => $this->formatChannelSummary($settings->payment_confirmation_channels ?? ['email']),
+            'sms_notifications_enabled' => (bool) ($settings->sms_notifications_enabled ?? false),
+            'sms_reminder_enabled' => (bool) ($settings->sms_reminder_enabled ?? false),
+            'sms_payment_confirmation_enabled' => (bool) ($settings->sms_payment_confirmation_enabled ?? false),
+            'sms_daily_limit_per_user' => $settings->sms_daily_limit_per_user ?? 10,
+            'sms_hourly_limit_per_user' => $settings->sms_hourly_limit_per_user ?? 3,
+            'enable_whatsapp_notifications' => (bool) ($settings->enable_whatsapp_notifications ?? false),
+            'whatsapp_reminder_enabled' => (bool) ($settings->whatsapp_reminder_enabled ?? false),
+            'whatsapp_provider' => $settings->whatsapp_provider ?? null,
+            'email_notifications_enabled' => true,
+        ];
+    }
+
+    protected function formatChannelSummary(array $channels): string
+    {
+        $channelNames = [
+            'email' => '📧 Email',
+            'sms' => '📱 SMS',
+            'whatsapp' => '💬 WhatsApp',
+        ];
+
+        $names = array_map(
+            fn($channel) => $channelNames[$channel] ?? $channel,
+            $channels
+        );
+
+        return implode(' + ', $names);
+    }
+
+    private function getInvoiceGenerationStatus(SystemSetting $settings): array
+    {
+        $nextMonth = now()->addMonth();
+        $dueDate   = $settings->calculateDueDateForPeriod($nextMonth);
+
+        $readiness = $settings->isReadyForAutoInvoiceGeneration();
+
+        return [
+            'auto_generate_enabled' => $settings->isAutoInvoiceGenerationEnabled(),
+            'next_generation_month' => $nextMonth->format('F Y'),
+            'next_generation_date' => $settings->getNextInvoiceGenerationDate()->format('F j, Y'),
+            'next_due_date' => $dueDate->format('F j, Y'),
+            'reminders_enabled' => $settings->shouldSendPaymentReminders(),
+            'reminder_days' => $settings->getReminderDaysBefore(),
+            'grace_period' => $settings->grace_period_days,
+            'is_ready' => $readiness['ready'] ?? false,
+            'readiness_issues' => $readiness['issues'] ?? [],
+        ];
+    }
+
+    /* ============================================================
+     | VALIDATION + BUILD UPDATE DATA
+     * ============================================================ */
+
+    private function validateUpdateRequest(Request $request): \Illuminate\Validation\Validator
+    {
+        return Validator::make($request->all(), [
+            'system_name' => 'sometimes|string|max:255',
+            'system_short_name' => 'sometimes|string|max:50|alpha_dash',
+            'system_email' => 'sometimes|email|max:255',
+            'system_email_password' => 'sometimes|nullable|string|min:0',
+            'system_phone' => 'sometimes|string|max:20',
+            'system_address' => 'sometimes|nullable|string|max:500',
+
+            'system_logo' => 'sometimes|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
+            'remove_logo' => 'sometimes|boolean',
+            'system_favicon' => 'sometimes|image|mimes:ico,png,svg,jpg,jpeg,gif|max:100',
+            'remove_favicon' => 'sometimes|boolean',
+
+            'sms_sender_id' => [
+                'sometimes',
+                'nullable',
+                'string',
+                'max:11',
+                'regex:/^[A-Za-z0-9 _\-]*$/',
+            ],
+
+            'currency_code' => 'sometimes|string|size:3',
+            'currency_symbol' => 'sometimes|string|max:5',
+            'currency_position' => 'sometimes|in:left,right,left_with_space,right_with_space',
+            'decimal_places' => 'sometimes|integer|min:0|max:4',
+
+            'enable_expresspay' => 'sometimes|boolean',
+            'enable_hubtel' => 'sometimes|boolean',
+            'enable_paystack' => 'sometimes|boolean',
+            'enable_flutterwave' => 'sometimes|boolean',
+
+            'enable_tenant_invoicing' => 'sometimes|boolean',
+            'tenant_monthly_dues_amount' => 'sometimes|nullable|numeric|min:0',
+            'tenant_calculation_method' => 'sometimes|nullable|in:fixed,per_property_unit',
+            'auto_generate_tenant_invoices' => 'sometimes|boolean',
+            'send_tenant_payment_reminders' => 'sometimes|boolean',
+            'tenant_grace_period_days' => 'sometimes|nullable|integer|min:0|max:30',
+            'tenant_late_payment_percentage' => 'sometimes|nullable|numeric|min:0|max:100',
+            'tenant_fixed_penalty_amount' => 'sometimes|nullable|numeric|min:0',
+
+            'invoice_notification_channels' => 'sometimes|array',
+            'invoice_notification_channels.*' => 'in:email,sms,whatsapp',
+            'payment_reminder_channels' => 'sometimes|array',
+            'payment_reminder_channels.*' => 'in:email,sms,whatsapp',
+            'overdue_notification_channels' => 'sometimes|array',
+            'overdue_notification_channels.*' => 'in:email,sms,whatsapp',
+            'payment_confirmation_channels' => 'sometimes|array',
+            'payment_confirmation_channels.*' => 'in:email,sms,whatsapp',
+
+            'sms_notifications_enabled' => 'sometimes|boolean',
+            'sms_reminder_enabled' => 'sometimes|boolean',
+            'sms_payment_confirmation_enabled' => 'sometimes|boolean',
+            'sms_daily_limit_per_user' => 'sometimes|integer|min:1|max:100',
+            'sms_hourly_limit_per_user' => 'sometimes|integer|min:1|max:20',
+
+            'enable_whatsapp_notifications' => 'sometimes|boolean',
+            'whatsapp_reminder_enabled' => 'sometimes|boolean',
+            'whatsapp_provider' => 'sometimes|nullable|in:twilio,vonage,custom',
+
+            'monthly_dues_amount' => 'sometimes|numeric|min:0',
+            'calculation_method' => 'sometimes|in:fixed,per_property',
+            'per_property_amount' => 'sometimes|nullable|numeric|min:0',
+            'grace_period_days' => 'sometimes|integer|min:0|max:30',
+            'late_payment_percentage' => 'sometimes|numeric|min:0|max:100',
+            'fixed_penalty_amount' => 'sometimes|nullable|numeric|min:0',
+            'auto_generate_invoices' => 'sometimes|boolean',
+            'send_payment_reminders' => 'sometimes|boolean',
+            'reminder_days_before' => 'sometimes|integer|min:1|max:30',
+            'enable_bulk_payments' => 'sometimes|boolean',
+            'max_bulk_months' => 'sometimes|integer|min:1|max:12',
+            'bulk_payment_discount' => 'sometimes|nullable|numeric|min:0|max:100',
+
+            'allow_registration' => 'sometimes|boolean',
+            'registration_disabled_message' => 'sometimes|nullable|string|max:500',
+            'allow_offline_payment' => 'sometimes|boolean',
+        ], [
+            'system_short_name.alpha_dash' => 'System short name can only contain letters, numbers, dashes and underscores.',
+            'sms_sender_id.max'   => 'SMS Sender ID cannot exceed 11 characters.',
+            'sms_sender_id.regex' => 'SMS Sender ID may only contain letters, numbers, spaces, hyphens, and underscores.',
+        ]);
+    }
+
+    private function buildUpdateData(Request $request): array
+    {
+        $updateData = [];
+
+        foreach ($this->getUpdatableFields() as $field) {
+            if (!$request->has($field)) {
+                continue;
+            }
+
+            $value = $request->input($field);
+
+            if ($this->isBooleanField($field)) {
+                $value = filter_var($value, FILTER_VALIDATE_BOOLEAN);
+            }
+
+            if (in_array($field, self::CHANNEL_FIELDS, true)) {
+                $value = $this->normalizeChannelArray($value);
+            }
+
+            $updateData[$field] = $value;
+        }
+
+        return $updateData;
+    }
+
+    private function getUpdatableFields(): array
+    {
+        return [
+            'system_name',
+            'system_short_name',
+            'system_email',
+            'system_phone',
+            'system_address',
+
+            'currency_code',
+            'currency_symbol',
+            'currency_position',
+            'decimal_places',
+
+            'enable_expresspay',
+            'enable_hubtel',
+            'enable_paystack',
+            'enable_flutterwave',
+
+            'enable_tenant_invoicing',
+            'tenant_monthly_dues_amount',
+            'tenant_calculation_method',
+            'auto_generate_tenant_invoices',
+            'send_tenant_payment_reminders',
+            'tenant_grace_period_days',
+            'tenant_late_payment_percentage',
+            'tenant_fixed_penalty_amount',
+
+            'invoice_notification_channels',
+            'payment_reminder_channels',
+            'overdue_notification_channels',
+            'payment_confirmation_channels',
+
+            'sms_notifications_enabled',
+            'sms_reminder_enabled',
+            'sms_payment_confirmation_enabled',
+            'sms_daily_limit_per_user',
+            'sms_hourly_limit_per_user',
+
+            'enable_whatsapp_notifications',
+            'whatsapp_reminder_enabled',
+            'whatsapp_provider',
+
+            'monthly_dues_amount',
+            'calculation_method',
+            'per_property_amount',
+            'grace_period_days',
+            'late_payment_percentage',
+            'fixed_penalty_amount',
+            'auto_generate_invoices',
+            'send_payment_reminders',
+            'reminder_days_before',
+            'enable_bulk_payments',
+            'max_bulk_months',
+            'bulk_payment_discount',
+            'allow_registration',
+            'registration_disabled_message',
+            'allow_offline_payment',
+            'sms_sender_id',
+        ];
+    }
+
+    private function isBooleanField(string $field): bool
+    {
+        return in_array($field, self::BOOLEAN_FIELDS, true);
+    }
+
+    /* ============================================================
+     | TEST HELPERS
+     * ============================================================ */
 
     protected function runSystemConfigurationTest(string $testType): array
     {
@@ -2132,7 +3023,7 @@ class SystemSettingController extends Controller
                     return $this->testInvoiceConfiguration();
 
                 case 'all':
-                    $emailResults = $this->environmentService->testEmailConfiguration();
+                    $emailResults   = $this->environmentService->testEmailConfiguration();
                     $paymentResults = $this->paymentService->testPaymentConfiguration();
                     $invoiceResults = $this->testInvoiceConfiguration();
 
@@ -2330,5 +3221,54 @@ class SystemSettingController extends Controller
         }
 
         return substr($phoneNumber, 0, 4) . '****' . substr($phoneNumber, -4);
+    }
+
+    /* ============================================================
+     | FAVICON HELPERS
+     * ============================================================ */
+
+    protected function handleFaviconUpload($file): string
+    {
+        try {
+            $filename = 'favicon-' . time() . '.' . $file->getClientOriginalExtension();
+            $path     = $file->storeAs('favicons', $filename, 'public');
+
+            if (!$path) {
+                throw new \Exception('Failed to store favicon');
+            }
+
+            Log::info('Favicon uploaded successfully via API', [
+                'path'      => $path,
+                'filename'  => $filename,
+                'size'      => $file->getSize(),
+                'mime_type' => $file->getMimeType(),
+            ]);
+
+            return $path;
+        } catch (\Exception $e) {
+            Log::error('Failed to upload favicon: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    protected function deleteFaviconFile(?string $path): bool
+    {
+        if (empty($path)) {
+            return false;
+        }
+
+        try {
+            if (Storage::disk('public')->exists($path)) {
+                Storage::disk('public')->delete($path);
+                Log::info('Favicon deleted successfully', ['path' => $path]);
+                return true;
+            }
+
+            Log::warning('Favicon file not found for deletion', ['path' => $path]);
+            return false;
+        } catch (\Exception $e) {
+            Log::error('Failed to delete favicon: ' . $e->getMessage(), ['path' => $path]);
+            return false;
+        }
     }
 }

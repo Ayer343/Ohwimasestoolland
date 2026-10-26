@@ -2,6 +2,17 @@
 
 @section('title', 'My Schedules')
 
+{{-- Resolve route references ONCE — never let a missing route 500 the page --}}
+@php
+    $__hasPreferences      = \Illuminate\Support\Facades\Route::has('security.schedules.preferences');
+    $__hasAvailability     = \Illuminate\Support\Facades\Route::has('security.schedules.availability');
+    $__hasRotationGroup    = \Illuminate\Support\Facades\Route::has('security.schedules.rotation-group');
+    $__hasCalendarExport   = \Illuminate\Support\Facades\Route::has('security.schedules.calendar.export');
+    $__hasSwap             = \Illuminate\Support\Facades\Route::has('security.schedules.swap');
+    $__hasScheduleShow     = \Illuminate\Support\Facades\Route::has('security.schedule.show');
+    $__hasScheduleCheckin  = \Illuminate\Support\Facades\Route::has('security.schedule.checkin');
+@endphp
+
 @section('content')
 <div class="grid grid-cols-1 gap-6 mb-6">
     <!-- Welcome Header -->
@@ -29,15 +40,19 @@
                 </div>
             </div>
             <div class="flex items-center space-x-3">
-                <a href="{{ route('security.preferences') }}"
-                   class="px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center"
-                   style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
-                    <i class="fas fa-sliders-h mr-2"></i> Preferences
-                </a>
-                <a href="{{ route('security.availability') }}" 
-                   class="px-4 py-2 rounded-lg text-sm font-medium text-white inline-flex items-center btn-primary">
-                    <i class="fas fa-clock mr-2"></i> Set Availability
-                </a>
+                @if($__hasPreferences)
+                    <a href="{{ route('security.schedules.preferences') }}"
+                       class="px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center"
+                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
+                        <i class="fas fa-sliders-h mr-2"></i> Preferences
+                    </a>
+                @endif
+                @if($__hasAvailability)
+                    <a href="{{ route('security.schedules.availability') }}"
+                       class="px-4 py-2 rounded-lg text-sm font-medium text-white inline-flex items-center btn-primary">
+                        <i class="fas fa-clock mr-2"></i> Set Availability
+                    </a>
+                @endif
             </div>
         </div>
     </div>
@@ -55,7 +70,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="card p-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -67,7 +82,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="card p-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -79,7 +94,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="card p-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -91,7 +106,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="card p-4">
             <div class="flex items-center justify-between">
                 <div>
@@ -135,32 +150,35 @@
                     {{ now()->format('l, F j, Y') }}
                 </span>
             </h3>
-            
+
             <div class="flex items-center space-x-2">
                 @if(!$todaySchedule->checkin_time)
-                    <!-- BIG GREEN CHECK-IN BUTTON -->
-                    <a href="{{ route('security.schedule.checkin', $todaySchedule->id) }}" 
-                       class="px-6 py-3 rounded-lg text-base font-bold text-white inline-flex items-center shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
-                       style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
-                        <i class="fas fa-fingerprint mr-3 text-xl"></i>
-                        CHECK IN NOW
-                        <i class="fas fa-arrow-right ml-3 text-xl"></i>
-                    </a>
+                    @if($__hasScheduleCheckin)
+                        <a href="{{ route('security.schedule.checkin', $todaySchedule->id) }}"
+                           class="px-6 py-3 rounded-lg text-base font-bold text-white inline-flex items-center shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
+                           style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                            <i class="fas fa-fingerprint mr-3 text-xl"></i>
+                            CHECK IN NOW
+                            <i class="fas fa-arrow-right ml-3 text-xl"></i>
+                        </a>
+                    @endif
                 @else
-                    <span class="px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center" 
+                    <span class="px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center"
                           style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success);">
                         <i class="fas fa-check-circle mr-2"></i> Checked in at {{ $todaySchedule->checkin_time->format('H:i') }}
                     </span>
                 @endif
-                
-                <a href="{{ route('security.schedule.show', $todaySchedule->id) }}" 
-                   class="px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center"
-                   style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
-                    <i class="fas fa-eye mr-2"></i> Details
-                </a>
+
+                @if($__hasScheduleShow)
+                    <a href="{{ route('security.schedule.show', $todaySchedule->id) }}"
+                       class="px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center"
+                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info); border: 1px solid rgba(var(--info-rgb), 0.3);">
+                        <i class="fas fa-eye mr-2"></i> Details
+                    </a>
+                @endif
             </div>
         </div>
-        
+
         <div class="p-6">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <!-- Post Details -->
@@ -193,7 +211,7 @@
                         @endif
                     </div>
                 </div>
-                
+
                 <!-- Shift Time -->
                 <div class="p-4 rounded-lg" style="background-color: var(--bg-secondary);">
                     <div class="flex items-center mb-3">
@@ -216,32 +234,25 @@
                             <span style="color: var(--text-secondary);">End:</span>
                             <span style="color: var(--text-primary);">{{ substr($todaySchedule->shift->end_time, 0, 5) }}</span>
                         </div>
-                        
-                        <!-- FIXED: Countdown timer for upcoming shift with proper date parsing -->
+
                         @if(!$todaySchedule->checkin_time)
                             @php
                                 try {
                                     $shiftStartTime = $todaySchedule->shift->start_time;
-                                    
-                                    // Check if start_time contains a full date (contains hyphens)
                                     if (strpos($shiftStartTime, '-') !== false) {
-                                        // It's a full datetime, parse it directly
                                         $shiftStart = \Carbon\Carbon::parse($shiftStartTime);
                                     } else {
-                                        // It's just a time, combine with assignment date
                                         $shiftStart = \Carbon\Carbon::parse(
                                             $todaySchedule->assignment_date->format('Y-m-d') . ' ' . $shiftStartTime
                                         );
                                     }
-                                    
                                     $now = \Carbon\Carbon::now();
                                     $minutesUntil = $now->diffInMinutes($shiftStart, false);
                                 } catch (\Exception $e) {
-                                    // Fallback if parsing fails
                                     $minutesUntil = null;
                                 }
                             @endphp
-                            
+
                             @if(isset($minutesUntil) && $minutesUntil > 0 && $minutesUntil <= 60)
                                 <div class="mt-2 p-2 rounded-lg text-center" style="background-color: rgba(var(--warning-rgb), 0.1);">
                                     <span class="text-sm font-medium" style="color: var(--warning);">
@@ -256,7 +267,7 @@
                                 </div>
                             @endif
                         @endif
-                        
+
                         @if($todaySchedule->shift->is_overnight)
                             <div class="mt-2 text-xs" style="color: var(--warning);">
                                 <i class="fas fa-moon mr-1"></i> Overnight Shift
@@ -264,7 +275,7 @@
                         @endif
                     </div>
                 </div>
-                
+
                 <!-- Status & Check-in Info -->
                 <div class="p-4 rounded-lg" style="background-color: var(--bg-secondary);">
                     <div class="flex items-center mb-3">
@@ -290,13 +301,13 @@
                                 {{ ucfirst($todaySchedule->status) }}
                             </span>
                         </div>
-                        
+
                         @if($todaySchedule->checkin_time)
                         <div class="flex justify-between">
                             <span style="color: var(--text-secondary);">Check-in:</span>
                             <span style="color: var(--text-primary); font-weight: 600;">{{ $todaySchedule->checkin_time->format('H:i') }}</span>
                         </div>
-                        
+
                         @if($todaySchedule->checkin_verification)
                         <div class="flex justify-between text-xs">
                             <span style="color: var(--text-secondary);">Verified via:</span>
@@ -304,20 +315,20 @@
                         </div>
                         @endif
                         @endif
-                        
+
                         @if($todaySchedule->checkout_time)
                         <div class="flex justify-between">
                             <span style="color: var(--text-secondary);">Check-out:</span>
                             <span style="color: var(--text-primary);">{{ $todaySchedule->checkout_time->format('H:i') }}</span>
                         </div>
                         @endif
-                        
+
                         @if($todaySchedule->late_minutes > 0)
                         <div class="mt-2 text-xs" style="color: var(--warning);">
                             <i class="fas fa-exclamation-triangle mr-1"></i> Late by {{ $todaySchedule->late_minutes }} minutes
                         </div>
                         @endif
-                        
+
                         @if($todaySchedule->overtime_minutes > 0)
                         <div class="mt-2 text-xs" style="color: var(--success);">
                             <i class="fas fa-clock mr-1"></i> Overtime: {{ $todaySchedule->overtime_minutes }} minutes
@@ -326,9 +337,9 @@
                     </div>
                 </div>
             </div>
-            
-            <!-- Check-in instructions if not checked in -->
-            @if(!$todaySchedule->checkin_time)
+
+            <!-- Check-in instructions -->
+            @if(!$todaySchedule->checkin_time && $__hasScheduleCheckin)
             <div class="mt-4 p-4 rounded-lg" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.1) 100%); border: 1px solid rgba(16, 185, 129, 0.3);">
                 <div class="flex items-center">
                     <div class="mr-4">
@@ -350,7 +361,7 @@
                         </ul>
                     </div>
                     <div class="ml-4">
-                        <a href="{{ route('security.schedule.checkin', $todaySchedule->id) }}" 
+                        <a href="{{ route('security.schedule.checkin', $todaySchedule->id) }}"
                            class="px-6 py-3 rounded-lg text-base font-bold text-white inline-flex items-center"
                            style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
                             <i class="fas fa-arrow-right mr-2"></i> Go
@@ -359,22 +370,22 @@
                 </div>
             </div>
             @endif
-            
+
             @if($todaySchedule->special_instructions)
             <div class="mt-4 p-3 rounded-lg" style="background-color: rgba(var(--info-rgb), 0.05); border: 1px solid var(--border-color);">
                 <i class="fas fa-info-circle mr-2" style="color: var(--info);"></i>
                 <span style="color: var(--text-primary);">{{ $todaySchedule->special_instructions }}</span>
             </div>
             @endif
-            
-            @if($todaySchedule->handover_info && !$todaySchedule->handover_completed)
+
+            @if($todaySchedule->handover_info && !$todaySchedule->handover_completed && $__hasScheduleShow)
             <div class="mt-4 p-3 rounded-lg" style="background-color: rgba(var(--warning-rgb), 0.05); border: 1px solid var(--border-color);">
                 <div class="flex items-center justify-between">
                     <div>
                         <i class="fas fa-exchange-alt mr-2" style="color: var(--warning);"></i>
                         <span style="color: var(--text-primary);">Handover required for this shift</span>
                     </div>
-                    <a href="{{ route('security.schedule.show', $todaySchedule->id) }}" 
+                    <a href="{{ route('security.schedule.show', $todaySchedule->id) }}"
                        class="px-3 py-1 rounded text-sm" style="background-color: var(--warning); color: white;">
                         Complete Handover
                     </a>
@@ -392,11 +403,13 @@
             </div>
             <h3 class="text-lg font-semibold mb-2" style="color: var(--text-primary);">No Schedule Today</h3>
             <p class="text-sm" style="color: var(--text-secondary);">You don't have any shifts scheduled for today.</p>
-            <a href="{{ route('security.availability') }}" 
-               class="mt-4 px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center"
-               style="background-color: var(--primary); color: white;">
-                <i class="fas fa-clock mr-2"></i> Set Your Availability
-            </a>
+            @if($__hasAvailability)
+                <a href="{{ route('security.schedules.availability') }}"
+                   class="mt-4 px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center"
+                   style="background-color: var(--primary); color: white;">
+                    <i class="fas fa-clock mr-2"></i> Set Your Availability
+                </a>
+            @endif
         </div>
     </div>
     @endif
@@ -412,7 +425,7 @@
                 </span>
             </h3>
         </div>
-        
+
         <div class="overflow-x-auto">
             <table class="w-full">
                 <thead>
@@ -428,43 +441,45 @@
                 </thead>
                 <tbody>
                     @forelse($upcomingSchedules as $schedule)
-                        <tr class="border-b hover:bg-opacity-50 transition-colors duration-200" 
+                        <tr class="border-b hover:bg-opacity-50 transition-colors duration-200"
                             style="border-color: var(--border-color); background-color: var(--card-bg);">
-                            
+
                             <td class="py-4 px-6">
                                 <div class="font-medium" style="color: var(--text-primary);">{{ $schedule->assignment_date->format('M j, Y') }}</div>
                                 <div class="text-xs" style="color: var(--text-secondary);">{{ $schedule->assignment_date->format('l') }}</div>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="font-medium" style="color: var(--text-primary);">{{ $schedule->post->name }}</div>
                                 <div class="text-xs" style="color: var(--text-secondary);">{{ $schedule->post->code }}</div>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <span class="px-2 py-1 text-xs rounded-full badge-primary">
                                     {{ $schedule->shift->name }}
                                 </span>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div style="color: var(--text-primary);">{{ substr($schedule->shift->start_time, 0, 5) }} - {{ substr($schedule->shift->end_time, 0, 5) }}</div>
                                 @if($schedule->shift->is_overnight)
                                     <span class="text-xs" style="color: var(--info);">🌙 Overnight</span>
                                 @endif
                             </td>
-                            
+
                             <td class="py-4 px-6">
-                                @if($schedule->rotationGroup)
-                                    <a href="{{ route('security.rotation-group', $schedule->rotationGroup->id) }}" 
+                                @if($schedule->rotationGroup && $__hasRotationGroup)
+                                    <a href="{{ route('security.schedules.rotation-group', $schedule->rotationGroup->id) }}"
                                        class="text-sm hover:underline" style="color: var(--primary);">
                                         {{ $schedule->rotationGroup->name }}
                                     </a>
+                                @elseif($schedule->rotationGroup)
+                                    <span class="text-sm" style="color: var(--text-primary);">{{ $schedule->rotationGroup->name }}</span>
                                 @else
                                     <span style="color: var(--text-secondary);">—</span>
                                 @endif
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 @php
                                     $statusColors = [
@@ -478,30 +493,36 @@
                                     {{ ucfirst($schedule->status) }}
                                 </span>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="flex space-x-2">
-                                    <a href="{{ route('security.schedule.show', $schedule->id) }}" 
-                                       class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
-                                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);"
-                                       title="View Details">
-                                        <i class="fas fa-eye text-sm"></i>
-                                    </a>
-                                    
-                                    <button onclick="addToCalendar({{ $schedule->id }})"
-                                            class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
-                                            style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);"
-                                            title="Add to Calendar">
-                                        <i class="fas fa-calendar-plus text-sm"></i>
-                                    </button>
-                                    
-                                    @if($schedule->assignment_date->diffInDays(now()) > 2)
-                                    <button onclick="requestSwap({{ $schedule->id }})"
-                                            class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
-                                            style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);"
-                                            title="Request Swap">
-                                        <i class="fas fa-exchange-alt text-sm"></i>
-                                    </button>
+                                    @if($__hasScheduleShow)
+                                        <a href="{{ route('security.schedule.show', $schedule->id) }}"
+                                           class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
+                                           style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);"
+                                           title="View Details">
+                                            <i class="fas fa-eye text-sm"></i>
+                                        </a>
+                                    @endif
+
+                                    @if($__hasCalendarExport)
+                                        <a href="{{ route('security.schedules.calendar.export', $schedule->id) }}"
+                                           class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
+                                           style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);"
+                                           title="Add to Calendar">
+                                            <i class="fas fa-calendar-plus text-sm"></i>
+                                        </a>
+                                    @endif
+
+                                    @if($__hasSwap && $schedule->assignment_date->diffInDays(now()) > 2)
+                                        <button type="button"
+                                                data-swap-url="{{ route('security.schedules.swap', $schedule->id) }}"
+                                                onclick="requestSwap(this.dataset.swapUrl)"
+                                                class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
+                                                style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);"
+                                                title="Request Swap">
+                                            <i class="fas fa-exchange-alt text-sm"></i>
+                                        </button>
                                     @endif
                                 </div>
                             </td>
@@ -516,7 +537,7 @@
                 </tbody>
             </table>
         </div>
-        
+
         @if(method_exists($upcomingSchedules, 'links'))
             <div class="p-6 border-t" style="border-color: var(--border-color);">
                 {{ $upcomingSchedules->appends(['history_page' => request('history_page')])->links() }}
@@ -535,7 +556,7 @@
                 </span>
             </h3>
         </div>
-        
+
         <div class="overflow-x-auto">
             <table class="w-full">
                 <thead>
@@ -552,23 +573,23 @@
                 </thead>
                 <tbody>
                     @forelse($historySchedules as $schedule)
-                        <tr class="border-b hover:bg-opacity-50 transition-colors duration-200" 
+                        <tr class="border-b hover:bg-opacity-50 transition-colors duration-200"
                             style="border-color: var(--border-color); background-color: var(--card-bg);">
-                            
+
                             <td class="py-4 px-6">
                                 <div style="color: var(--text-primary);">{{ $schedule->assignment_date->format('M j, Y') }}</div>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div style="color: var(--text-primary);">{{ $schedule->post->name }}</div>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <span class="px-2 py-1 text-xs rounded-full badge-primary">
                                     {{ $schedule->shift->name }}
                                 </span>
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 @if($schedule->checkin_time)
                                     <div style="color: var(--text-primary);">{{ $schedule->checkin_time->format('H:i') }}</div>
@@ -576,7 +597,7 @@
                                     <span style="color: var(--text-secondary);">—</span>
                                 @endif
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 @if($schedule->checkout_time)
                                     <div style="color: var(--text-primary);">{{ $schedule->checkout_time->format('H:i') }}</div>
@@ -584,7 +605,7 @@
                                     <span style="color: var(--text-secondary);">—</span>
                                 @endif
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 @if($schedule->total_minutes)
                                     {{ round($schedule->total_minutes / 60, 1) }} hrs
@@ -592,7 +613,7 @@
                                     {{ $schedule->shift->duration_hours }} hrs
                                 @endif
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 @if($schedule->late_minutes > 0)
                                     <span class="text-xs" style="color: var(--warning);">
@@ -608,18 +629,20 @@
                                     <span style="color: var(--text-secondary);">—</span>
                                 @endif
                             </td>
-                            
+
                             <td class="py-4 px-6">
                                 <div class="flex space-x-2">
-                                    <a href="{{ route('security.schedule.show', $schedule->id) }}" 
-                                       class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
-                                       style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);"
-                                       title="View Details">
-                                        <i class="fas fa-eye text-sm"></i>
-                                    </a>
-                                    
-                                    @if($schedule->handover_info && !$schedule->handover_completed)
-                                    <a href="{{ route('security.schedule.show', $schedule->id) }}" 
+                                    @if($__hasScheduleShow)
+                                        <a href="{{ route('security.schedule.show', $schedule->id) }}"
+                                           class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
+                                           style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);"
+                                           title="View Details">
+                                            <i class="fas fa-eye text-sm"></i>
+                                        </a>
+                                    @endif
+
+                                    @if($schedule->handover_info && !$schedule->handover_completed && $__hasScheduleShow)
+                                    <a href="{{ route('security.schedule.show', $schedule->id) }}"
                                        class="action-btn w-8 h-8 rounded-lg flex items-center justify-center"
                                        style="background-color: rgba(var(--warning-rgb), 0.1); color: var(--warning);"
                                        title="Complete Handover">
@@ -639,7 +662,7 @@
                 </tbody>
             </table>
         </div>
-        
+
         @if(method_exists($historySchedules, 'links'))
             <div class="p-6 border-t" style="border-color: var(--border-color);">
                 {{ $historySchedules->appends(['upcoming_page' => request('upcoming_page')])->links() }}
@@ -655,7 +678,7 @@
                 <i class="fas fa-stopwatch mr-2" style="color: var(--info);"></i>
                 Punctuality Overview
             </h3>
-            
+
             @php
                 $totalCompleted = $completedCount ?? 0;
                 $lateShifts = $historySchedules->where('late_minutes', '>', 0)->count();
@@ -663,7 +686,7 @@
                 $onTimePercentage = $totalCompleted > 0 ? round(($onTimeShifts / $totalCompleted) * 100, 1) : 100;
                 $avgLateMinutes = $lateShifts > 0 ? round($historySchedules->where('late_minutes', '>', 0)->avg('late_minutes'), 1) : 0;
             @endphp
-            
+
             <div class="grid grid-cols-2 gap-4 mb-4">
                 <div class="p-3 rounded-lg text-center" style="background-color: rgba(var(--success-rgb), 0.1);">
                     <div class="text-2xl font-bold" style="color: var(--success);">{{ $onTimePercentage }}%</div>
@@ -674,7 +697,7 @@
                     <div class="text-xs mt-1" style="color: var(--text-secondary);">Avg Late (min)</div>
                 </div>
             </div>
-            
+
             <div class="space-y-2">
                 <div class="flex justify-between text-sm">
                     <span style="color: var(--text-secondary);">On-time check-ins:</span>
@@ -690,21 +713,21 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- Overtime Stats -->
         <div class="card p-6">
             <h3 class="text-lg font-semibold mb-4 flex items-center" style="color: var(--text-primary);">
                 <i class="fas fa-clock mr-2" style="color: var(--success);"></i>
                 Overtime Overview
             </h3>
-            
+
             @php
                 $overtimeShifts = $historySchedules->where('overtime_minutes', '>', 0)->count();
                 $totalOvertimeMinutes = $historySchedules->sum('overtime_minutes');
                 $avgOvertime = $overtimeShifts > 0 ? round($totalOvertimeMinutes / $overtimeShifts, 1) : 0;
                 $overtimeHours = round($totalOvertimeMinutes / 60, 1);
             @endphp
-            
+
             <div class="grid grid-cols-2 gap-4 mb-4">
                 <div class="p-3 rounded-lg text-center" style="background-color: rgba(var(--success-rgb), 0.1);">
                     <div class="text-2xl font-bold" style="color: var(--success);">{{ $overtimeShifts }}</div>
@@ -715,7 +738,7 @@
                     <div class="text-xs mt-1" style="color: var(--text-secondary);">Total OT Hours</div>
                 </div>
             </div>
-            
+
             <div class="space-y-2">
                 <div class="flex justify-between text-sm">
                     <span style="color: var(--text-secondary);">Shifts with overtime:</span>
@@ -742,7 +765,7 @@
                 My Rotation Groups
             </h3>
         </div>
-        
+
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 p-6">
             @foreach($rotationGroups as $group)
             <div class="p-4 rounded-lg" style="background-color: var(--bg-secondary); border: 1px solid var(--border-color);">
@@ -758,7 +781,7 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="space-y-2 text-sm">
                     <div class="flex justify-between">
                         <span style="color: var(--text-secondary);">Shift:</span>
@@ -775,14 +798,16 @@
                     </div>
                     @endif
                 </div>
-                
-                <div class="mt-4">
-                    <a href="{{ route('security.rotation-group', $group->id) }}" 
-                       class="w-full px-3 py-2 rounded-lg text-sm text-center block"
-                       style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
-                        View Group Details
-                    </a>
-                </div>
+
+                @if($__hasRotationGroup)
+                    <div class="mt-4">
+                        <a href="{{ route('security.schedules.rotation-group', $group->id) }}"
+                           class="w-full px-3 py-2 rounded-lg text-sm text-center block"
+                           style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
+                            View Group Details
+                        </a>
+                    </div>
+                @endif
             </div>
             @endforeach
         </div>
@@ -790,21 +815,21 @@
     @endif
 </div>
 
-<!-- Break Modal -->
+<!-- Break Modal (reserved for future use) -->
 <div id="breakModal" class="fixed inset-0 z-50 hidden overflow-y-auto">
     <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
         <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeModal('breakModal')"></div>
         <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
-        <div class="inline-block align-bottom rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg w-full" 
+        <div class="inline-block align-bottom rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg w-full"
              style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
-            
+
             <div class="p-6 border-b" style="border-color: var(--border-color);">
                 <h3 class="text-lg font-semibold flex items-center" style="color: var(--text-primary);">
                     <i class="fas fa-coffee mr-2" style="color: var(--info);"></i>
                     Break Management
                 </h3>
             </div>
-            
+
             <div class="p-6" id="breakContent">
                 <div class="text-center py-4">
                     <i class="fas fa-spinner fa-spin text-2xl" style="color: var(--primary);"></i>
@@ -869,10 +894,10 @@ function showBreakModal(scheduleId) {
     currentScheduleId = scheduleId;
     const modal = document.getElementById('breakModal');
     const content = document.getElementById('breakContent');
-    
+
     content.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-2xl" style="color: var(--primary);"></i></div>';
     modal.classList.remove('hidden');
-    
+
     fetch(`/security/schedules/${scheduleId}/breaks`)
         .then(response => response.json())
         .then(data => {
@@ -882,7 +907,7 @@ function showBreakModal(scheduleId) {
                 content.innerHTML = '<div class="text-center py-4" style="color: var(--text-secondary);">No breaks available</div>';
             }
         })
-        .catch(error => {
+        .catch(() => {
             content.innerHTML = '<div class="text-center py-4" style="color: var(--danger);">Failed to load breaks</div>';
         });
 }
@@ -894,7 +919,7 @@ function closeModal(modalId) {
 function displayBreakOptions(data) {
     const content = document.getElementById('breakContent');
     let html = '<div class="space-y-3">';
-    
+
     data.breaks.forEach((breakItem, index) => {
         html += `
             <div class="p-3 rounded-lg" style="border: 1px solid var(--border-color);">
@@ -911,7 +936,7 @@ function displayBreakOptions(data) {
             </div>
         `;
     });
-    
+
     html += '</div>';
     content.innerHTML = html;
 }
@@ -937,15 +962,21 @@ function takeBreak(breakId) {
     });
 }
 
-function addToCalendar(scheduleId) {
-    window.location.href = `/security/schedules/${scheduleId}/calendar`;
-}
+/**
+ * Request a shift swap.
+ * Accepts the fully-formed swap URL from the button's data attribute,
+ * so this works regardless of route prefix / naming.
+ */
+function requestSwap(swapUrl) {
+    if (!swapUrl) {
+        alert('Swap is not available for this schedule.');
+        return;
+    }
 
-function requestSwap(scheduleId) {
     const reason = prompt('Please provide a reason for requesting a shift swap:');
     if (!reason) return;
-    
-    fetch(`/security/schedules/${scheduleId}/swap`, {
+
+    fetch(swapUrl, {
         method: 'POST',
         headers: {
             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
@@ -960,14 +991,15 @@ function requestSwap(scheduleId) {
         } else {
             alert(data.message || 'Failed to submit swap request');
         }
-    });
+    })
+    .catch(() => alert('Failed to submit swap request'));
 }
 
 // Close modal when clicking outside
-window.onclick = function(event) {
+window.onclick = function (event) {
     if (event.target.classList.contains('fixed')) {
         closeModal('breakModal');
     }
-}
+};
 </script>
 @endsection

@@ -56,7 +56,6 @@
             $isAdmin      = $hasAdminAccess;
             $isDeveloper  = $hasDeveloperAccess;
 
-            // ✅ Explicit flag for the search input's Alpine scope
             $searchRole = $isSuperAdmin ? 'super-admin' : ($isAdmin ? 'admin' : ($isDeveloper ? 'developer' : 'guest'));
 
             $sidebarCurrentRole = session('selected_role');
@@ -251,11 +250,11 @@
 
             <div class="logo-content">
                 <div class="logo-text-container">
-                    <div class="logo-shortname" style="color: var(--sidebar-text);" title="{{ $systemName }}">
+                    <div class="logo-shortname" title="{{ $systemName }}">
                         {{ $systemShortName }}
                     </div>
                     @if($systemName && $systemName !== $systemShortName)
-                    <div class="logo-fullname" style="color: var(--sidebar-text); opacity: 0.8;">
+                    <div class="logo-fullname">
                         {{ $systemName }}
                     </div>
                     @endif
@@ -277,9 +276,7 @@
         <span class="menu-text">MAIN NAVIGATION</span>
     </div>
 
-    {{-- ============================================ --}}
     {{-- 🏠 ROLE-BASED DASHBOARD LINK --}}
-    {{-- ============================================ --}}
     @if($isSuperAdmin)
         <a href="{{ route('super-admin.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('super-admin.dashboard') ? 'active' : '' }}">
             <i class="fas fa-home mr-4"></i>
@@ -307,9 +304,7 @@
         </a>
     @endif
 
-    {{-- ============================================ --}}
     {{-- ⚙️ SYSTEM SETTINGS — Super Admin only --}}
-    {{-- ============================================ --}}
     @if($isSuperAdmin)
         <div class="nav-divider mt-1">
             <span class="menu-text">SYSTEM SETTINGS</span>
@@ -321,15 +316,13 @@
         </a>
     @endif
 
-    {{-- ============================================ --}}
     {{-- 💰 BILLING MANAGEMENT — Super Admin only --}}
-    {{-- ============================================ --}}
     @if($isSuperAdmin)
         <div class="nav-divider mt-1">
             <span class="menu-text">BILLING MANAGEMENT</span>
         </div>
 
-        <button id="billingManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200" style="color: var(--sidebar-text);">
+        <button id="billingManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200">
             <i class="fas fa-file-invoice-dollar mr-4"></i>
             <span class="nav-text flex-grow">Billing Management</span>
             @if(($pendingAgreements ?? 0) > 0 || ($awaitingSignature ?? 0) > 0 || ($pendingPayments ?? 0) > 0)
@@ -342,14 +335,12 @@
         </button>
     @endif
 
-    {{-- ============================================ --}}
     {{-- 📄 INVOICE MANAGEMENT --}}
-    {{-- ============================================ --}}
     <div class="nav-divider mt-1">
         <span class="menu-text">INVOICE MANAGEMENT</span>
     </div>
 
-    <button id="invoiceManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200" style="color: var(--sidebar-text);">
+    <button id="invoiceManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200">
         <i class="fas fa-file-invoice-dollar mr-4"></i>
         <span class="nav-text flex-grow">Invoice Management</span>
         @php
@@ -367,9 +358,7 @@
         @endif
     </button>
 
-    {{-- ============================================ --}}
     {{-- 💳 PAYMENT MANAGEMENT --}}
-    {{-- ============================================ --}}
     @if($isSuperAdmin || $isAdmin || $isDeveloper)
         <div class="nav-divider mt-1">
             <span class="menu-text">PAYMENT MANAGEMENT</span>
@@ -388,9 +377,7 @@
         </a>
     @endif
 
-    {{-- ============================================ --}}
     {{-- ⭐ CONSTRUCTION MANAGEMENT --}}
-    {{-- ============================================ --}}
     <div class="nav-divider mt-1">
         <span class="menu-text">CONSTRUCTION MANAGEMENT</span>
     </div>
@@ -422,14 +409,57 @@
         @endif
     </a>
 
-    {{-- ============================================ --}}
+    {{-- 📢 AD SPACE — Admin review + settings + invoices --}}
+    @if(($isSuperAdmin || $isAdmin) && \Illuminate\Support\Facades\Route::has('admin.homepage-content.ads.campaigns'))
+        <div class="nav-divider mt-1">
+            <span class="menu-text">AD SPACE</span>
+        </div>
+
+        <a href="{{ route('admin.homepage-content.ads.campaigns') }}"
+           class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.homepage-content.ads.campaigns*') ? 'active' : '' }}">
+            <i class="fas fa-bullhorn mr-4" style="color: var(--primary);"></i>
+            <span class="nav-text">Ad Campaigns</span>
+            @php
+                $pendingRentedAdsCount = 0;
+                try {
+                    $pendingRentedAdsCount = \App\Models\AdCampaign::whereNotNull('rented_requested_at')
+                        ->whereNull('rented_approved_at')
+                        ->count();
+                } catch (\Throwable $e) {
+                    $pendingRentedAdsCount = 0;
+                }
+            @endphp
+            @if($pendingRentedAdsCount > 0)
+                <span class="ml-auto bg-yellow-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center"
+                      title="{{ $pendingRentedAdsCount }} pending &quot;rented&quot; request(s) awaiting review">
+                    {{ $pendingRentedAdsCount > 9 ? '9+' : $pendingRentedAdsCount }}
+                </span>
+            @endif
+        </a>
+
+        @if(\Illuminate\Support\Facades\Route::has('admin.homepage-content.ads.invoices'))
+            <a href="{{ route('admin.homepage-content.ads.invoices') }}"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.homepage-content.ads.invoices*') ? 'active' : '' }}">
+                <i class="fas fa-file-invoice-dollar mr-4"></i>
+                <span class="nav-text">Ad Invoices</span>
+            </a>
+        @endif
+
+        @if(\Illuminate\Support\Facades\Route::has('admin.homepage-content.ads.settings'))
+            <a href="{{ route('admin.homepage-content.ads.settings') }}?tab=ads"
+               class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.homepage-content.ads.settings*') ? 'active' : '' }}">
+                <i class="fas fa-sliders-h mr-4"></i>
+                <span class="nav-text">Ad Settings</span>
+            </a>
+        @endif
+    @endif
+
     {{-- 💬 COMMUNICATION --}}
-    {{-- ============================================ --}}
     <div class="nav-divider mt-1">
         <span class="menu-text">COMMUNICATION</span>
     </div>
 
-    <button id="emailManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('email-accounts.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
+    <button id="emailManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('email-accounts.*') ? 'active' : '' }}">
         <i class="fas fa-envelope mr-4"></i>
         <span class="nav-text flex-grow">Email Management</span>
         @php
@@ -484,7 +514,7 @@
     </button>
 
     @if($smsProviderConfigured)
-    <button id="smsManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('sms.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
+    <button id="smsManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('sms.*') ? 'active' : '' }}">
         <i class="fas fa-sms mr-4"></i>
         <span class="nav-text flex-grow">SMS Management</span>
         @if($pendingSmsCount > 0)
@@ -502,7 +532,7 @@
     @endif
 
     @if($whatsappProviderConfigured)
-    <button id="whatsappManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('admin.whatsapp.*') || request()->routeIs('developer.whatsapp.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
+    <button id="whatsappManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('admin.whatsapp.*') || request()->routeIs('developer.whatsapp.*') ? 'active' : '' }}">
         <i class="fab fa-whatsapp mr-4" style="color: #25D366;"></i>
         <span class="nav-text flex-grow">WhatsApp Management</span>
         @if(!($whatsappQuickStatus['system_ready'] ?? false))
@@ -515,70 +545,127 @@
     </button>
     @endif
 
-    {{-- ============================================ --}}
-{{-- 🛠️ SYSTEM MANAGEMENT --}}
-{{-- ============================================ --}}
-<div class="nav-divider mt-1">
-    <span class="menu-text">SYSTEM MANAGEMENT</span>
-</div>
-
-<a href="{{ route('admin.users.index')}}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.users.*') ? 'active' : '' }}">
-    <i class="fas fa-users mr-4"></i>
-    <span class="nav-text">Users</span>
-</a>
-
-<a href="{{ route('registration-plans.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('registration-plans.*') ? 'active' : '' }}">
-    <i class="fas fa-map-marked-alt mr-4"></i>
-    <span class="nav-text">Registration Plans</span>
-</a>
-
-<a href="{{ route('properties.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('properties.*') ? 'active' : '' }}">
-    <i class="fas fa-building mr-4"></i>
-    <span class="nav-text">Properties</span>
-</a>
-
-{{-- ✅ NEW: Family Links --}}
-<a href="{{ route('admin.family-links.index') }}"
-   class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.family-links.*') ? 'active' : '' }}">
-    <i class="fas fa-user-friends mr-4"></i>
-    <span class="nav-text">Family Links</span>
-    @php
-        $pendingFamilyLinksCount = \App\Models\PropertyFamilyLink::where('status', 'pending')->count();
-    @endphp
-    @if($pendingFamilyLinksCount > 0)
-        <span class="ml-auto bg-yellow-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-            {{ $pendingFamilyLinksCount > 9 ? '9+' : $pendingFamilyLinksCount }}
-        </span>
+    {{-- 💬 LANDLORD — Unit Inquiries --}}
+    @if(isset($isLandlord) && $isLandlord && \Illuminate\Support\Facades\Route::has('landlord.inquiries.index'))
+        <a href="{{ route('landlord.inquiries.index') }}"
+           class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('landlord.inquiries.*') ? 'active' : '' }}">
+            <i class="fas fa-envelope-open-text mr-4" style="color: var(--info);"></i>
+            <span class="nav-text">Unit Inquiries</span>
+            @php
+                $unreadInquiriesCount = 0;
+                try {
+                    $unreadInquiriesCount = \App\Models\UnitInquiry::where('landlord_id', auth()->id())
+                        ->whereNull('landlord_viewed_at')
+                        ->count();
+                } catch (\Throwable $e) {
+                    $unreadInquiriesCount = 0;
+                }
+            @endphp
+            @if($unreadInquiriesCount > 0)
+                <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                    {{ $unreadInquiriesCount > 9 ? '9+' : $unreadInquiriesCount }}
+                </span>
+            @endif
+        </a>
     @endif
-</a>
 
-<a href="{{ route('property-units.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('property-units.*') ? 'active' : '' }}">
-    <i class="fas fa-door-closed mr-4"></i>
-    <span class="nav-text">Property Units</span>
-</a>
+    {{-- 🛠️ SYSTEM MANAGEMENT --}}
+    <div class="nav-divider mt-1">
+        <span class="menu-text">SYSTEM MANAGEMENT</span>
+    </div>
 
-<button id="administrativeToolsBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{
-    request()->routeIs('admin.security-posts.*') ||
-    request()->routeIs('admin.security-shifts.*') ||
-    request()->routeIs('admin.security-schedules.*') ||
-    request()->routeIs('admin.supervisor-assignments.*') ||
-    request()->routeIs('admin.security-reports.*') ||
-    request()->routeIs('admin.ownership-transfers.*') ? 'active' : ''
-}}" style="color: var(--sidebar-text);">
-    <i class="fas fa-tools mr-4"></i>
-    <span class="nav-text flex-grow">Administrative Tools</span>
-    @if($pendingOwnershipTransfers > 0 || $pendingSupervisorAssignments > 0)
-        <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-            {{ $pendingOwnershipTransfers + $pendingSupervisorAssignments }}
-        </span>
-    @else
-        <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
+    <a href="{{ route('admin.users.index')}}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.users.*') ? 'active' : '' }}">
+        <i class="fas fa-users mr-4"></i>
+        <span class="nav-text">Users</span>
+    </a>
+
+    <a href="{{ route('registration-plans.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('registration-plans.*') ? 'active' : '' }}">
+        <i class="fas fa-map-marked-alt mr-4"></i>
+        <span class="nav-text">Registration Plans</span>
+    </a>
+
+    <a href="{{ route('properties.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('properties.*') ? 'active' : '' }}">
+        <i class="fas fa-building mr-4"></i>
+        <span class="nav-text">Properties</span>
+    </a>
+
+    {{-- ✅ Family Links --}}
+    <a href="{{ route('admin.family-links.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.family-links.*') ? 'active' : '' }}">
+        <i class="fas fa-user-friends mr-4"></i>
+        <span class="nav-text">Family Links</span>
+        @php
+            $pendingFamilyLinksCount = \App\Models\PropertyFamilyLink::where('status', 'pending')->count();
+        @endphp
+        @if($pendingFamilyLinksCount > 0)
+            <span class="ml-auto bg-yellow-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {{ $pendingFamilyLinksCount > 9 ? '9+' : $pendingFamilyLinksCount }}
+            </span>
+        @endif
+    </a>
+
+    <a href="{{ route('property-units.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('property-units.*') ? 'active' : '' }}">
+        <i class="fas fa-door-closed mr-4"></i>
+        <span class="nav-text">Property Units</span>
+    </a>
+
+    {{-- 🔐 SECURITY MANAGEMENT --}}
+    <div class="nav-divider mt-1">
+        <span class="menu-text">SECURITY MANAGEMENT</span>
+    </div>
+
+    <a href="{{ route('admin.security-posts.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.security-posts.*') ? 'active' : '' }}">
+        <i class="fas fa-map-marker-alt mr-4"></i>
+        <span class="nav-text">Security Posts</span>
+    </a>
+
+    <a href="{{ route('admin.security-shifts.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.security-shifts.*') ? 'active' : '' }}">
+        <i class="fas fa-clock mr-4"></i>
+        <span class="nav-text">Security Shifts</span>
+    </a>
+
+    <a href="{{ route('admin.security-schedules.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.security-schedules.*') ? 'active' : '' }}">
+        <i class="fas fa-calendar-alt mr-4"></i>
+        <span class="nav-text">Security Schedules</span>
+    </a>
+
+    <a href="{{ route('admin.supervisor-assignments.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.supervisor-assignments.*') ? 'active' : '' }}">
+        <i class="fas fa-user-shield mr-4"></i>
+        <span class="nav-text">Supervisor Assignments</span>
+        @if($pendingSupervisorAssignments > 0)
+            <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center"
+                  title="{{ $pendingSupervisorAssignments }} assignment(s) expiring within 7 days">
+                {{ $pendingSupervisorAssignments > 9 ? '9+' : $pendingSupervisorAssignments }}
+            </span>
+        @endif
+    </a>
+
+    @if(\Illuminate\Support\Facades\Route::has('admin.security-reports.index'))
+        <a href="{{ route('admin.security-reports.index') }}"
+           class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.security-reports.*') ? 'active' : '' }}">
+            <i class="fas fa-chart-bar mr-4"></i>
+            <span class="nav-text">Security Reports</span>
+        </a>
     @endif
-</button>
 
-    {{-- ============================================ --}}
+    {{-- 🔄 MANAGE PROPERTY TRANSFER --}}
+    <a href="{{ route('admin.ownership-transfers.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.ownership-transfers.*') ? 'active' : '' }}">
+        <i class="fas fa-exchange-alt mr-4"></i>
+        <span class="nav-text">Manage Property Transfer</span>
+        @if($pendingOwnershipTransfers > 0)
+            <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center"
+                  title="{{ $pendingOwnershipTransfers }} pending transfer(s)">
+                {{ $pendingOwnershipTransfers > 9 ? '9+' : $pendingOwnershipTransfers }}
+            </span>
+        @endif
+    </a>
+
     {{-- 🧹 SANITATION MANAGEMENT --}}
-    {{-- ============================================ --}}
     @if($isSuperAdmin || $isAdmin || $isDeveloper)
     <div class="nav-divider mt-1">
         <span class="menu-text">SANITATION MANAGEMENT</span>
@@ -633,8 +720,6 @@
 
 {{-- ============================================================ --}}
 {{-- ✅ GLOBAL SEARCH SCRIPT BLOCK                                 --}}
-{{-- ⚠️ CRITICAL: push to 'search-scripts' (matches the layout's  --}}
-{{-- @stack('search-scripts')). Do NOT change to 'scripts'.       --}}
 {{-- ============================================================ --}}
 @if($isAuthorized)
 @push('search-scripts')
@@ -651,9 +736,6 @@
                 return true;
             }
 
-            // --------------------------------------------------------
-            // quickSearch — header inline autocomplete
-            // --------------------------------------------------------
             Alpine.data('quickSearch', () => ({
                 query: '',
                 results: {},
@@ -661,14 +743,10 @@
                 open: false,
                 controller: null,
                 category: 'all',
-
-                // ✅ NEW: keyboard navigation
                 activeIndex: -1,
                 flatItems: [],
-
-                // ✅ NEW: client-side cache so re-typing a prefix is instant
                 _cache: new Map(),
-                _cacheTTL: 60000, // 60s
+                _cacheTTL: 60000,
 
                 suggestUrl: @json(route('admin.search.suggest')),
                 fullUrl:    @json(route('admin.search.index')),
@@ -677,7 +755,6 @@
                     return Object.values(this.results).every(arr => !arr || arr.length === 0);
                 },
 
-                // ✅ NEW: flatten results for keyboard navigation
                 rebuildFlat() {
                     const flat = [];
                     for (const cat of Object.keys(this.results)) {
@@ -691,12 +768,10 @@
                     }
                 },
 
-                // ✅ NEW: build cache key
                 _key(q, c) {
                     return (c || 'all') + '::' + (q || '').toLowerCase();
                 },
 
-                // ✅ NEW: try cache first, then network
                 async suggest() {
                     const q = (this.query || '').trim();
                     if (q.length < 2) {
@@ -709,7 +784,6 @@
 
                     const key = this._key(q, this.category);
 
-                    // Cache hit → instant
                     const cached = this._cache.get(key);
                     if (cached && (Date.now() - cached.t) < this._cacheTTL) {
                         this.results = cached.data;
@@ -718,7 +792,6 @@
                         return;
                     }
 
-                    // Abort any in-flight request
                     if (this.controller) this.controller.abort();
                     this.controller = new AbortController();
 
@@ -726,10 +799,7 @@
                     this.open = true;
 
                     try {
-                        const params = new URLSearchParams({
-                            q: q,
-                            category: this.category,
-                        });
+                        const params = new URLSearchParams({ q: q, category: this.category });
                         const res = await fetch(`${this.suggestUrl}?${params}`, {
                             headers: {
                                 'Accept': 'application/json',
@@ -743,10 +813,8 @@
                             this.results = data.results || {};
                             this.rebuildFlat();
 
-                            // Cache successful response
                             this._cache.set(key, { t: Date.now(), data: this.results });
 
-                            // Keep cache bounded (max 40 entries)
                             if (this._cache.size > 40) {
                                 const firstKey = this._cache.keys().next().value;
                                 this._cache.delete(firstKey);
@@ -761,7 +829,6 @@
                     }
                 },
 
-                // ✅ NEW: keyboard handler
                 onKeydown(e) {
                     if (e.key === 'ArrowDown') {
                         e.preventDefault();
@@ -799,7 +866,6 @@
                     if (this.query.length < 2) return;
                     this.saveRecent(this.query, this.category);
 
-                    // ✅ FIX: close the advanced modal if it happens to be open
                     if (typeof window.closeSearchModal === 'function') {
                         window.closeSearchModal();
                     }
@@ -842,9 +908,6 @@
                 }
             }));
 
-            // --------------------------------------------------------
-            // recentSearches — chips in the advanced modal
-            // --------------------------------------------------------
             Alpine.data('recentSearches', () => ({
                 items: [],
 
@@ -875,7 +938,6 @@
                     if (input)  input.value  = item.q;
                     if (select) select.value = item.c || 'all';
 
-                    // ✅ FIX: close the modal before navigating
                     if (typeof window.closeSearchModal === 'function') {
                         window.closeSearchModal();
                     }
@@ -887,7 +949,6 @@
             }));
 
             Alpine.__searchFactoriesRegistered = true;
-            console.log('✅ Search factories registered');
             return true;
         }
 
@@ -916,7 +977,6 @@
         const closeBtn   = document.getElementById('closeSearchModal');
         const modal      = document.getElementById('searchModal');
 
-        // ✅ FIX: robust open/close helpers
         function closeSearchModal() {
             const m = document.getElementById('searchModal');
             if (!m) return;
@@ -936,7 +996,6 @@
         }
         window.openSearchModal = openSearchModal;
 
-        // ✅ FIX: close the modal FIRST, then navigate
         function triggerSearch() {
             const q = (input?.value || '').trim();
             if (q.length < 2) { input?.focus(); return; }
@@ -1008,7 +1067,6 @@
             });
         }
 
-        // ✅ NEW: Esc closes modal, "/" focuses quick search
         document.addEventListener('keydown', function (e) {
             if (e.key === 'Escape') {
                 const m = document.getElementById('searchModal');
@@ -1024,7 +1082,6 @@
             }
         });
 
-        // ✅ NEW: backdrop click closes modal
         if (modal) {
             modal.addEventListener('click', function (e) {
                 if (e.target === modal) closeSearchModal();
@@ -1033,7 +1090,7 @@
     });
 
     // ============================================================
-    // 3. ✅ FIX: handle bfcache restore (Back button)
+    // 3. bfcache restore
     // ============================================================
     window.addEventListener('pageshow', function (event) {
         if (event.persisted) {
@@ -1048,6 +1105,268 @@
 @endpush
 @endif
 
+{{-- ============================================================ --}}
+{{-- ✅ THEME SETTINGS MODAL — v3 (server-driven + luminance text) --}}
+{{-- ============================================================ --}}
+@php
+    // ✅ FIX: Pull current theme state from server so the modal shows
+    // the correct selection on first paint (no flash-of-unselected).
+    $themeSettingsData  = [];
+    $themeColorsData    = [];
+    try {
+        if (auth()->check() && app()->bound(\App\Contracts\Theme\ThemeServiceInterface::class)) {
+            $themeSvc           = app(\App\Contracts\Theme\ThemeServiceInterface::class);
+            $settingsResponse   = $themeSvc->getSettings(auth()->user());
+            $colorsResponse     = $themeSvc->getColors(auth()->user());
+            $themeSettingsData  = $settingsResponse['settings'] ?? [];
+            $themeColorsData    = $colorsResponse['colors'] ?? [];
+        }
+    } catch (\Throwable $e) {
+        $themeSettingsData = [];
+        $themeColorsData   = [];
+    }
+
+    $currentAppearance  = $themeSettingsData['appearance']    ?? 'system';
+    $currentSidebarTheme= $themeSettingsData['sidebar_theme'] ?? 'default';
+
+    $defaultColors = ['primary' => '#7267f0', 'secondary' => '#6258e0', 'accent' => '#f59e0b'];
+    $currentColors = array_merge($defaultColors, is_array($themeColorsData) ? $themeColorsData : []);
+
+    // Convert primary hex → RGB for --primary-rgb
+    $hexToRgb = function ($hex) {
+        $hex = ltrim($hex, '#');
+        if (strlen($hex) === 3) {
+            $hex = $hex[0].$hex[0].$hex[1].$hex[1].$hex[2].$hex[2];
+        }
+        if (!preg_match('/^[0-9a-f]{6}$/i', $hex)) return [114, 103, 240];
+        return [hexdec(substr($hex,0,2)), hexdec(substr($hex,2,2)), hexdec(substr($hex,4,2))];
+    };
+    [$pr,$pg,$pb] = $hexToRgb($currentColors['primary']);
+@endphp
+
+@auth
+<div id="themeSettingsModal"
+     class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto"
+     style="padding-top: 2rem; padding-bottom: 2rem;"
+     aria-hidden="true"
+     data-appearance="{{ $currentAppearance }}"
+     data-sidebar-theme="{{ $currentSidebarTheme }}"
+     data-primary="{{ $currentColors['primary'] }}"
+     data-primary-rgb="{{ $pr }},{{ $pg }},{{ $pb }}"
+     data-secondary="{{ $currentColors['secondary'] }}"
+     data-accent="{{ $currentColors['accent'] }}">
+
+    <div id="themeModalCard"
+         class="theme-modal relative mx-auto my-auto"
+         style="background-color: var(--card-bg);
+                border: 1px solid var(--border-color);
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                animation: modalSlideUp 0.3s ease-out;
+                width: 95%;
+                max-width: 560px;
+                max-height: calc(100vh - 4rem);
+                display: flex;
+                flex-direction: column;
+                border-radius: 16px;
+                overflow: hidden;">
+
+        {{-- HEADER --}}
+        <div class="modal-header flex justify-between items-center p-5 border-b flex-shrink-0"
+             style="border-color: var(--border-color); background-color: var(--card-bg);">
+            <div>
+                <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
+                    <i class="fas fa-palette mr-2" style="color: var(--primary);"></i>
+                    Theme Settings
+                </h3>
+                <p class="text-xs mt-0.5" style="color: var(--text-secondary);">
+                    Customize appearance, sidebar theme, and colors
+                </p>
+            </div>
+            <button id="closeThemeModal"
+                    type="button"
+                    class="p-2 rounded-full transition-colors duration-200"
+                    style="color: var(--text-secondary);"
+                    aria-label="Close theme settings">
+                <i class="fas fa-times text-lg"></i>
+            </button>
+        </div>
+
+        {{-- BODY --}}
+        <div class="theme-modal-body p-5 overflow-y-auto"
+             style="max-height: calc(100vh - 14rem); scroll-behavior: smooth;"
+             id="themeModalBody">
+
+            {{-- APPEARANCE --}}
+            <section class="mb-6">
+                <div class="flex items-center justify-between mb-3">
+                    <h4 class="text-sm font-semibold" style="color: var(--text-primary);">
+                        <i class="fas fa-adjust mr-1.5" style="color: var(--primary);"></i>
+                        Appearance
+                    </h4>
+                    <span id="themeSaveIndicator"
+                          class="text-xs px-2 py-0.5 rounded-full hidden"
+                          style="background-color: rgba(var(--primary-rgb), 0.1); color: var(--primary);">
+                        <i class="fas fa-circle-notch fa-spin mr-1"></i>Saving…
+                    </span>
+                </div>
+
+                <div class="theme-appearance-grid" role="radiogroup" aria-label="Appearance">
+                    @php $appearances = ['light' => ['icon' => 'fa-sun', 'label' => 'Light'], 'dark' => ['icon' => 'fa-moon', 'label' => 'Dark'], 'system' => ['icon' => 'fa-desktop', 'label' => 'System']]; @endphp
+                    @foreach($appearances as $key => $meta)
+                        <button type="button"
+                                class="theme-appearance-btn {{ $currentAppearance === $key ? 'active' : '' }}"
+                                data-appearance="{{ $key }}"
+                                role="radio"
+                                aria-checked="{{ $currentAppearance === $key ? 'true' : 'false' }}">
+                            <div class="theme-appearance-preview theme-appearance-preview--{{ $key }}">
+                                <i class="fas {{ $meta['icon'] }}"></i>
+                            </div>
+                            <span class="theme-option-label">{{ $meta['label'] }}</span>
+                        </button>
+                    @endforeach
+                </div>
+            </section>
+
+            {{-- SIDEBAR THEME --}}
+            <section class="mb-6">
+                <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
+                    <i class="fas fa-columns mr-1.5" style="color: var(--primary);"></i>
+                    Sidebar Theme
+                </h4>
+
+                <div class="sidebar-theme-grid" role="radiogroup" aria-label="Sidebar theme">
+                    @php
+                        $sidebarSwatches = [
+                            'default' => '#7267f0',
+                            'dark'    => '#1a1a2e',
+                            'light'   => '#ffffff',
+                            'blue'    => '#1a56db',
+                            'green'   => '#059669',
+                            'custom'  => null,
+                        ];
+                    @endphp
+
+                    @foreach($sidebarSwatches as $key => $color)
+                        <button type="button"
+                                class="sidebar-theme-btn {{ $key === 'custom' ? 'sidebar-theme-btn--custom' : '' }} {{ $currentSidebarTheme === $key ? 'active' : '' }}"
+                                data-sidebar-theme="{{ $key }}"
+                                role="radio"
+                                aria-checked="{{ $currentSidebarTheme === $key ? 'true' : 'false' }}"
+                                title="{{ ucfirst($key) }}">
+                            @if($key === 'custom')
+                                <span class="sidebar-swatch sidebar-swatch--custom" id="customSwatchPreview">
+                                    <span class="sidebar-swatch-half sidebar-swatch-half--left"
+                                          style="background-color: {{ $currentColors['primary'] }};"></span>
+                                    <span class="sidebar-swatch-half sidebar-swatch-half--right"
+                                          style="background-color: {{ $currentColors['secondary'] }};"></span>
+                                </span>
+                            @else
+                                <span class="sidebar-swatch"
+                                      style="background-color: {{ $color }};{{ $key === 'light' ? ' border: 1px solid var(--border-color);' : '' }}">
+                                </span>
+                            @endif
+                            <span class="theme-option-label">{{ ucfirst($key) }}</span>
+                        </button>
+                    @endforeach
+                </div>
+
+                <p class="text-xs mt-2" style="color: var(--text-secondary);">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    Choose a solid colour for the sidebar. "Custom" uses your saved primary/secondary colors.
+                </p>
+            </section>
+
+            {{-- CUSTOM COLORS --}}
+            {{-- ✅ FIX: visibility driven by the CURRENT sidebar theme so
+                 it's correct on first render, not just after JS runs. --}}
+            <section class="mb-6" id="customColorsSection"
+                     style="{{ $currentSidebarTheme !== 'custom' ? 'display:none;' : '' }}">
+                <div class="flex items-center justify-between mb-3">
+                    <h4 class="text-sm font-semibold" style="color: var(--text-primary);">
+                        <i class="fas fa-tint mr-1.5" style="color: var(--primary);"></i>
+                        Custom Colors
+                    </h4>
+                    <button type="button"
+                            id="resetColorsBtn"
+                            class="text-xs px-2 py-1 rounded transition-colors"
+                            style="color: var(--danger);">
+                        <i class="fas fa-undo mr-1"></i>Reset
+                    </button>
+                </div>
+
+                <div class="custom-colors-grid">
+                    @foreach(['primary' => 'Primary', 'secondary' => 'Secondary', 'accent' => 'Accent'] as $ck => $clabel)
+                        <label class="color-input-wrapper" for="customColor{{ ucfirst($ck) }}">
+                            <span class="color-input-swatch" id="customColor{{ ucfirst($ck) }}Swatch"
+                                  style="background-color: {{ $currentColors[$ck] }};"></span>
+                            <span class="color-input-meta">
+                                <span class="color-input-label">{{ $clabel }}</span>
+                                <span class="color-input-value" id="customColor{{ ucfirst($ck) }}Value">{{ strtoupper($currentColors[$ck]) }}</span>
+                            </span>
+                            <input type="color"
+                                   id="customColor{{ ucfirst($ck) }}"
+                                   name="custom_colors[{{ $ck }}]"
+                                   value="{{ $currentColors[$ck] }}"
+                                   data-color-key="{{ $ck }}"
+                                   class="color-input-hidden">
+                        </label>
+                    @endforeach
+                </div>
+
+                <p class="text-xs mt-2" style="color: var(--text-secondary);">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    These colors apply when "Custom" sidebar theme is selected.
+                </p>
+            </section>
+
+            {{-- LIVE PREVIEW --}}
+            <section class="mb-2">
+                <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
+                    <i class="fas fa-eye mr-1.5" style="color: var(--primary);"></i>
+                    Live Preview
+                </h4>
+                <div class="theme-preview-frame" id="themePreviewFrame">
+                    <div class="theme-preview-sidebar" id="themePreviewSidebar">
+                        <div class="theme-preview-logo"></div>
+                        <div class="theme-preview-nav">
+                            <span></span><span></span><span></span>
+                        </div>
+                    </div>
+                    <div class="theme-preview-content">
+                        <div class="theme-preview-header"></div>
+                        <div class="theme-preview-block"></div>
+                        <div class="theme-preview-block short"></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        {{-- FOOTER --}}
+        <div class="modal-footer p-4 border-t flex justify-between items-center flex-shrink-0"
+             style="border-color: var(--border-color); background-color: var(--bg-secondary);">
+            <button type="button"
+                    id="resetThemeBtn"
+                    class="text-sm px-3 py-1.5 rounded-lg transition-colors"
+                    style="color: var(--danger);">
+                <i class="fas fa-redo mr-1"></i>Reset All
+            </button>
+            <div class="flex gap-2">
+                <button type="button"
+                        id="closeThemeModalBtn"
+                        class="px-4 py-2 text-sm font-medium rounded-lg"
+                        style="color: var(--text-secondary);">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+@endauth
+
+{{-- ============================================================ --}}
+{{-- EXISTING MODALS: BILLING, EMAIL, SMS, WHATSAPP, SEARCH,     --}}
+{{-- INVOICE — unchanged (Administrative Tools modal REMOVED)    --}}
+{{-- ============================================================ --}}
 
 <!-- ============ BILLING MANAGEMENT MODAL (Super Admin only) ============ -->
 @if($isSuperAdmin)
@@ -2174,7 +2493,6 @@
                 border-radius: 16px;
                 overflow: hidden;">
 
-        <!-- Modal Header -->
         <div class="px-6 py-4 border-b flex justify-between items-center flex-shrink-0 modal-header-light"
              style="border-color: var(--border-color); background-color: var(--card-bg);">
             <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
@@ -2197,10 +2515,8 @@
             </button>
         </div>
 
-        <!-- Modal Body -->
         <div class="flex-1 overflow-y-auto modal-scrollable-body p-6" style="max-height: calc(100vh - 14rem); scroll-behavior: smooth;">
 
-            <!-- Info Message -->
             <div class="mb-6 p-4 rounded-lg" style="background-color: rgba(var(--primary-rgb), 0.1); border: 1px solid var(--primary);">
                 <div class="flex items-start">
                     <i class="fas fa-info-circle mr-3 mt-0.5" style="color: var(--primary);"></i>
@@ -2214,7 +2530,6 @@
                 </div>
             </div>
 
-            <!-- Search Input -->
             <div class="mb-6">
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                     Search Term
@@ -2229,7 +2544,6 @@
                        minlength="2">
             </div>
 
-            <!-- Search Category -->
             <div class="mb-6">
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                     Search Category (Optional)
@@ -2273,7 +2587,6 @@
                 </p>
             </div>
 
-            {{-- ✅ Recent Searches — Alpine-powered --}}
             <div id="recentSearches" class="mb-6" x-data="recentSearches()" x-init="init()">
                 <div class="flex justify-between items-center mb-2">
                     <label class="block text-sm font-medium" style="color: var(--text-primary);">
@@ -2312,7 +2625,6 @@
             </div>
         </div>
 
-        <!-- Scroll indicators -->
         <div class="scroll-indicator top-indicator hidden" id="scrollTopIndicator">
             <i class="fas fa-chevron-up" style="color: var(--primary);"></i>
         </div>
@@ -2320,7 +2632,6 @@
             <i class="fas fa-chevron-down" style="color: var(--primary);"></i>
         </div>
 
-        <!-- Modal Footer -->
         <div class="px-6 py-4 border-t flex justify-between flex-shrink-0 modal-footer-light"
              style="border-color: var(--border-color); background-color: var(--bg-secondary);">
             <div class="flex space-x-2">
@@ -2599,180 +2910,9 @@
 </div>
 @endif
 
-<!-- ============ ADMINISTRATIVE TOOLS MODAL ============ -->
-@if($isAuthorized)
-<div id="administrativeToolsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 2rem; padding-bottom: 2rem;">
-    <div class="admin-tools-modal relative mx-auto my-auto"
-         style="background-color: var(--card-bg);
-                border: 1px solid var(--border-color);
-                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-                animation: modalSlideUp 0.3s ease-out;
-                width: 90%;
-                max-width: 1200px;
-                max-height: calc(100vh - 4rem);
-                display: flex;
-                flex-direction: column;
-                border-radius: 16px;
-                overflow: hidden;">
-
-        <div class="modal-header flex justify-between items-center p-6 border-b flex-shrink-0"
-             style="border-color: var(--border-color); background-color: var(--card-bg);">
-            <h3 class="text-xl font-semibold" style="color: var(--text-primary);">
-                <i class="fas fa-tools mr-3" style="color: var(--primary);"></i>
-                Administrative Tools
-            </h3>
-            <button id="closeAdminToolsModal" class="p-2 rounded-full transition-colors duration-200"
-                    style="color: var(--text-secondary);">
-                <i class="fas fa-times text-lg"></i>
-            </button>
-        </div>
-
-        <div class="modal-body p-6 overflow-y-auto" style="max-height: calc(100vh - 12rem); scroll-behavior: smooth;">
-            <p class="text-sm mb-6" style="color: var(--text-secondary);">
-                Select an administrative module to manage system functions.
-            </p>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <a href="{{ route('admin.security-posts.index') }}" class="admin-tools-card group"
-                   onclick="closeAdminToolsModal()">
-                    <div class="admin-tools-icon-container"><i class="fas fa-map-marker-alt" style="color: var(--primary);"></i></div>
-                    <div class="admin-tools-content">
-                        <h4 class="admin-tools-title">Security Posts</h4>
-                        <p class="admin-tools-description">Manage guard stations and checkpoints</p>
-                    </div>
-                    <div class="admin-tools-arrow"><i class="fas fa-chevron-right"></i></div>
-                </a>
-
-                <a href="{{ route('admin.security-shifts.index') }}" class="admin-tools-card group"
-                   onclick="closeAdminToolsModal()">
-                    <div class="admin-tools-icon-container"><i class="fas fa-clock" style="color: var(--success);"></i></div>
-                    <div class="admin-tools-content">
-                        <h4 class="admin-tools-title">Security Shifts</h4>
-                        <p class="admin-tools-description">Define and manage shift patterns</p>
-                    </div>
-                    <div class="admin-tools-arrow"><i class="fas fa-chevron-right"></i></div>
-                </a>
-
-                <a href="{{ route('admin.security-schedules.index') }}" class="admin-tools-card group"
-                   onclick="closeAdminToolsModal()">
-                    <div class="admin-tools-icon-container"><i class="fas fa-calendar-alt" style="color: var(--info);"></i></div>
-                    <div class="admin-tools-content">
-                        <h4 class="admin-tools-title">Security Schedules</h4>
-                        <p class="admin-tools-description">Schedule personnel to posts</p>
-                    </div>
-                    <div class="admin-tools-arrow"><i class="fas fa-chevron-right"></i></div>
-                </a>
-
-                <a href="{{ route('admin.supervisor-assignments.index') }}" class="admin-tools-card group"
-                   onclick="closeAdminToolsModal()">
-                    <div class="admin-tools-icon-container"><i class="fas fa-user-shield" style="color: var(--warning);"></i></div>
-                    <div class="admin-tools-content">
-                        <h4 class="admin-tools-title">Supervisor Assignments</h4>
-                        <p class="admin-tools-description">Assign supervisors to posts</p>
-                    </div>
-                    <div class="admin-tools-arrow"><i class="fas fa-chevron-right"></i></div>
-                </a>
-
-                <a href="{{ route('admin.ownership-transfers.index') }}" class="admin-tools-card group"
-                   onclick="closeAdminToolsModal()">
-                    <div class="admin-tools-icon-container"><i class="fas fa-exchange-alt" style="color: var(--danger);"></i></div>
-                    <div class="admin-tools-content">
-                        <h4 class="admin-tools-title">Ownership Transfers</h4>
-                        <p class="admin-tools-description">Manage property transfers</p>
-                    </div>
-                    <div class="admin-tools-arrow"><i class="fas fa-chevron-right"></i></div>
-                </a>
-            </div>
-        </div>
-
-        <div class="modal-footer p-6 border-t flex justify-end flex-shrink-0"
-             style="border-color: var(--border-color); background-color: var(--bg-secondary);">
-            <button id="cancelAdminToolsModal" class="px-4 py-2 text-sm font-medium"
-                    style="color: var(--text-secondary);">Close</button>
-        </div>
-    </div>
-</div>
-@endif
-
-<!-- ============ THEME SETTINGS MODAL ============ -->
-<div id="themeSettingsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 hidden overflow-y-auto" style="padding-top: 2rem; padding-bottom: 2rem;">
-    <div class="theme-modal-compact relative mx-auto my-auto"
-         style="background-color: var(--card-bg);
-                border: 1px solid var(--border-color);
-                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-                animation: modalSlideUp 0.3s ease-out;
-                width: 90%;
-                max-width: 400px;
-                max-height: calc(100vh - 4rem);
-                display: flex;
-                flex-direction: column;
-                border-radius: 12px;
-                overflow: hidden;">
-
-        <div class="theme-modal-header-compact flex justify-between items-center p-4 border-b flex-shrink-0"
-             style="border-color: var(--border-color); background-color: var(--card-bg);">
-            <h3 class="text-base font-semibold" style="color: var(--text-primary);">
-                <i class="fas fa-palette mr-2" style="color: var(--primary);"></i>Theme Settings
-            </h3>
-            <button id="closeThemeModal" class="p-1 rounded-full transition-colors duration-200"
-                    style="color: var(--text-secondary);">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-
-        <div class="theme-modal-body-compact p-4 overflow-y-auto" style="max-height: calc(100vh - 10rem); scroll-behavior: smooth;">
-            <div class="mb-6">
-                <h4 class="text-sm font-medium mb-2" style="color: var(--text-primary);">Appearance</h4>
-                <div class="grid grid-cols-3 gap-3">
-                    <div class="appearance-option-compact cursor-pointer text-center" data-theme="light">
-                        <div class="bg-white border rounded-lg p-3 mb-1"><i class="fas fa-sun text-yellow-500"></i></div>
-                        <span class="text-xs">Light</span>
-                    </div>
-                    <div class="appearance-option-compact cursor-pointer text-center" data-theme="dark">
-                        <div class="bg-gray-800 border rounded-lg p-3 mb-1"><i class="fas fa-moon text-blue-300"></i></div>
-                        <span class="text-xs">Dark</span>
-                    </div>
-                    <div class="appearance-option-compact cursor-pointer text-center" data-theme="system">
-                        <div class="bg-gradient-to-r from-gray-100 to-gray-800 border rounded-lg p-3 mb-1"><i class="fas fa-desktop"></i></div>
-                        <span class="text-xs">System</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="mb-4">
-                <h4 class="text-sm font-medium mb-2" style="color: var(--text-primary);">Sidebar Theme</h4>
-                <div class="grid grid-cols-5 gap-2">
-                    <div class="theme-option-compact cursor-pointer text-center" data-theme="default">
-                        <div class="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg h-12 mb-1"></div>
-                        <span class="text-xs">Default</span>
-                    </div>
-                    <div class="theme-option-compact cursor-pointer text-center" data-theme="dark">
-                        <div class="bg-gradient-to-br from-gray-800 to-gray-900 rounded-lg h-12 mb-1"></div>
-                        <span class="text-xs">Dark</span>
-                    </div>
-                    <div class="theme-option-compact cursor-pointer text-center" data-theme="light">
-                        <div class="bg-white border rounded-lg h-12 mb-1"></div>
-                        <span class="text-xs">Light</span>
-                    </div>
-                    <div class="theme-option-compact cursor-pointer text-center" data-theme="blue">
-                        <div class="bg-gradient-to-br from-blue-600 to-blue-800 rounded-lg h-12 mb-1"></div>
-                        <span class="text-xs">Blue</span>
-                    </div>
-                    <div class="theme-option-compact cursor-pointer text-center" data-theme="green">
-                        <div class="bg-gradient-to-br from-green-600 to-green-800 rounded-lg h-12 mb-1"></div>
-                        <span class="text-xs">Green</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="theme-modal-footer-compact flex justify-end p-4 border-t flex-shrink-0"
-             style="border-color: var(--border-color); background-color: var(--bg-secondary);">
-            <button id="closeThemeModalBtn" class="px-4 py-2 text-sm font-medium rounded-lg"
-                    style="color: var(--text-secondary);">Close</button>
-        </div>
-    </div>
-</div>
+{{-- ⛔ ADMINISTRATIVE TOOLS MODAL — REMOVED ⛔ --}}
+{{-- Its security links now live directly in the sidebar under "SECURITY MANAGEMENT" --}}
+{{-- Property transfers are now a standalone "Manage Property Transfer" sidebar link --}}
 
 <!-- Main Content Header -->
 <div class="content" id="mainContent">
@@ -2786,9 +2926,6 @@
 
         <div class="flex items-center space-x-4">
             @if($isAuthorized)
-            {{-- ============================================ --}}
-            {{-- ✅ Quick search — Alpine live dropdown (FAST) --}}
-            {{-- ============================================ --}}
             <div class="relative" x-data="quickSearch()" @click.away="close()">
                 <div class="flex items-center space-x-2">
                     <div class="relative hidden md:block">
@@ -2817,13 +2954,11 @@
                             <i class="fas fa-sliders-h text-sm"></i>
                         </button>
 
-                        {{-- ✅ NEW: spinner shown while fetching (uses .search-spinner from layout) --}}
                         <div x-show="loading" x-cloak
                              class="absolute right-8 top-1/2 transform -translate-y-1/2">
                             <span class="search-spinner"></span>
                         </div>
 
-                        {{-- Live dropdown results --}}
                         <div x-show="open" x-cloak
                              x-transition:enter="transition ease-out duration-150"
                              x-transition:enter-start="opacity-0 transform -translate-y-1"

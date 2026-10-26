@@ -135,7 +135,9 @@ class Activity extends Model
         $activity->method = request()->method();
         $activity->url = request()->fullUrl();
         $activity->route_name = request()->route()?->getName();
-        $activity->session_id = session()->getId();
+        $activity->session_id = app()->bound('session') && session()->isStarted()
+            ? session()->getId()
+            : null;
         
         if ($subject) {
             $activity->subject_type = get_class($subject);

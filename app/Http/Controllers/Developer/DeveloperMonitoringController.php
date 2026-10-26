@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 class DeveloperMonitoringController extends Controller
 {
@@ -32,7 +34,7 @@ class DeveloperMonitoringController extends Controller
     private function canAccessMonitoring()
     {
         $user = auth()->user();
-        
+
         // STRICT ENFORCEMENT: Only type 5 (developer) or type 0 (super admin) allowed
         return $user->type === self::USER_TYPE_DEVELOPER || $user->type === self::USER_TYPE_SUPER_ADMIN;
     }
@@ -109,18 +111,18 @@ class DeveloperMonitoringController extends Controller
                 ]);
                 abort(403, 'Unauthorized to view monitoring dashboard. You must be a developer (type 5) or super admin (type 0).');
             }
-            
+
             $systemMetrics = $this->monitoringService->getDashboardMetrics();
             $performanceData = $this->monitoringService->getPerformanceData();
             $errorLogs = $this->monitoringService->getRecentErrors(50);
             $activeAlerts = $this->monitoringService->getActiveAlerts();
             $usageStatistics = $this->monitoringService->getUsageStatistics();
-            
+
             $this->logAudit('monitoring_viewed', 'Monitoring dashboard viewed', [
                 'user_type' => auth()->user()->type,
                 'user_type_name' => auth()->user()->type === self::USER_TYPE_DEVELOPER ? 'Developer' : 'Super Admin'
             ]);
-            
+
             return view('developer.monitoring.dashboard', compact(
                 'systemMetrics',
                 'performanceData',
@@ -128,7 +130,7 @@ class DeveloperMonitoringController extends Controller
                 'activeAlerts',
                 'usageStatistics'
             ));
-            
+
         } catch (\Exception $e) {
             Log::error('Monitoring dashboard error: ' . $e->getMessage(), [
                 'user_id' => auth()->id(),
@@ -140,6 +142,9 @@ class DeveloperMonitoringController extends Controller
 
     /**
      * View error log
+     *
+     * Uses a pure-PHP tail reader instead of `shell_exec('tail ...')`
+     * so it works on Windows (XAMPP) as well as Linux.
      */
     public function errorLog()
     {
@@ -154,30 +159,33 @@ class DeveloperMonitoringController extends Controller
                 ]);
                 abort(403, 'Unauthorized to view error logs. You must be a developer (type 5) or super admin (type 0).');
             }
-            
+
             $logPath = storage_path('logs/laravel.log');
             $errorLog = '';
-            
-            if (file_exists($logPath)) {
-                $errorLog = shell_exec('tail -n 1000 ' . escapeshellarg($logPath));
+
+            if (file_exists($logPath) && is_readable($logPath)) {
+                $errorLog = $this->tailFile($logPath, 1000);
             }
-            
+
             $dbErrors = [];
             if (Schema::hasTable('error_logs')) {
-                $dbErrors = DB::table('error_logs')
-                    ->where('developer_setting_id', auth()->user()->developerSetting->id ?? null)
-                    ->orderBy('created_at', 'desc')
-                    ->limit(100)
-                    ->get();
+                $devId = optional(auth()->user()->developerSetting)->id;
+                if ($devId) {
+                    $dbErrors = DB::table('error_logs')
+                        ->where('developer_setting_id', $devId)
+                        ->orderBy('created_at', 'desc')
+                        ->limit(100)
+                        ->get();
+                }
             }
-            
+
             $this->logAudit('error_log_viewed', 'Error log viewed', [
                 'user_type' => auth()->user()->type,
                 'log_size' => file_exists($logPath) ? filesize($logPath) : 0
             ]);
-            
+
             return view('developer.monitoring.error-log', compact('errorLog', 'dbErrors'));
-            
+
         } catch (\Exception $e) {
             Log::error('Failed to view error log: ' . $e->getMessage(), [
                 'user_id' => auth()->id(),
@@ -189,6 +197,9 @@ class DeveloperMonitoringController extends Controller
 
     /**
      * Clear error logs
+     *
+     * Scoped to the current developer's `error_logs` rows. Previously this
+     * truncated the entire table, wiping other developers' records too.
      */
     public function clearLogs()
     {
@@ -200,34 +211,43 @@ class DeveloperMonitoringController extends Controller
                     'message' => 'Unauthorized to clear logs. You must be a developer (type 5) or super admin (type 0).'
                 ], 403);
             }
-            
+
             $logPath = storage_path('logs/laravel.log');
             if (file_exists($logPath)) {
                 file_put_contents($logPath, '');
             }
-            
+
             if (Schema::hasTable('error_logs')) {
-                DB::table('error_logs')->truncate();
+                $devId = optional(auth()->user()->developerSetting)->id;
+                if ($devId) {
+                    // Scoped: only the current developer's error logs
+                    DB::table('error_logs')
+                        ->where('developer_setting_id', $devId)
+                        ->delete();
+                }
             }
-            
-            DB::table('activity_log')->where('log_name', 'developer')->delete();
-            
+
+            DB::table('activity_log')
+                ->where('log_name', 'developer')
+                ->where('causer_id', auth()->id())
+                ->delete();
+
             $this->logAudit('logs_cleared', 'Error logs cleared', [
                 'user_type' => auth()->user()->type,
                 'ip_address' => request()->ip()
             ]);
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Error logs cleared successfully!'
             ]);
-            
+
         } catch (\Exception $e) {
             Log::error('Failed to clear error logs: ' . $e->getMessage(), [
                 'user_id' => auth()->id(),
                 'user_type' => auth()->user()->type
             ]);
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to clear error logs: ' . $e->getMessage()
@@ -243,21 +263,21 @@ class DeveloperMonitoringController extends Controller
         if (!$request->hasValidSignature()) {
             abort(403, 'Invalid CSRF token');
         }
-        
+
         $validator = Validator::make($request->all(), [
             'report_type' => 'required|in:daily,weekly,monthly,custom',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
             'format' => 'required|in:pdf,excel,csv,json'
         ]);
-        
+
         if ($validator->fails()) {
             return redirect()->back()
                 ->withErrors($validator)
                 ->withInput()
                 ->with('error', 'Please provide valid report parameters');
         }
-        
+
         try {
             // Check authorization - STRICT: only type 5 or 0
             if (!$this->canGenerateReports()) {
@@ -269,26 +289,26 @@ class DeveloperMonitoringController extends Controller
                 ]);
                 abort(403, 'Unauthorized to generate reports. You must be a developer (type 5) or super admin (type 0).');
             }
-            
+
             $data = $validator->validated();
-            
+
             $report = $this->monitoringService->generateReport(
                 $data['report_type'],
                 $data['start_date'] ?? null,
                 $data['end_date'] ?? null,
                 $data['format']
             );
-            
+
             $this->logAudit('report_generated', 'System report generated', [
                 'report_type' => $data['report_type'],
                 'format' => $data['format'],
                 'user_type' => auth()->user()->type,
                 'ip_address' => request()->ip()
             ]);
-            
+
             if ($request->boolean('download', true)) {
                 $filename = "developer_report_{$data['report_type']}_" . date('Y-m-d') . ".{$data['format']}";
-                
+
                 return response()->streamDownload(function () use ($report) {
                     echo $report['content'];
                 }, $filename, [
@@ -296,17 +316,17 @@ class DeveloperMonitoringController extends Controller
                     'Content-Security-Policy' => "default-src 'self'"
                 ]);
             }
-            
+
             return redirect()->route('developer.monitoring.dashboard')
                 ->with('success', 'Report generated successfully!')
                 ->with('report_data', $report);
-                
+
         } catch (\Exception $e) {
             Log::error('Failed to generate report: ' . $e->getMessage(), [
                 'user_id' => auth()->id(),
                 'user_type' => auth()->user()->type
             ]);
-            
+
             return redirect()->back()
                 ->with('error', 'Failed to generate report: ' . $e->getMessage())
                 ->withInput();
@@ -326,17 +346,17 @@ class DeveloperMonitoringController extends Controller
                     'message' => 'Unauthorized to view system metrics. You must be a developer (type 5) or super admin (type 0).'
                 ], 403);
             }
-            
+
             $stats = $this->monitoringService->getSystemStatistics();
             $memoryUsage = $this->monitoringService->getMemoryUsagePercentage();
             $diskUsage = $this->monitoringService->getDiskUsagePercentage();
             $uptime = $this->monitoringService->getSystemUptime();
-            
+
             $this->logAudit('metrics_viewed', 'System metrics viewed', [
                 'user_type' => auth()->user()->type,
                 'api_request' => true
             ]);
-            
+
             return response()->json([
                 'success' => true,
                 'memory_usage' => $memoryUsage,
@@ -345,7 +365,7 @@ class DeveloperMonitoringController extends Controller
                 'system_stats' => $stats,
                 'timestamp' => now()->toISOString()
             ]);
-            
+
         } catch (\Exception $e) {
             Log::error('Failed to get metrics: ' . $e->getMessage(), [
                 'user_id' => auth()->id(),
@@ -360,6 +380,9 @@ class DeveloperMonitoringController extends Controller
 
     /**
      * Run system health check
+     *
+     * Cache probe uses put/get/forget round-trip instead of `->ping()`
+     * because the ping method is not available on all cache drivers.
      */
     public function healthCheck()
     {
@@ -371,17 +394,17 @@ class DeveloperMonitoringController extends Controller
                     'message' => 'Unauthorized to run health checks. You must be a developer (type 5) or super admin (type 0).'
                 ], 403);
             }
-            
+
             $checks = [
                 [
                     'name' => 'Database Connection',
                     'description' => 'Check if database is accessible',
-                    'status' => DB::connection()->getPdo() ? 'healthy' : 'unhealthy'
+                    'status' => $this->testDatabaseRoundTrip() ? 'healthy' : 'unhealthy'
                 ],
                 [
                     'name' => 'Cache System',
                     'description' => 'Check if cache is working',
-                    'status' => Cache::store(config('cache.default'))->ping() ? 'healthy' : 'unhealthy'
+                    'status' => $this->testCacheRoundTrip() ? 'healthy' : 'unhealthy'
                 ],
                 [
                     'name' => 'Storage Directory',
@@ -404,18 +427,18 @@ class DeveloperMonitoringController extends Controller
                     'status' => config('mail.default') ? 'healthy' : 'warning'
                 ],
             ];
-            
+
             $this->logAudit('health_check', 'System health check performed', [
                 'user_type' => auth()->user()->type,
                 'ip_address' => request()->ip()
             ]);
-            
+
             return response()->json([
                 'success' => true,
                 'checks' => $checks,
                 'timestamp' => now()->toISOString()
             ]);
-            
+
         } catch (\Exception $e) {
             Log::error('Health check failed: ' . $e->getMessage(), [
                 'user_id' => auth()->id(),
@@ -441,21 +464,21 @@ class DeveloperMonitoringController extends Controller
                     'message' => 'Unauthorized to clear cache. You must be a developer (type 5) or super admin (type 0).'
                 ], 403);
             }
-            
+
             Artisan::call('cache:clear');
             Artisan::call('config:clear');
             Artisan::call('view:clear');
-            
+
             $this->logAudit('cache_cleared', 'Application cache cleared', [
                 'user_type' => auth()->user()->type,
                 'ip_address' => request()->ip()
             ]);
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Application cache cleared successfully!'
             ]);
-            
+
         } catch (\Exception $e) {
             Log::error('Failed to clear cache: ' . $e->getMessage(), [
                 'user_id' => auth()->id(),
@@ -481,22 +504,22 @@ class DeveloperMonitoringController extends Controller
                     'message' => 'Unauthorized to optimize system. You must be a developer (type 5) or super admin (type 0).'
                 ], 403);
             }
-            
+
             if (!$request->ajax() || !$request->hasValidSignature()) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Invalid request'
                 ], 403);
             }
-            
+
             Artisan::call('optimize:clear');
             Artisan::call('optimize');
-            
+
             $this->logAudit('system_optimized', 'System optimized', [
                 'user_type' => auth()->user()->type,
                 'ip_address' => request()->ip()
             ]);
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'System optimized successfully!',
@@ -530,15 +553,73 @@ class DeveloperMonitoringController extends Controller
                     'message' => 'Unauthorized'
                 ], 403);
             }
-            
+
             return $this->healthCheck();
-            
+
         } catch (\Exception $e) {
             Log::error('Health check API error: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Health check failed'
             ], 500);
+        }
+    }
+
+    /* ============================================================
+     | INTERNAL HELPERS
+     * ============================================================ */
+
+    /**
+     * Read the last N lines of a file.
+     *
+     * Pure PHP, no shell dependency. Works on Windows and Linux.
+     */
+    private function tailFile(string $path, int $lines): string
+    {
+        $handle = @fopen($path, 'r');
+        if (!$handle) {
+            return '';
+        }
+
+        $buffer = [];
+        while (($line = fgets($handle)) !== false) {
+            $buffer[] = $line;
+            if (count($buffer) > $lines) {
+                array_shift($buffer);
+            }
+        }
+        fclose($handle);
+
+        return implode('', $buffer);
+    }
+
+    /**
+     * Test a real database round-trip.
+     */
+    private function testDatabaseRoundTrip(): bool
+    {
+        try {
+            DB::select('SELECT 1');
+            return true;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Test a cache put/get/forget round-trip.
+     * Driver-agnostic (unlike `ping()`).
+     */
+    private function testCacheRoundTrip(): bool
+    {
+        try {
+            $key = 'health_probe_' . Str::random(8);
+            Cache::put($key, 'ok', 5);
+            $val = Cache::get($key);
+            Cache::forget($key);
+            return $val === 'ok';
+        } catch (\Throwable $e) {
+            return false;
         }
     }
 }

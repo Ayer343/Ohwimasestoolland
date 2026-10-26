@@ -44,6 +44,8 @@ class PropertyFamilyLink extends Model
         'linked_at',
         'revoked_at',
         'revoked_by',
+        'resubmitted_from_id',
+        'previous_rejection_reason',
     ];
 
     protected $casts = [
@@ -175,6 +177,22 @@ class PropertyFamilyLink extends Model
         }
         return ucfirst($this->relationship);
     }
+
+    /**
+ * The original proposal this one was resubmitted from (if any).
+ */
+public function resubmittedFrom()
+{
+    return $this->belongsTo(PropertyFamilyLink::class, 'resubmitted_from_id');
+}
+
+/**
+ * All proposals that were resubmitted from this one.
+ */
+public function resubmissions()
+{
+    return $this->hasMany(PropertyFamilyLink::class, 'resubmitted_from_id');
+}
 
     public function getDisplayNameAttribute(): string
     {

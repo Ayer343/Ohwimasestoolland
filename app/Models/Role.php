@@ -6,8 +6,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str; 
-use Illuminate\Support\Facades\Auth;  
+use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Auth;
 
 class Role extends Model
 {
@@ -43,18 +43,25 @@ class Role extends Model
      * @var array<string, string>
      */
     protected $casts = [
-        'priority' => 'integer',
-        'is_default' => 'boolean',
-        'is_system' => 'boolean',
+        'priority'    => 'integer',
+        'is_default'  => 'boolean',
+        'is_system'   => 'boolean',
         'permissions' => 'array',
-        'metadata' => 'array',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
-        'deleted_at' => 'datetime',
+        'metadata'    => 'array',
+        'created_at'  => 'datetime',
+        'updated_at'  => 'datetime',
+        'deleted_at'  => 'datetime',
     ];
 
     /**
      * The attributes that should be appended to arrays.
+     *
+     * ✅ FIX: `display_name` is cheap and safe to append. `user_count`
+     *         fires a DB query per role (unless cached), so appending it
+     *         unconditionally is an N+1. We keep it appended for BC with
+     *         existing frontend code (it IS cached), but callers that
+     *         don't need it should use `->makeHidden('user_count')` or
+     *         `->withoutAppends('user_count')` on hot paths.
      *
      * @var array<int, string>
      */
@@ -69,9 +76,9 @@ class Role extends Model
      * @var array
      */
     protected $attributes = [
-        'priority' => 0,
+        'priority'   => 0,
         'is_default' => false,
-        'is_system' => false,
+        'is_system'  => false,
     ];
 
     // ==================== RELATIONSHIPS ====================
@@ -83,13 +90,13 @@ class Role extends Model
     {
         return $this->belongsToMany(User::class, 'role_user')
                     ->withPivot([
-                        'id', 
-                        'assigned_by', 
+                        'id',
+                        'assigned_by',
                         'assigned_at',
                         'expires_at',
                         'is_active',
                         'is_primary',
-                        'metadata'
+                        'metadata',
                     ])
                     ->withTimestamps()
                     ->wherePivot('deleted_at', null);
@@ -102,7 +109,7 @@ class Role extends Model
     {
         return $this->belongsToMany(User::class, 'role_user')
                     ->wherePivot('is_active', true)
-                    ->where(function($q) {
+                    ->where(function ($q) {
                         $q->whereNull('role_user.expires_at')
                           ->orWhere('role_user.expires_at', '>', now());
                     })
@@ -129,18 +136,54 @@ class Role extends Model
 
     /**
      * Get display name (capitalized name)
+     *
+     * ✅ FIX: Null-safe. When the model was fetched with a partial select
+     *         (e.g. `get(['slug', 'priority'])`), `$this->name` is null.
+     *         Previously this called `str_replace(..., null)` which emits
+     *         a deprecation in PHP 8.5+ and returned "" as display_name.
+     *
+     *         Resolution order:
+     *           1. Explicit `display_name` column value (if present)
+     *           2. Prettified `name` column
+     *           3. Prettified `slug` column
+     *           4. Empty string
+     *
+     *         We read from `$this->attributes` (not `$this->name`) so that
+     *         accessors don't recurse or accidentally trigger `__get`.
      */
     public function getDisplayNameAttribute(): string
     {
-        return ucwords(str_replace(['-', '_'], ' ', $this->name));
+        // 1. Explicit display_name column wins if it's a real column value
+        $explicit = $this->attributes['display_name'] ?? null;
+        if (is_string($explicit) && $explicit !== '') {
+            return $explicit;
+        }
+
+        // 2. Prettify name, then slug — both guarded against null
+        $source = $this->attributes['name']
+            ?? $this->attributes['slug']
+            ?? '';
+
+        if (!is_string($source) || $source === '') {
+            return '';
+        }
+
+        return ucwords(str_replace(['-', '_'], ' ', $source));
     }
 
     /**
      * Get user count attribute
+     *
+     * ✅ FIX: Return 0 if the model has no primary key (unsaved) or no id
+     *         loaded (partial select). Cache key also becomes sensible.
      */
     public function getUserCountAttribute(): int
     {
-        return Cache::remember("role.{$this->id}.user_count", 3600, function() {
+        if (empty($this->id)) {
+            return 0;
+        }
+
+        return (int) Cache::remember("role.{$this->id}.user_count", 3600, function () {
             return $this->activeUsers()->count();
         });
     }
@@ -198,6 +241,42 @@ class Role extends Model
     }
 
     /**
+     * Resolve one or more role identifiers (IDs or slugs) into an array
+     * of numeric role IDs suitable for `$user->roles()->sync()`.
+     *
+     * ✅ NEW: Used by UserManagementController::store() to accept BOTH
+     *         legacy numeric IDs and the newer slug-based submission
+     *         from the auto-role hidden input in the create blade.
+     *
+     * @param  array<int|string>  $identifiers
+     * @return array<int>
+     */
+    public static function resolveToIds(array $identifiers): array
+    {
+        $numericIds = [];
+        $slugs      = [];
+
+        foreach ($identifiers as $value) {
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            if (is_numeric($value)) {
+                $numericIds[] = (int) $value;
+            } else {
+                $slugs[] = (string) $value;
+            }
+        }
+
+        if (!empty($slugs)) {
+            $slugIds = static::whereIn('slug', $slugs)->pluck('id')->all();
+            $numericIds = array_merge($numericIds, array_map('intval', $slugIds));
+        }
+
+        return array_values(array_unique(array_filter($numericIds)));
+    }
+
+    /**
      * Get all available roles for assignment
      */
     public static function getAvailableForAssignment(): \Illuminate\Database\Eloquent\Collection
@@ -211,11 +290,11 @@ class Role extends Model
     public static function getOptionsForDropdown($includeSystem = false): array
     {
         $query = static::ordered();
-        
+
         if (!$includeSystem) {
             $query->nonSystemRoles();
         }
-        
+
         return $query->get()->pluck('display_name', 'slug')->toArray();
     }
 
@@ -225,17 +304,15 @@ class Role extends Model
     public function hasPermission($permission): bool
     {
         $permissions = $this->permissions ?? [];
-        
-        // Check direct permissions
+
         if (in_array($permission, $permissions)) {
             return true;
         }
-        
-        // Check wildcard
+
         if (in_array('*', $permissions)) {
             return true;
         }
-        
+
         return false;
     }
 
@@ -249,7 +326,7 @@ class Role extends Model
                 return true;
             }
         }
-        
+
         return false;
     }
 
@@ -263,7 +340,7 @@ class Role extends Model
                 return false;
             }
         }
-        
+
         return true;
     }
 
@@ -273,13 +350,13 @@ class Role extends Model
     public function grantPermission($permission): bool
     {
         $permissions = $this->permissions ?? [];
-        
+
         if (!in_array($permission, $permissions)) {
-            $permissions[] = $permission;
-            $this->permissions = $permissions;
+            $permissions[]      = $permission;
+            $this->permissions  = $permissions;
             return $this->save();
         }
-        
+
         return false;
     }
 
@@ -289,13 +366,13 @@ class Role extends Model
     public function revokePermission($permission): bool
     {
         $permissions = $this->permissions ?? [];
-        
+
         if (($key = array_search($permission, $permissions)) !== false) {
             unset($permissions[$key]);
             $this->permissions = array_values($permissions);
             return $this->save();
         }
-        
+
         return false;
     }
 
@@ -304,7 +381,9 @@ class Role extends Model
      */
     public function clearCache(): void
     {
-        Cache::forget("role.{$this->id}.user_count");
+        if (!empty($this->id)) {
+            Cache::forget("role.{$this->id}.user_count");
+        }
     }
 
     /**
@@ -315,10 +394,14 @@ class Role extends Model
         parent::boot();
 
         static::creating(function ($role) {
+            // ✅ FIX: Null-safe slug generation. `Str::slug(null)` can
+            //         produce an empty string; fall back to a random
+            //         suffix so the DB unique constraint doesn't blow up.
             if (empty($role->slug)) {
-                $role->slug = Str::slug($role->name, '-');
+                $base = Str::slug((string) $role->name, '-');
+                $role->slug = $base !== '' ? $base : 'role-' . Str::random(6);
             }
-            
+
             if (auth()->check()) {
                 $role->created_by = auth()->id();
             }
@@ -328,7 +411,7 @@ class Role extends Model
             if (auth()->check()) {
                 $role->updated_by = auth()->id();
             }
-            
+
             // Don't allow system roles to be modified by non-super admins
             if ($role->isDirty() && $role->is_system) {
                 if (!auth()->check() || !auth()->user()->isSuperAdmin()) {
@@ -338,13 +421,12 @@ class Role extends Model
         });
 
         static::deleting(function ($role) {
-            // Prevent deletion of system roles
             if ($role->is_system) {
                 if (!auth()->check() || !auth()->user()->isSuperAdmin()) {
                     throw new \Exception('System roles cannot be deleted.');
                 }
             }
-            
+
             $role->clearCache();
         });
 

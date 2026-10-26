@@ -866,9 +866,32 @@ class SmsService
         return $this->sendSMS($defaultProvider, $phoneNumber, $message, $options);
     }
 
+        /**
+     * ✅ NEW: Send an SMS and return the full structured result.
+     *
+     * Prefer this over `send()` when the caller needs to distinguish
+     * between success and various failure modes — e.g. 2FA, where a
+     * silent failure leaves the user waiting for a code that will
+     * never arrive.
+     *
+     * Returns the same array shape produced by sendSMS()/sendWithDefaultProvider().
+     */
+    public function sendWithResult(string $phoneNumber, string $message, array $options = []): array
+    {
+        return $this->sendWithDefaultProvider($phoneNumber, $message, $options);
+    }
+
+    /**
+     * Fire-and-forget convenience wrapper.
+     *
+     * Returns true only when the default provider actually accepted
+     * the message. Callers that need the reason for a failure should
+     * use `sendWithResult()` instead.
+     */
     public function send(string $phoneNumber, string $message, array $options = []): bool
     {
-        $result = $this->sendWithDefaultProvider($phoneNumber, $message, $options);
+        $result = $this->sendWithResult($phoneNumber, $message, $options);
+
         return (bool) ($result['success'] ?? false);
     }
 

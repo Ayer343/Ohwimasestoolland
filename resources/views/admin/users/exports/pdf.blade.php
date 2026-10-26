@@ -306,6 +306,12 @@
         .dot-developer   { background-color: #a855f7; }
         .dot-default     { background-color: #9ca3af; }
 
+        /* ✅ NEW: property-access dots */
+        .dot-owner-only   { background-color: #10b981; }
+        .dot-linked-only  { background-color: #6366f1; }
+        .dot-both         { background-color: #0ea5e9; }
+        .dot-none         { background-color: #d1d5db; }
+
         .completion-card {
             background: #f8fafc;
             border: 1px solid #e2e8f0;
@@ -469,6 +475,27 @@
         .role-badge-extra {
             background: #dbeafe;
             color: #1e40af;
+        }
+
+        /* ✅ NEW: Property-access numeric cells */
+        .prop-num {
+            display: inline-block;
+            min-width: 26px;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            text-align: center;
+        }
+        .prop-num-owned   { background: #d1fae5; color: #065f46; }
+        .prop-num-linked  { background: #e0e7ff; color: #3730a3; }
+        .prop-num-total   { background: #dbeafe; color: #1e40af; }
+        .prop-num-zero    { background: #f1f5f9; color: #9ca3af; }
+
+        .prop-summary {
+            font-size: 10px;
+            color: #4b5563;
+            line-height: 1.3;
         }
 
         /* Footer */
@@ -689,6 +716,120 @@
                 </div>
             </div>
 
+            {{-- ═══════════════════════════════════════════════════════════ --}}
+            {{-- ✅ NEW: Property Access Breakdown                           --}}
+            {{--    Shows owner-only / linked-only / both / neither alongside --}}
+            {{--    the totals of owned and linked properties across the set.  --}}
+            {{-- ═══════════════════════════════════════════════════════════ --}}
+            @if(isset($statistics['property_access']))
+                @php $pa = $statistics['property_access']; @endphp
+                <div class="breakdown-section" style="display: block; width: 100%; margin-bottom: 16px;">
+                    <div class="breakdown-title">Property Access Summary</div>
+
+                    <div class="breakdown-grid" style="margin-bottom: 0;">
+                        <div class="breakdown-section" style="width: 50%;">
+                            <div class="breakdown-title" style="font-size: 13px;">Access Coverage</div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">
+                                    <span class="breakdown-type-dot dot-owner-only"></span>Owns properties only
+                                </span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['owners_only'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">
+                                    <span class="breakdown-type-dot dot-linked-only"></span>Linked only (family)
+                                </span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['linked_only'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">
+                                    <span class="breakdown-type-dot dot-both"></span>Owns &amp; linked
+                                </span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['both'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">
+                                    <span class="breakdown-type-dot dot-none"></span>No property access
+                                </span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['neither'] ?? 0 }}</span>
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="breakdown-section" style="width: 50%;">
+                            <div class="breakdown-title" style="font-size: 13px;">Property Totals</div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">Property Owners</span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['property_owners'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">Linked Family Members</span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['linked_family_members'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">Users With Any Access</span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['users_with_any_access'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">Users With No Access</span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['users_with_no_access'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">Total Owned Properties</span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['total_owned_properties'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">Total Linked Properties</span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['total_linked_properties'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">Avg Owned / Owner</span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['avg_owned_per_owner'] ?? 0 }}</span>
+                                </span>
+                            </div>
+
+                            <div class="breakdown-item">
+                                <span class="breakdown-name">Avg Linked / Member</span>
+                                <span class="breakdown-right">
+                                    <span class="breakdown-count">{{ $pa['avg_linked_per_member'] ?? 0 }}</span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            @endif
+
             @if(isset($statistics['completion_rate']))
             <div class="completion-card">
                 <div class="completion-title">Profile Completion Rates</div>
@@ -727,18 +868,50 @@
                         @if($includePhotos ?? false)
                         <th width="46" class="text-center">Photo</th>
                         @endif
-                        <th width="48" class="text-center">ID</th>
+                        <th width="46" class="text-center">ID</th>
                         <th>Name &amp; Contact</th>
-                        <th width="105">Type &amp; Roles</th>
-                        <th width="90">Status</th>
-                        <th width="100">Phone</th>
-                        <th width="100">Email</th>
-                        <th width="100">Registered</th>
-                        <th width="95">Last Login</th>
+                        <th width="100">Type &amp; Roles</th>
+                        <th width="85">Status</th>
+                        <th width="95">Phone</th>
+                        <th width="90">Email</th>
+
+                        {{-- ✅ NEW: Property access columns --}}
+                        <th width="55" class="text-center">Owned</th>
+                        <th width="55" class="text-center">Linked</th>
+                        <th width="55" class="text-center">Total</th>
+                        <th width="120">Access Summary</th>
+
+                        <th width="95">Registered</th>
+                        <th width="90">Last Login</th>
                     </tr>
                 </thead>
                 <tbody class="table-body">
                     @forelse($users as $user)
+                    @php
+                        // ✅ Pull the export-stamped attributes with safe
+                        //    fallbacks. The controller sets these before
+                        //    passing $users to the view; if it didn't
+                        //    (older callers), fall back to the model
+                        //    accessors or 0.
+                        $owned  = (int) ($user->owned_property_count_export
+                                    ?? $user->properties_count
+                                    ?? $user->property_count
+                                    ?? 0);
+                        $linked = (int) ($user->linked_property_count_export
+                                    ?? $user->linked_properties_count
+                                    ?? $user->linked_property_count
+                                    ?? 0);
+                        $total  = (int) ($user->total_property_count_export
+                                    ?? ($owned + $linked));
+                        $summary = $user->property_access_label_export
+                                    ?? ($owned === 0 && $linked === 0
+                                        ? '—'
+                                        : trim(
+                                            ($owned > 0 ? $owned . ' owned' : '') .
+                                            ($owned > 0 && $linked > 0 ? ', ' : '') .
+                                            ($linked > 0 ? $linked . ' linked' : '')
+                                        ));
+                    @endphp
                     <tr>
                         @if($includePhotos ?? false)
                         <td class="text-center">
@@ -860,6 +1033,26 @@
                             </div>
                         </td>
 
+                        {{-- ✅ NEW: Owned --}}
+                        <td class="text-center">
+                            <span class="prop-num {{ $owned > 0 ? 'prop-num-owned' : 'prop-num-zero' }}">{{ $owned }}</span>
+                        </td>
+
+                        {{-- ✅ NEW: Linked --}}
+                        <td class="text-center">
+                            <span class="prop-num {{ $linked > 0 ? 'prop-num-linked' : 'prop-num-zero' }}">{{ $linked }}</span>
+                        </td>
+
+                        {{-- ✅ NEW: Total --}}
+                        <td class="text-center">
+                            <span class="prop-num {{ $total > 0 ? 'prop-num-total' : 'prop-num-zero' }}">{{ $total }}</span>
+                        </td>
+
+                        {{-- ✅ NEW: Access Summary --}}
+                        <td>
+                            <div class="prop-summary">{{ $summary }}</div>
+                        </td>
+
                         <td class="text-center">
                             <div style="font-weight: 600; font-size: 11px;">
                                 {{ \Carbon\Carbon::parse($user->created_at)->format('M j, Y') }}
@@ -889,7 +1082,8 @@
                     </tr>
                     @empty
                     <tr>
-                        <td colspan="{{ ($includePhotos ?? false) ? 9 : 8 }}" class="text-center" style="padding: 40px; color: #9ca3af;">
+                        {{-- ✅ Bumped colspan: base = 10, +1 if photos column --}}
+                        <td colspan="{{ ($includePhotos ?? false) ? 13 : 12 }}" class="text-center" style="padding: 40px; color: #9ca3af;">
                             <div style="font-size: 16px; margin-bottom: 8px;">No users found</div>
                             <div style="font-size: 12px;">No users match the selected criteria or filters.</div>
                         </td>

@@ -176,47 +176,55 @@
     <!-- Professional separator -->
     <div class="logo-separator"></div>
 
-    <!-- Compact navigation with minimal gap -->
-    <nav class="mt-2">
-        <div class="nav-divider">
-            <span class="menu-text">MAIN NAVIGATION</span>
-        </div>
+<nav class="mt-2">
 
-        <a href="{{ route('developer.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.dashboard') ? 'active' : '' }}">
-            <i class="fas fa-home mr-4"></i>
-            <span class="nav-text">Dashboard</span>
-        </a>
+    {{-- ============================================================
+         | MAIN NAVIGATION
+         * ============================================================ --}}
+    <div class="nav-divider">
+        <span class="menu-text">MAIN NAVIGATION</span>
+    </div>
 
-        <!-- ============================================ -->
-        <!-- 💬 COMMUNICATION SECTION -->
-        <!-- ============================================ -->
-        <div class="nav-divider mt-1">
-            <span class="menu-text">COMMUNICATION</span>
-        </div>
+    <a href="{{ route('developer.dashboard') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.dashboard') ? 'active' : '' }}">
+        <i class="fas fa-home mr-4"></i>
+        <span class="nav-text">Dashboard</span>
+    </a>
 
-        <!-- Email Management Button with Modal -->
-        <button id="emailManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('email-accounts.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
-            <i class="fas fa-envelope mr-4"></i>
-            <span class="nav-text flex-grow">Email Management</span>
-            @if($totalEmailIssues > 0)
-                <span class="ml-auto bg-yellow-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                    {{ $totalEmailIssues > 9 ? '9+' : $totalEmailIssues }}
-                </span>
-            @elseif($totalUnreadEmails > 0)
-                <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                    {{ $totalUnreadEmails > 9 ? '9+' : $totalUnreadEmails }}
-                </span>
-            @else
-                <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
-            @endif
-        </button>
+    {{-- ============================================================
+         | COMMUNICATION
+         * ============================================================ --}}
+    <div class="nav-divider mt-1">
+        <span class="menu-text">COMMUNICATION</span>
+    </div>
 
-        <!-- SMS Management Button — only when a provider is configured -->
-        @if($smsProviderConfigured)
-        <button id="smsManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('sms.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
+    {{-- Email Management --}}
+    <button id="emailManagementBtn"
+            class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('email-accounts.*') ? 'active' : '' }}"
+            style="color: var(--sidebar-text);">
+        <i class="fas fa-envelope mr-4"></i>
+        <span class="nav-text flex-grow">Email Management</span>
+        @if(($totalEmailIssues ?? 0) > 0)
+            <span class="ml-auto bg-yellow-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {{ $totalEmailIssues > 9 ? '9+' : $totalEmailIssues }}
+            </span>
+        @elseif(($totalUnreadEmails ?? 0) > 0)
+            <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {{ $totalUnreadEmails > 9 ? '9+' : $totalUnreadEmails }}
+            </span>
+        @else
+            <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
+        @endif
+    </button>
+
+    {{-- SMS Management --}}
+    @if($smsProviderConfigured ?? false)
+        <button id="smsManagementBtn"
+                class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('sms.*') ? 'active' : '' }}"
+                style="color: var(--sidebar-text);">
             <i class="fas fa-sms mr-4"></i>
             <span class="nav-text flex-grow">SMS Management</span>
-            @if($pendingSmsCount > 0)
+            @if(($pendingSmsCount ?? 0) > 0)
                 <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
                     {{ $pendingSmsCount > 9 ? '9+' : $pendingSmsCount }}
                 </span>
@@ -228,11 +236,13 @@
                 <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
             @endif
         </button>
-        @endif
+    @endif
 
-        <!-- WhatsApp Management Button — only when a provider is configured -->
-        @if($whatsappProviderConfigured)
-        <button id="whatsappManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('whatsapp.*') ? 'active' : '' }}" style="color: var(--sidebar-text);">
+    {{-- WhatsApp Management --}}
+    @if($whatsappProviderConfigured ?? false)
+        <button id="whatsappManagementBtn"
+                class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{ request()->routeIs('whatsapp.*') ? 'active' : '' }}"
+                style="color: var(--sidebar-text);">
             <i class="fab fa-whatsapp mr-4"></i>
             <span class="nav-text flex-grow">WhatsApp Management</span>
             @if(!($whatsappQuickStatus['system_ready'] ?? false))
@@ -243,130 +253,164 @@
                 <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
             @endif
         </button>
-        @endif
+    @endif
 
-        <!-- Communication Providers (Combined) Button with Modal — always visible so admins can configure when nothing is set up -->
-        <button id="communicationManagementBtn" class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{
-            request()->routeIs('admin.sms-providers.*') ||
-            request()->routeIs('admin.whatsapp-providers.*') ? 'active' : ''
-        }}" style="color: var(--sidebar-text);">
-            <i class="fas fa-plug mr-4"></i>
-            <span class="nav-text flex-grow">Communication Providers</span>
-            @if($totalCommunicationProviders > 0)
-                <span class="ml-auto bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                    {{ $totalCommunicationProviders }}
+    {{-- Communication Providers --}}
+    <button id="communicationManagementBtn"
+            class="nav-item flex items-center py-2 px-6 w-full text-left hover:bg-opacity-20 transition-colors duration-200 {{
+                request()->routeIs('admin.sms-providers.*') || request()->routeIs('admin.whatsapp-providers.*') ? 'active' : ''
+            }}"
+            style="color: var(--sidebar-text);">
+        <i class="fas fa-plug mr-4"></i>
+        <span class="nav-text flex-grow">Communication Providers</span>
+        @if(($totalCommunicationProviders ?? 0) > 0)
+            <span class="ml-auto bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {{ $totalCommunicationProviders }}
+            </span>
+        @else
+            <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
+        @endif
+    </button>
+
+    {{-- ============================================================
+         | SYSTEM SETTINGS
+         * ============================================================ --}}
+    <div class="nav-divider mt-1">
+        <span class="menu-text">SYSTEM SETTINGS</span>
+    </div>
+
+    <a href="{{ route('developer.settings.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.settings.*') ? 'active' : '' }}">
+        <i class="fas fa-cog mr-4"></i>
+        <span class="nav-text">System Settings</span>
+    </a>
+
+    <a href="{{ route('developer.super-admins.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.super-admins.*') ? 'active' : '' }}">
+        <i class="fas fa-users-cog mr-4"></i>
+        <span class="nav-text">Super Admins</span>
+        @if(($pendingSuperAdmins ?? 0) > 0)
+            <span class="ml-auto bg-yellow-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                {{ $pendingSuperAdmins }}
+            </span>
+        @endif
+    </a>
+
+    <a href="{{ route('developer.payment-providers.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.payment-providers.*') ? 'active' : '' }}">
+        <i class="fas fa-credit-card mr-4"></i>
+        <span class="nav-text">Payment Providers</span>
+    </a>
+
+    {{-- ============================================================
+         | NOTIFICATIONS
+         * ============================================================ --}}
+    <div class="nav-divider mt-1">
+        <span class="menu-text">NOTIFICATIONS</span>
+    </div>
+
+    <a href="{{ route('developer.notifications.index') }}"
+       id="sidebarNotificationsLink"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('*.notifications.*') ? 'active' : '' }}">
+        <i class="fas fa-bell mr-4"></i>
+        <span class="nav-text">Notifications</span>
+        @if(($sidebarNotificationCount ?? 0) > 0)
+            <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                {{ $sidebarNotificationCount > 9 ? '9+' : $sidebarNotificationCount }}
+            </span>
+        @else
+            <span class="ml-auto" id="sidebarNotificationBadge" style="display: none;">
+                <span class="bg-red-500 text-white text-xs px-2 py-1 rounded-full"></span>
+            </span>
+        @endif
+    </a>
+
+    {{-- ============================================================
+         | SYSTEM TOOLS
+         * ============================================================ --}}
+    <div class="nav-divider mt-1">
+        <span class="menu-text">SYSTEM TOOLS</span>
+    </div>
+
+    {{-- System Tools dashboard --}}
+    <a href="{{ route('developer.tools.dashboard') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.tools.dashboard') ? 'active' : '' }}">
+        <i class="fas fa-toolbox mr-4"></i>
+        <span class="nav-text">System Tools</span>
+    </a>
+
+    {{-- System Logs --}}
+    <a href="{{ route('developer.logs.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.logs.*') ? 'active' : '' }}">
+        <i class="fas fa-clipboard-list mr-4"></i>
+        <span class="nav-text">System Logs</span>
+        @if(($unresolvedCriticalLogs ?? 0) > 0)
+            <span class="ml-auto bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                {{ $unresolvedCriticalLogs > 99 ? '99+' : $unresolvedCriticalLogs }}
+            </span>
+        @else
+            <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
+        @endif
+    </a>
+
+    {{-- Emergency Mode --}}
+    <a href="{{ route('developer.emergency.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.emergency.*') ? 'active' : '' }}">
+        <i class="fas fa-exclamation-triangle mr-4"></i>
+        <span class="nav-text">Emergency Mode</span>
+        @if(($activeEmergencies ?? 0) > 0)
+            <span class="ml-auto bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                {{ $activeEmergencies }}
+            </span>
+        @endif
+    </a>
+
+    {{-- Maintenance --}}
+    <a href="{{ route('developer.maintenance.index') }}"
+       class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.maintenance.*') ? 'active' : '' }}">
+        <i class="fas fa-tools mr-4"></i>
+        <span class="nav-text">Maintenance</span>
+        @if(($activeMaintenanceCount ?? 0) + ($upcomingMaintenanceCount ?? 0) > 0)
+            <span class="ml-auto bg-yellow-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                {{ $activeMaintenanceCount + $upcomingMaintenanceCount }}
+            </span>
+        @endif
+    </a>
+
+    {{-- System Health --}}
+    @if(Route::has('developer.health.index'))
+        <a href="{{ route('developer.health.index') }}"
+           class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.health.*') ? 'active' : '' }}">
+            <i class="fas fa-heartbeat mr-4"></i>
+            <span class="nav-text">System Health</span>
+        </a>
+    @endif
+
+    {{-- Backups --}}
+    @if(Route::has('developer.backup.history'))
+        <a href="{{ route('developer.backup.history') }}"
+           class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.backup.*') ? 'active' : '' }}">
+            <i class="fas fa-archive mr-4"></i>
+            <span class="nav-text">Backups</span>
+            @if(($backupCount ?? 0) > 0)
+                <span class="ml-auto bg-blue-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                    {{ $backupCount > 9 ? '9+' : $backupCount }}
                 </span>
             @else
                 <i class="fas fa-chevron-right ml-auto text-xs opacity-70"></i>
             @endif
-        </button>
-
-        <!-- ============================================ -->
-        <!-- ⚙️ SETTINGS & MANAGEMENT -->
-        <!-- ============================================ -->
-        <div class="nav-divider mt-1">
-            <span class="menu-text">SYSTEM SETTINGS</span>
-        </div>
-
-        <!-- System Settings -->
-        <a href="{{ route('developer.settings.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.settings.*') ? 'active' : '' }}">
-            <i class="fas fa-cog mr-4"></i>
-            <span class="nav-text">System Settings</span>
         </a>
+    @endif
 
-        <!-- Super Admins Management -->
-        <a href="{{ route('developer.super-admins.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.super-admins.*') ? 'active' : '' }}">
-            <i class="fas fa-users-cog mr-4"></i>
-            <span class="nav-text">Super Admins</span>
-            @php
-                $pendingSuperAdmins = \App\Models\User::where('type', \App\Models\User::TYPE_SUPER_ADMIN)
-                    ->where('status', \App\Models\User::STATUS_PENDING)
-                    ->where('created_by', auth()->id())
-                    ->count();
-            @endphp
-            @if($pendingSuperAdmins > 0)
-                <span class="ml-auto bg-yellow-500 text-white text-xs font-bold px-2 py-1 rounded-full">
-                    {{ $pendingSuperAdmins }}
-                </span>
-            @endif
+    {{-- Database Management --}}
+    @if(Route::has('developer.database.index'))
+        <a href="{{ route('developer.database.index') }}"
+           class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.database.*') ? 'active' : '' }}">
+            <i class="fas fa-database mr-4"></i>
+            <span class="nav-text">Database</span>
         </a>
-
-        <!-- Payment Providers -->
-        <a href="{{ route('developer.payment-providers.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('admin.payment-providers.*') ? 'active' : '' }}">
-            <i class="fas fa-credit-card mr-4"></i>
-            <span class="nav-text">Payment Providers</span>
-        </a>
-
-        <!-- ============================================ -->
-        <!-- 🔔 NOTIFICATIONS -->
-        <!-- ============================================ -->
-        <div class="nav-divider mt-1">
-            <span class="menu-text">NOTIFICATIONS</span>
-        </div>
-
-        <a href="{{ route('developer.notifications.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('*.notifications.*') ? 'active' : '' }}" id="sidebarNotificationsLink">
-            <i class="fas fa-bell mr-4"></i>
-            <span class="nav-text">Notifications</span>
-            @if($sidebarNotificationCount > 0)
-                <span class="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                    {{ $sidebarNotificationCount > 9 ? '9+' : $sidebarNotificationCount }}
-                </span>
-            @else
-                <span class="ml-auto" id="sidebarNotificationBadge" style="display: none;">
-                    <span class="bg-red-500 text-white text-xs px-2 py-1 rounded-full"></span>
-                </span>
-            @endif
-        </a>
-
-        <!-- ============================================ -->
-        <!-- 🛠️ SYSTEM TOOLS -->
-        <!-- ============================================ -->
-        <div class="nav-divider mt-1">
-            <span class="menu-text">SYSTEM TOOLS</span>
-        </div>
-
-        <a href="{{ route('developer.tools.dashboard') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.tools.*') ? 'active' : '' }}">
-            <i class="fas fa-toolbox mr-4"></i>
-            <span class="nav-text">System Tools</span>
-        </a>
-
-        <!-- Emergency Mode -->
-        <a href="{{ route('developer.emergency.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.emergency.*') ? 'active' : '' }}">
-            <i class="fas fa-exclamation-triangle mr-4"></i>
-            <span class="nav-text">Emergency Mode</span>
-            @php
-                $activeEmergencies = \App\Models\EmergencyMode::active()->count();
-            @endphp
-            @if($activeEmergencies > 0)
-                <span class="ml-auto bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
-                    {{ $activeEmergencies }}
-                </span>
-            @endif
-        </a>
-
-        <!-- Maintenance -->
-        <a href="{{ route('developer.maintenance.index') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.maintenance.*') ? 'active' : '' }}">
-            <i class="fas fa-tools mr-4"></i>
-            <span class="nav-text">Maintenance</span>
-            @php
-                $activeMaintenance = \App\Models\Maintenance::active()->count();
-                $upcomingMaintenance = \App\Models\Maintenance::upcoming()->where('scheduled_start', '<=', now()->addHours(24))->count();
-            @endphp
-            @if($activeMaintenance > 0 || $upcomingMaintenance > 0)
-                <span class="ml-auto bg-yellow-500 text-white text-xs font-bold px-2 py-1 rounded-full">
-                    {{ $activeMaintenance + $upcomingMaintenance }}
-                </span>
-            @endif
-        </a>
-
-        <!-- System Health -->
-        @if(class_exists('App\Models\SystemHealth'))
-        <a href="{{ route('developer.system-health') }}" class="nav-item flex items-center py-2 px-6 {{ request()->routeIs('developer.system-health') ? 'active' : '' }}">
-            <i class="fas fa-heartbeat mr-4"></i>
-            <span class="nav-text">System Health</span>
-        </a>
-        @endif
-    </nav>
+    @endif
+</nav>
 
     <!-- Settings Button - Compact positioning -->
     <div class="absolute bottom-0 w-full p-3">

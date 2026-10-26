@@ -12,28 +12,28 @@
                     <h1 class="text-3xl font-bold" style="color: var(--text-primary);">Field Agent Profile</h1>
                     <p class="text-sm mt-1" style="color: var(--text-secondary);">Manage your field agent account and assignment information</p>
                 </div>
-                
+
                 <!-- Profile Completion & Status -->
                 <div class="flex items-center space-x-6">
                     <div class="text-center">
                         <div class="text-2xl font-bold" style="color: var(--success);" data-profile-completion>{{ $profileCompletion ?? 0 }}%</div>
                         <div class="text-xs" style="color: var(--text-secondary);">Profile Complete</div>
                     </div>
-                    
+
                     @if($smsStatus['system_ready'] ?? false)
-                    <div class="flex items-center px-4 py-2 rounded-full text-sm font-medium" 
+                    <div class="flex items-center px-4 py-2 rounded-full text-sm font-medium"
                          style="background-color: rgba(var(--success-rgb), 0.1); color: var(--success); border: 1px solid rgba(var(--success-rgb), 0.3);">
                         <i class="fas fa-comment-alt mr-2"></i>
                         SMS: Ready
                     </div>
                     @endif
-                    
+
                     <a href="{{ route('field-agent.dashboard') }}" class="btn-secondary flex items-center">
                         <i class="fas fa-arrow-left mr-2"></i> Dashboard
                     </a>
                 </div>
             </div>
-            
+
             <!-- Progress Breakdown -->
             <div class="card p-4 mb-6">
                 <h3 class="font-semibold mb-3" style="color: var(--text-primary);">Complete Your Profile</h3>
@@ -93,10 +93,10 @@
                                 $initials = $user->getInitials();
                                 $hasPhoto = !empty($user->photo) && $photoUrl;
                             @endphp
-                            
+
                             @if($hasPhoto)
                                 <div class="relative">
-                                    <img src="{{ $photoUrl }}" 
+                                    <img src="{{ $photoUrl }}"
                                          alt="{{ $user->name }}"
                                          class="w-32 h-32 rounded-full object-cover border-4 mx-auto shadow-lg lazy"
                                          style="border-color: var(--success);"
@@ -111,7 +111,7 @@
                                     {{ $initials }}
                                 </div>
                             @endif
-                            
+
                             <!-- Photo Upload Progress -->
                             <div id="uploadProgress" class="hidden mt-2">
                                 <div class="flex items-center justify-center space-x-2">
@@ -127,22 +127,22 @@
                                 @csrf
                                 <input type="file" name="photo" id="photoInput" accept="image/*" class="hidden">
                             </form>
-                            
-                            <button onclick="document.getElementById('photoInput').click()" 
+
+                            <button onclick="document.getElementById('photoInput').click()"
                                     class="btn-primary btn-sm w-full" id="uploadBtn">
                                 <i class="fas fa-camera mr-2"></i>
                                 <span>{{ $hasPhoto ? 'Change Photo' : 'Upload Photo' }}</span>
                             </button>
-                            
+
                             @if($hasPhoto)
-                            <button onclick="removeProfilePhoto()" 
+                            <button onclick="removeProfilePhoto()"
                                     class="btn-danger btn-sm w-full" id="removeBtn">
                                 <i class="fas fa-trash mr-2"></i>Remove Photo
                             </button>
                             @endif
                         </div>
                     </div>
-                    
+
                     <!-- Photo Tips -->
                     <div class="mt-4 text-xs" style="color: var(--text-secondary);">
                         <p class="flex items-center mb-1">
@@ -169,7 +169,7 @@
                             </div>
                             <i class="fas fa-tasks text-2xl" style="color: var(--primary);"></i>
                         </div>
-                        
+
                         <div class="flex justify-between items-center pb-3 border-b" style="border-color: var(--border-color);">
                             <div>
                                 <div class="text-xl font-bold text-green-500">
@@ -179,7 +179,7 @@
                             </div>
                             <i class="fas fa-home text-xl text-green-500"></i>
                         </div>
-                        
+
                         <div class="flex justify-between items-center pb-3 border-b" style="border-color: var(--border-color);">
                             <div>
                                 <div class="text-xl font-bold text-blue-500">
@@ -189,7 +189,7 @@
                             </div>
                             <i class="fas fa-chart-line text-xl text-blue-500"></i>
                         </div>
-                        
+
                         <div class="flex justify-between items-center">
                             <div>
                                 <div class="text-xl font-bold text-purple-500">
@@ -200,7 +200,7 @@
                             <i class="fas fa-percent text-xl text-purple-500"></i>
                         </div>
                     </div>
-                    
+
                     @if(Route::has('agent.assignments'))
                         <a href="{{ route('agent.assignments') }}" class="mt-4 btn-outline btn-sm w-full text-center">
                             <i class="fas fa-external-link-alt mr-2"></i>View Assignments
@@ -223,13 +223,13 @@
                                     <i class="fas fa-check mr-1"></i>Verified
                                 </span>
                             @else
-                                <button onclick="sendEmailVerification()" 
+                                <button onclick="sendEmailVerification()"
                                         class="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-600 hover:bg-yellow-200">
                                     <i class="fas fa-envelope mr-1"></i>Verify
                                 </button>
                             @endif
                         </div>
-                        
+
                         <!-- Phone Verification -->
                         <div class="flex items-center justify-between">
                             <div class="flex items-center space-x-2">
@@ -243,7 +243,7 @@
                             @else
                                 <div class="flex space-x-2">
                                     @if($user->phone)
-                                        <button onclick="sendPhoneVerification()" 
+                                        <button onclick="sendPhoneVerification()"
                                                 class="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-600 hover:bg-yellow-200">
                                             <i class="fas fa-sms mr-1"></i>Send Code
                                         </button>
@@ -265,7 +265,7 @@
                                     <i class="fas fa-check mr-1"></i>Verified
                                 </span>
                             @else
-                                <button onclick="uploadIdDocument()" 
+                                <button onclick="uploadIdDocument()"
                                         class="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-600 hover:bg-yellow-200">
                                     <i class="fas fa-upload mr-1"></i>Upload
                                 </button>
@@ -287,7 +287,7 @@
                             </div>
                             <i class="fas fa-calendar text-xl" style="color: var(--primary);"></i>
                         </div>
-                        
+
                         <div class="flex justify-between items-center pb-3 border-b" style="border-color: var(--border-color);">
                             <div>
                                 <div class="text-sm" style="color: var(--text-secondary);">Last Login</div>
@@ -297,7 +297,7 @@
                             </div>
                             <i class="fas fa-sign-in-alt text-xl" style="color: var(--info);"></i>
                         </div>
-                        
+
                         <div class="flex justify-between items-center">
                             <div>
                                 <div class="text-sm" style="color: var(--text-secondary);">Account Age</div>
@@ -308,14 +308,14 @@
                             <i class="fas fa-clock text-xl" style="color: var(--warning);"></i>
                         </div>
                     </div>
-                    
+
                     <!-- Quick Actions -->
                     <div class="space-y-2 mt-4">
-                        <button onclick="getProfileStats()" 
+                        <button onclick="getProfileStats()"
                                class="btn-outline btn-sm w-full text-center flex items-center justify-center">
                             <i class="fas fa-chart-bar mr-2"></i>View Statistics
                         </button>
-                        <a href="#" 
+                        <a href="#"
                            class="btn-outline btn-sm w-full text-center flex items-center justify-center">
                             <i class="fas fa-download mr-2"></i>Download Data
                         </a>
@@ -328,27 +328,27 @@
                 <!-- Tabs Navigation -->
                 <div class="mb-6 border-b" style="border-color: var(--border-color);">
                     <nav class="flex space-x-4 overflow-x-auto" id="tabNav">
-                        <button type="button" data-tab="personal" 
+                        <button type="button" data-tab="personal"
                                 class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap active-tab">
                             <i class="fas fa-user mr-2"></i>Personal Info
                         </button>
-                        <button type="button" data-tab="contact" 
+                        <button type="button" data-tab="contact"
                                 class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-address-book mr-2"></i>Contact Info
                         </button>
-                        <button type="button" data-tab="agent" 
+                        <button type="button" data-tab="agent"
                                 class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-id-badge mr-2"></i>Agent Details
                         </button>
-                        <button type="button" data-tab="notifications" 
+                        <button type="button" data-tab="notifications"
                                 class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-bell mr-2"></i>Notifications
                         </button>
-                        <button type="button" data-tab="security" 
+                        <button type="button" data-tab="security"
                                 class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-shield-alt mr-2"></i>Security
                         </button>
-                        <button type="button" data-tab="password" 
+                        <button type="button" data-tab="password"
                                 class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-key mr-2"></i>Password
                         </button>
@@ -361,11 +361,11 @@
                     <div class="tab-pane active" id="personalPane">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Personal Information</h3>
-                            
+
                             <form action="{{ route('agent.profile.personal.update') }}" method="POST" id="personalInfoForm">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div class="space-y-4">
                                         <div>
@@ -373,7 +373,7 @@
                                                 Full Name *
                                                 <span class="text-xs text-gray-500">(As on official ID)</span>
                                             </label>
-                                            <input type="text" name="name" value="{{ old('name', $user->name) }}" 
+                                            <input type="text" name="name" value="{{ old('name', $user->name) }}"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    required>
@@ -387,8 +387,8 @@
                                                 Username *
                                                 <span class="text-xs text-gray-500">(For login and reports)</span>
                                             </label>
-                                            <input type="text" name="username" 
-                                                   value="{{ old('username', $user->username) }}" 
+                                            <input type="text" name="username"
+                                                   value="{{ old('username', $user->username) }}"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    required>
@@ -415,8 +415,8 @@
                                     <div class="space-y-4">
                                         <div>
                                             <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Date of Birth</label>
-                                            <input type="date" name="dob" 
-                                                   value="{{ old('dob', $user->dob ? $user->dob->format('Y-m-d') : '') }}" 
+                                            <input type="date" name="dob"
+                                                   value="{{ old('dob', $user->dob ? $user->dob->format('Y-m-d') : '') }}"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    max="{{ date('Y-m-d') }}">
@@ -430,8 +430,8 @@
                                                 National ID Number
                                                 <span class="text-xs text-gray-500">(Optional)</span>
                                             </label>
-                                            <input type="text" name="national_id" 
-                                                   value="{{ old('national_id', $user->metadata['national_id'] ?? '') }}" 
+                                            <input type="text" name="national_id"
+                                                   value="{{ old('national_id', $user->metadata['national_id'] ?? '') }}"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    placeholder="GHA-XXXXXXXX-X">
@@ -442,8 +442,8 @@
                                                 Emergency Contact
                                                 <span class="text-xs text-gray-500">(Optional)</span>
                                             </label>
-                                            <input type="text" name="emergency_contact" 
-                                                   value="{{ old('emergency_contact', $user->metadata['emergency_contact'] ?? '') }}" 
+                                            <input type="text" name="emergency_contact"
+                                                   value="{{ old('emergency_contact', $user->metadata['emergency_contact'] ?? '') }}"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    placeholder="Name and phone number">
@@ -467,11 +467,11 @@
                     <div class="tab-pane hidden" id="contactPane">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Contact Information</h3>
-                            
+
                             <form action="{{ route('agent.profile.contact.update') }}" method="POST" id="contactInfoForm">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="space-y-6">
                                     <!-- Email -->
                                     <div>
@@ -484,13 +484,13 @@
                                             @endif
                                         </label>
                                         <div class="flex space-x-2">
-                                            <input type="email" name="email" 
-                                                   value="{{ old('email', $user->email) }}" 
+                                            <input type="email" name="email"
+                                                   value="{{ old('email', $user->email) }}"
                                                    class="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    required>
                                             @if(!$user->email_verified_at)
-                                                <button type="button" onclick="sendEmailVerification()" 
+                                                <button type="button" onclick="sendEmailVerification()"
                                                         class="px-4 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition">
                                                     Verify
                                                 </button>
@@ -514,23 +514,23 @@
                                                 </span>
                                             @endif
                                         </label>
-                                        
+
                                         <div class="space-y-3">
                                             <div class="flex space-x-2">
                                                 <input type="text" name="phone" id="phoneNumber"
-                                                       value="{{ old('phone', $user->phone) }}" 
+                                                       value="{{ old('phone', $user->phone) }}"
                                                        class="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                        placeholder="+233XXXXXXXXX"
                                                        required>
                                                 @if(!$user->phone_verified_at && $user->phone)
-                                                    <button type="button" onclick="sendPhoneVerification()" 
+                                                    <button type="button" onclick="sendPhoneVerification()"
                                                             class="px-4 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition">
                                                         Send Code
                                                     </button>
                                                 @endif
                                             </div>
-                                            
+
                                             <!-- Verification Section - ONLY SHOWN WHEN UNVERIFIED -->
                                             @if(!$user->phone_verified_at && $user->phone)
                                             <div id="verificationSection" class="border-t pt-3 mt-2" style="border-color: var(--border-color);">
@@ -538,30 +538,30 @@
                                                     <i class="fas fa-shield-alt mr-2" style="color: var(--warning);"></i>
                                                     <span class="text-sm font-medium" style="color: var(--text-primary);">Phone Verification Required</span>
                                                 </div>
-                                                
+
                                                 <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
                                                     <p class="text-xs text-yellow-700">
                                                         <i class="fas fa-info-circle mr-1"></i>
                                                         A verification code will be sent to this number. Please enter it below to verify ownership.
                                                     </p>
                                                 </div>
-                                                
+
                                                 <div class="flex space-x-2">
-                                                    <input type="text" id="verificationCode" 
+                                                    <input type="text" id="verificationCode"
                                                            placeholder="Enter 6-digit verification code"
                                                            class="flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition text-center text-lg font-mono"
                                                            style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                            maxlength="6"
                                                            pattern="[0-9]{6}">
-                                                    <button type="button" onclick="verifyPhone()" 
+                                                    <button type="button" onclick="verifyPhone()"
                                                             class="px-6 bg-green-500 text-white rounded-lg hover:bg-green-600 transition font-medium">
                                                         <i class="fas fa-check-circle mr-1"></i>Verify
                                                     </button>
                                                 </div>
-                                                
+
                                                 <div class="flex justify-between items-center mt-3">
-                                                    <button type="button" onclick="resendVerificationCode()" 
-                                                            class="text-sm hover:underline flex items-center" 
+                                                    <button type="button" onclick="resendVerificationCode()"
+                                                            class="text-sm hover:underline flex items-center"
                                                             style="color: var(--primary);"
                                                             id="resendBtn">
                                                         <i class="fas fa-redo-alt mr-1"></i>
@@ -571,12 +571,12 @@
                                                         Code expires in <span id="countdownTimer">10:00</span>
                                                     </div>
                                                 </div>
-                                                
+
                                                 <div id="verificationStatus" class="mt-2 hidden"></div>
                                             </div>
                                             @endif
                                         </div>
-                                        
+
                                         <div class="text-xs mt-1" style="color: var(--text-secondary);">
                                             <i class="fas fa-info-circle mr-1"></i>
                                             Used for SMS notifications and field communications
@@ -592,8 +592,8 @@
                                             <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                                 Region
                                             </label>
-                                            <input type="text" name="region" 
-                                                   value="{{ old('region', $user->region) }}" 
+                                            <input type="text" name="region"
+                                                   value="{{ old('region', $user->region) }}"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    placeholder="Your primary region">
@@ -604,8 +604,8 @@
                                                 Digital Address
                                                 <span class="text-xs text-gray-500">(Ghana GPS)</span>
                                             </label>
-                                            <input type="text" name="digital_address" 
-                                                   value="{{ old('digital_address', $user->digital_address) }}" 
+                                            <input type="text" name="digital_address"
+                                                   value="{{ old('digital_address', $user->digital_address) }}"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    placeholder="e.g., GA-123-4567">
@@ -613,8 +613,8 @@
 
                                         <div class="md:col-span-2">
                                             <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Full Address</label>
-                                            <input type="text" name="location" 
-                                                   value="{{ old('location', $user->location) }}" 
+                                            <input type="text" name="location"
+                                                   value="{{ old('location', $user->location) }}"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    placeholder="Street, City, Landmark">
@@ -627,8 +627,8 @@
                                             Alternative Phone
                                             <span class="text-xs text-gray-500">(Optional)</span>
                                         </label>
-                                        <input type="text" name="alt_phone" 
-                                               value="{{ old('alt_phone', $user->metadata['alt_phone'] ?? '') }}" 
+                                        <input type="text" name="alt_phone"
+                                               value="{{ old('alt_phone', $user->metadata['alt_phone'] ?? '') }}"
                                                class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                placeholder="Alternative contact number">
@@ -656,11 +656,11 @@
                     <div class="tab-pane hidden" id="agentPane">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Agent Details</h3>
-                            
+
                             <form action="{{ route('agent.profile.agent.update') }}" method="POST" id="agentInfoForm">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="space-y-6">
                                     <!-- Agent Information -->
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -669,7 +669,7 @@
                                                 Agent ID
                                                 <span class="text-xs text-gray-500">(Auto-generated)</span>
                                             </label>
-                                            <input type="text" value="{{ $user->agent_id ?? 'AG-' . str_pad($user->id, 6, '0', STR_PAD_LEFT) }}" 
+                                            <input type="text" value="{{ $user->agent_id ?? 'AG-' . str_pad($user->id, 6, '0', STR_PAD_LEFT) }}"
                                                    class="w-full p-3 border rounded-lg bg-gray-100"
                                                    style="color: var(--text-secondary); border-color: var(--border-color);"
                                                    disabled readonly>
@@ -679,7 +679,7 @@
                                             <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                                 Date of Joining
                                             </label>
-                                            <input type="text" value="{{ $user->created_at->format('M d, Y') }}" 
+                                            <input type="text" value="{{ $user->created_at->format('M d, Y') }}"
                                                    class="w-full p-3 border rounded-lg bg-gray-100"
                                                    style="color: var(--text-secondary); border-color: var(--border-color);"
                                                    disabled readonly>
@@ -781,11 +781,11 @@
                     <div class="tab-pane hidden" id="notificationsPane">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Notification Settings</h3>
-                            
+
                             <form action="{{ route('agent.profile.notifications.update') }}" method="POST" id="notificationsFormElement">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="space-y-6">
                                     <!-- Field Notifications -->
                                     <div>
@@ -797,31 +797,31 @@
                                                     <div class="toggle-description">Notify when you receive new field assignments</div>
                                                 </div>
                                                 <label class="toggle-switch success">
-                                                    <input type="checkbox" name="new_assignment_notifications" value="1" 
+                                                    <input type="checkbox" name="new_assignment_notifications" value="1"
                                                            {{ ($user->metadata['new_assignment_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">Assignment Updates</div>
                                                     <div class="toggle-description">Changes to existing assignments</div>
                                                 </div>
                                                 <label class="toggle-switch info">
-                                                    <input type="checkbox" name="assignment_update_notifications" value="1" 
+                                                    <input type="checkbox" name="assignment_update_notifications" value="1"
                                                            {{ ($user->metadata['assignment_update_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">Deadline Reminders</div>
                                                     <div class="toggle-description">Reminders for upcoming assignment deadlines</div>
                                                 </div>
                                                 <label class="toggle-switch warning">
-                                                    <input type="checkbox" name="deadline_notifications" value="1" 
+                                                    <input type="checkbox" name="deadline_notifications" value="1"
                                                            {{ ($user->metadata['deadline_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
@@ -839,31 +839,31 @@
                                                     <div class="toggle-description">Receive messages from team members</div>
                                                 </div>
                                                 <label class="toggle-switch success">
-                                                    <input type="checkbox" name="team_message_notifications" value="1" 
+                                                    <input type="checkbox" name="team_message_notifications" value="1"
                                                            {{ ($user->metadata['team_message_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">System Announcements</div>
                                                     <div class="toggle-description">Important platform announcements</div>
                                                 </div>
                                                 <label class="toggle-switch info">
-                                                    <input type="checkbox" name="announcement_notifications" value="1" 
+                                                    <input type="checkbox" name="announcement_notifications" value="1"
                                                            {{ ($user->metadata['announcement_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">Training Updates</div>
                                                     <div class="toggle-description">New training materials and updates</div>
                                                 </div>
                                                 <label class="toggle-switch warning">
-                                                    <input type="checkbox" name="training_notifications" value="1" 
+                                                    <input type="checkbox" name="training_notifications" value="1"
                                                            {{ ($user->metadata['training_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
@@ -881,31 +881,31 @@
                                                     <div class="toggle-description">Notify about completed performance reviews</div>
                                                 </div>
                                                 <label class="toggle-switch success">
-                                                    <input type="checkbox" name="performance_review_notifications" value="1" 
+                                                    <input type="checkbox" name="performance_review_notifications" value="1"
                                                            {{ ($user->metadata['performance_review_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">Feedback Requests</div>
                                                     <div class="toggle-description">Requests for feedback on assignments</div>
                                                 </div>
                                                 <label class="toggle-switch info">
-                                                    <input type="checkbox" name="feedback_notifications" value="1" 
+                                                    <input type="checkbox" name="feedback_notifications" value="1"
                                                            {{ ($user->metadata['feedback_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">Recognition Notifications</div>
                                                     <div class="toggle-description">Milestones and achievements</div>
                                                 </div>
                                                 <label class="toggle-switch warning">
-                                                    <input type="checkbox" name="recognition_notifications" value="1" 
+                                                    <input type="checkbox" name="recognition_notifications" value="1"
                                                            {{ ($user->metadata['recognition_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
@@ -923,31 +923,31 @@
                                                     <div class="toggle-description">Receive notifications via email</div>
                                                 </div>
                                                 <label class="toggle-switch success">
-                                                    <input type="checkbox" name="email_notifications" value="1" 
+                                                    <input type="checkbox" name="email_notifications" value="1"
                                                            {{ ($user->metadata['email_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">SMS Notifications</div>
                                                     <div class="toggle-description">Receive notifications via SMS (important only)</div>
                                                 </div>
                                                 <label class="toggle-switch info">
-                                                    <input type="checkbox" name="sms_notifications" value="1" 
+                                                    <input type="checkbox" name="sms_notifications" value="1"
                                                            {{ ($user->metadata['sms_notifications'] ?? false) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">In-App Notifications</div>
                                                     <div class="toggle-description">Show notifications within the app</div>
                                                 </div>
                                                 <label class="toggle-switch warning">
-                                                    <input type="checkbox" name="in_app_notifications" value="1" 
+                                                    <input type="checkbox" name="in_app_notifications" value="1"
                                                            {{ ($user->metadata['in_app_notifications'] ?? true) ? 'checked' : '' }}>
                                                     <span class="toggle-slider"></span>
                                                 </label>
@@ -977,28 +977,108 @@
                     <div class="tab-pane hidden" id="securityPane">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Security & Privacy</h3>
-                            
+
+                            <!-- ================================================================
+                                 ✅ UPDATED (2026-10-13): SELF-SERVICE 2FA CARD
+                                 ----------------------------------------------------------------
+                                 The old metadata['two_factor_enabled'] checkbox is REPLACED
+                                 with a read-only status card that links into the real
+                                 enrollment flow on TwoFactorController.
+
+                                 Why the checkbox was wrong:
+                                   - 2FA enrollment requires a TOTP secret + QR scan +
+                                     code verification + backup code generation. A single
+                                     checkbox cannot represent that multi-step state.
+                                   - The real state lives in `users.two_factor_enabled`
+                                     (a DB column), not in `users.metadata`.
+                                   - The controller endpoints already exist and are
+                                     battle-tested:
+                                       GET  /2fa/setup           → showSetupForm
+                                       POST /2fa/enable          → enableTwoFactor
+                                       POST /2fa/disable         → disableTwoFactor
+                                       GET  /2fa/recovery-codes  → showRecoveryCodes
+
+                                 Availability is universal: any authenticated user
+                                 (including a field agent) can enroll voluntarily.
+                                 Enforcement is a separate policy layer configured at
+                                 the developer level — this card is opt-in only.
+                            ================================================================ -->
+                            <div class="p-4 rounded-lg border mb-6"
+                                 style="border-color: {{ $user->two_factor_enabled ? 'rgba(var(--success-rgb), 0.3)' : 'var(--border-color)' }};
+                                        background-color: {{ $user->two_factor_enabled ? 'rgba(var(--success-rgb), 0.05)' : 'var(--bg-secondary)' }};">
+                                <div class="flex justify-between items-start flex-wrap gap-3">
+                                    <div class="flex-1 min-w-[200px]">
+                                        <div class="flex items-center mb-2 flex-wrap gap-2">
+                                            <i class="fas fa-shield-alt text-lg"
+                                               style="color: {{ $user->two_factor_enabled ? 'var(--success)' : 'var(--text-secondary)' }};"></i>
+                                            <h4 class="font-medium" style="color: var(--text-primary);">Two-Factor Authentication</h4>
+                                            @if($user->two_factor_enabled)
+                                                <span class="px-2 py-0.5 text-xs rounded-full"
+                                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                                    <i class="fas fa-check mr-1"></i>Enabled
+                                                </span>
+                                            @else
+                                                <span class="px-2 py-0.5 text-xs rounded-full"
+                                                      style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                                                    Not enabled
+                                                </span>
+                                            @endif
+                                        </div>
+
+                                        @if($user->two_factor_enabled)
+                                            <p class="text-sm" style="color: var(--text-secondary);">
+                                                Your account is protected with
+                                                <strong>{{ ucfirst($user->two_factor_method ?? 'email') }}</strong>-based 2FA.
+                                                @if($user->two_factor_enabled_at)
+                                                    Enabled {{ \Carbon\Carbon::parse($user->two_factor_enabled_at)->diffForHumans() }}.
+                                                @endif
+                                            </p>
+                                        @else
+                                            <p class="text-sm" style="color: var(--text-secondary);">
+                                                Add an extra layer of security. We recommend enabling 2FA
+                                                to protect your field assignments and personal data.
+                                            </p>
+                                        @endif
+                                    </div>
+
+                                    <div class="flex gap-2 flex-wrap">
+                                        @if($user->two_factor_enabled)
+                                            <a href="{{ route('2fa.recovery-codes') }}"
+                                               class="btn-outline btn-sm flex items-center">
+                                                <i class="fas fa-key mr-2"></i>Recovery Codes
+                                            </a>
+                                            <button type="button"
+                                                    onclick="openDisableTwoFactor()"
+                                                    class="btn-danger btn-sm flex items-center">
+                                                <i class="fas fa-times-circle mr-2"></i>Disable 2FA
+                                            </button>
+                                        @else
+                                            <a href="{{ route('2fa.setup') }}"
+                                               class="btn-primary btn-sm flex items-center">
+                                                <i class="fas fa-shield-alt mr-2"></i>Enable 2FA
+                                            </a>
+                                        @endif
+                                    </div>
+                                </div>
+
+                                @if(!$user->two_factor_enabled)
+                                    <div class="mt-3 p-3 rounded-lg"
+                                         style="background-color: rgba(var(--info-rgb), 0.08); border: 1px solid rgba(var(--info-rgb), 0.2);">
+                                        <p class="text-xs" style="color: var(--text-secondary);">
+                                            <i class="fas fa-info-circle mr-1" style="color: var(--info);"></i>
+                                            You'll need an authenticator app (Google Authenticator, Authy, Microsoft
+                                            Authenticator). Setup takes about 60 seconds.
+                                        </p>
+                                    </div>
+                                @endif
+                            </div>
+
                             <form action="{{ route('agent.profile.security.update') }}" method="POST" id="securityInfoForm">
                                 @csrf
                                 @method('PUT')
-                                
-                                <div class="space-y-6">
-                                    <!-- Two-Factor Authentication -->
-                                    <div class="p-4 rounded-lg border" style="border-color: var(--border-color); background-color: var(--bg-secondary);">
-                                        <div class="flex justify-between items-center mb-3">
-                                            <div>
-                                                <h4 class="font-medium" style="color: var(--text-primary);">Two-Factor Authentication</h4>
-                                                <p class="text-xs" style="color: var(--text-secondary);">Add an extra layer of security to your account</p>
-                                            </div>
-                                            <label class="toggle-switch">
-                                                <input type="checkbox" name="two_factor_enabled" value="1"
-                                                       {{ ($user->metadata['two_factor_enabled'] ?? false) ? 'checked' : '' }}>
-                                                <span class="toggle-slider"></span>
-                                            </label>
-                                        </div>
-                                    </div>
 
-                                    <!-- Security Alerts -->
+                                <div class="space-y-6">
+                                    <!-- Login Alerts -->
                                     <div class="p-4 rounded-lg border" style="border-color: var(--border-color); background-color: var(--bg-secondary);">
                                         <div class="flex justify-between items-center mb-3">
                                             <div>
@@ -1028,7 +1108,7 @@
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">Password Changes</div>
@@ -1040,7 +1120,7 @@
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">New Device Logins</div>
@@ -1079,7 +1159,7 @@
                                                     </div>
                                                 </div>
                                                 @if(!$session['current'])
-                                                <button type="button" onclick="revokeSession('{{ $session['id'] }}')" 
+                                                <button type="button" onclick="revokeSession('{{ $session['id'] }}')"
                                                         class="text-red-500 hover:text-red-700">
                                                     <i class="fas fa-sign-out-alt"></i>
                                                 </button>
@@ -1104,7 +1184,7 @@
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">Marketing Emails</div>
@@ -1116,7 +1196,7 @@
                                                     <span class="toggle-slider"></span>
                                                 </label>
                                             </div>
-                                            
+
                                             <div class="toggle-item">
                                                 <div class="toggle-content">
                                                     <div class="toggle-title">Location Tracking</div>
@@ -1146,6 +1226,65 @@
                                     </div>
                                 </div>
                             </form>
+
+                            {{-- ================================================================
+                                 ✅ NEW: 2FA disable modal + hidden form
+                                 ----------------------------------------------------------------
+                                 Kept OUTSIDE securityInfoForm to avoid nested form elements.
+                                 The modal collects a password, bridges it into the hidden
+                                 form via JS, and submits to the existing 2fa.disable route.
+                            ================================================================ --}}
+                            <form id="disableTwoFactorForm"
+                                  action="{{ route('2fa.disable') }}"
+                                  method="POST"
+                                  class="hidden">
+                                @csrf
+                                <input type="password" name="password" id="disableTwoFactorPassword" required>
+                            </form>
+
+                            <div id="disableTwoFactorModal"
+                                 class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 p-4">
+                                <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+                                    <div class="flex justify-between items-center mb-4">
+                                        <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
+                                            <i class="fas fa-exclamation-triangle mr-2" style="color: var(--warning);"></i>
+                                            Disable Two-Factor Authentication?
+                                        </h3>
+                                        <button type="button" onclick="closeDisableTwoFactor()"
+                                                class="text-gray-500 hover:text-gray-700">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+
+                                    <div class="p-3 rounded-lg mb-4"
+                                         style="background-color: rgba(var(--warning-rgb), 0.1); border: 1px solid rgba(var(--warning-rgb), 0.3);">
+                                        <p class="text-sm" style="color: var(--text-primary);">
+                                            Disabling 2FA will make your account significantly less secure.
+                                            Anyone with your password will be able to log in.
+                                        </p>
+                                    </div>
+
+                                    <div class="mb-4">
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Confirm your password to continue
+                                        </label>
+                                        <input type="password"
+                                               id="disableTwoFactorPasswordConfirm"
+                                               class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                                               style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
+                                               placeholder="Enter your current password">
+                                    </div>
+
+                                    <div class="flex justify-end gap-3">
+                                        <button type="button" onclick="closeDisableTwoFactor()" class="btn-secondary">
+                                            Cancel
+                                        </button>
+                                        <button type="button" onclick="submitDisableTwoFactor()" class="btn-danger">
+                                            <i class="fas fa-times-circle mr-2"></i>Disable 2FA
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -1153,7 +1292,7 @@
                     <div class="tab-pane hidden" id="passwordPane">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Change Password</h3>
-                            
+
                             <!-- Password Strength Requirements -->
                             <div class="mb-6 p-4 rounded-lg" style="background-color: var(--bg-secondary);">
                                 <h4 class="font-medium mb-2" style="color: var(--text-primary);">Password Requirements</h4>
@@ -1176,23 +1315,23 @@
                                     </li>
                                 </ul>
                             </div>
-                            
+
                             <form action="{{ route('agent.profile.password.update') }}" method="POST" id="passwordFormElement">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="space-y-4">
                                     <!-- Current Password -->
                                     <div>
                                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                             Current Password *
-                                            <button type="button" onclick="togglePassword('currentPassword')" 
+                                            <button type="button" onclick="togglePassword('currentPassword')"
                                                     class="ml-2 text-xs" style="color: var(--primary);">
                                                 <i class="fas fa-eye"></i> Show
                                             </button>
                                         </label>
                                         <div class="relative">
-                                            <input type="password" name="current_password" 
+                                            <input type="password" name="current_password"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition pr-10"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    required id="currentPassword">
@@ -1206,13 +1345,13 @@
                                     <div>
                                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                             New Password *
-                                            <button type="button" onclick="togglePassword('newPassword')" 
+                                            <button type="button" onclick="togglePassword('newPassword')"
                                                     class="ml-2 text-xs" style="color: var(--primary);">
                                                 <i class="fas fa-eye"></i> Show
                                             </button>
                                         </label>
                                         <div class="relative">
-                                            <input type="password" name="password" 
+                                            <input type="password" name="password"
                                                    class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition pr-10"
                                                    style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                    required id="newPassword"
@@ -1235,12 +1374,12 @@
                                     <div>
                                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                             Confirm New Password *
-                                            <button type="button" onclick="togglePassword('confirmPassword')" 
+                                            <button type="button" onclick="togglePassword('confirmPassword')"
                                                     class="ml-2 text-xs" style="color: var(--primary);">
                                                 <i class="fas fa-eye"></i> Show
                                             </button>
                                         </label>
-                                        <input type="password" name="password_confirmation" 
+                                        <input type="password" name="password_confirmation"
                                                class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
                                                style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                                                required id="confirmPassword">
@@ -1273,14 +1412,14 @@
                 <i class="fas fa-times"></i>
             </button>
         </div>
-        
+
         <p class="mb-4 text-sm" style="color: var(--text-secondary);">
             Upload a clear photo of your government-issued ID for verification.
         </p>
-        
+
         <form id="idUploadForm" enctype="multipart/form-data" class="space-y-4">
             @csrf
-            
+
             <div>
                 <label class="block text-sm font-medium mb-2">ID Type</label>
                 <select name="id_type" class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1292,15 +1431,15 @@
                     <option value="voter_id">Voter's ID</option>
                 </select>
             </div>
-            
+
             <div>
                 <label class="block text-sm font-medium mb-2">ID Number</label>
-                <input type="text" name="id_number" 
+                <input type="text" name="id_number"
                        class="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                        style="background-color: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-color);"
                        placeholder="Enter ID number as shown on document">
             </div>
-            
+
             <div>
                 <label class="block text-sm font-medium mb-2">Upload Document</label>
                 <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer"
@@ -1323,7 +1462,7 @@
                 </div>
             </div>
         </form>
-        
+
         <div class="flex justify-end space-x-3 mt-6">
             <button onclick="closeIdUploadModal()" class="btn-secondary">Cancel</button>
             <button onclick="submitIdDocument()" class="btn-primary">Upload & Submit</button>
@@ -1343,10 +1482,10 @@ let timerSeconds = 600; // 10 minutes = 600 seconds
 
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Field Agent Profile page loaded');
-    
+
     // Initialize tab system
     initTabs();
-    
+
     // Set up photo upload
     const photoInput = document.getElementById('photoInput');
     if (photoInput) {
@@ -1356,10 +1495,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // Set up form submissions
     setupForms();
-    
+
     // Start timer if verification section exists and phone is unverified
     @if(!$user->phone_verified_at && $user->phone)
     if (localStorage.getItem('verificationSentAt')) {
@@ -1376,8 +1515,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // Tab Functions
 function initTabs() {
     const tabButtons = document.querySelectorAll('#tabNav .tab-button');
-    const tabPanes = document.querySelectorAll('.tab-pane');
-    
+
     tabButtons.forEach(button => {
         button.addEventListener('click', function() {
             const tabName = this.getAttribute('data-tab');
@@ -1392,34 +1530,34 @@ function showTab(tabName) {
         pane.classList.remove('active');
         pane.classList.add('hidden');
     });
-    
+
     const tabButtons = document.querySelectorAll('#tabNav .tab-button');
     tabButtons.forEach(button => {
         button.classList.remove('active-tab');
         button.style.borderColor = 'transparent';
         button.style.color = 'var(--text-secondary)';
     });
-    
+
     const selectedPane = document.getElementById(tabName + 'Pane');
     if (selectedPane) {
         selectedPane.classList.remove('hidden');
         selectedPane.classList.add('active');
     }
-    
+
     const selectedButton = document.querySelector(`#tabNav .tab-button[data-tab="${tabName}"]`);
     if (selectedButton) {
         selectedButton.classList.add('active-tab');
         selectedButton.style.borderColor = 'var(--primary)';
         selectedButton.style.color = 'var(--primary)';
     }
-    
+
     window.location.hash = tabName;
 }
 
 // Form Submission Handling
 function setupForms() {
     const forms = ['personalInfoForm', 'contactInfoForm', 'agentInfoForm', 'notificationsFormElement', 'securityInfoForm', 'passwordFormElement'];
-    
+
     forms.forEach(formId => {
         const form = document.getElementById(formId);
         if (form) {
@@ -1434,11 +1572,11 @@ function setupForms() {
 function submitForm(form) {
     const submitBtn = form.querySelector('button[type="submit"]');
     if (!submitBtn) return;
-    
+
     const originalText = submitBtn.innerHTML;
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Saving...';
-    
+
     fetch(form.action, {
         method: form.method,
         body: new FormData(form),
@@ -1491,18 +1629,18 @@ function submitForm(form) {
 function uploadPhoto(file) {
     const uploadBtn = document.getElementById('uploadBtn');
     if (!uploadBtn) return;
-    
+
     const originalText = uploadBtn.innerHTML;
     uploadBtn.disabled = true;
     uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Uploading...';
-    
+
     const uploadProgress = document.getElementById('uploadProgress');
     if (uploadProgress) uploadProgress.classList.remove('hidden');
-    
+
     const formData = new FormData();
     formData.append('photo', file);
     formData.append('_token', '{{ csrf_token() }}');
-    
+
     fetch('{{ route("agent.profile.photo.update") }}', {
         method: 'POST',
         body: formData
@@ -1529,14 +1667,14 @@ function uploadPhoto(file) {
 
 function removeProfilePhoto() {
     if (!confirm('Are you sure you want to remove your profile photo?')) return;
-    
+
     const removeBtn = document.getElementById('removeBtn');
     if (!removeBtn) return;
-    
+
     const originalText = removeBtn.innerHTML;
     removeBtn.disabled = true;
     removeBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Removing...';
-    
+
     fetch('{{ route("agent.profile.photo.remove") }}', {
         method: 'POST',
         headers: {
@@ -1566,20 +1704,20 @@ function removeProfilePhoto() {
 // Phone Verification Functions
 function sendPhoneVerification() {
     const phoneNumber = document.getElementById('phoneNumber')?.value;
-    
+
     if (!phoneNumber) {
         showToast('error', 'Please enter your phone number first.');
         document.getElementById('phoneNumber')?.focus();
         return;
     }
-    
+
     if (!phoneNumber.match(/^\+?[0-9]{10,15}$/)) {
         showToast('error', 'Please enter a valid phone number with country code (e.g., +233XXXXXXXXX)');
         return;
     }
-    
+
     showToast('info', 'Sending verification code...');
-    
+
     fetch('{{ route("agent.profile.phone.verify.send") }}', {
         method: 'POST',
         headers: {
@@ -1593,7 +1731,7 @@ function sendPhoneVerification() {
             showToast('success', 'Verification code sent to your phone!');
             localStorage.setItem('verificationSentAt', Date.now().toString());
             startTimer(timerSeconds);
-            
+
             const codeInput = document.getElementById('verificationCode');
             if (codeInput) {
                 codeInput.focus();
@@ -1611,21 +1749,21 @@ function sendPhoneVerification() {
 function verifyPhone() {
     const codeInput = document.getElementById('verificationCode');
     const verificationCode = codeInput?.value;
-    
+
     if (!verificationCode || verificationCode.length !== 6) {
         showToast('error', 'Please enter the 6-digit verification code.');
         codeInput?.focus();
         return;
     }
-    
+
     if (!/^\d{6}$/.test(verificationCode)) {
         showToast('error', 'Please enter a valid 6-digit numeric code.');
         codeInput?.focus();
         return;
     }
-    
+
     showToast('info', 'Verifying code...');
-    
+
     fetch('{{ route("agent.profile.phone.verify") }}', {
         method: 'POST',
         headers: {
@@ -1638,12 +1776,12 @@ function verifyPhone() {
     .then(data => {
         if (data.success) {
             showToast('success', 'Phone number verified successfully!');
-            
+
             if (countdownInterval) {
                 clearInterval(countdownInterval);
                 countdownInterval = null;
             }
-            
+
             const verificationSection = document.getElementById('verificationSection');
             if (verificationSection) {
                 verificationSection.innerHTML = `
@@ -1655,7 +1793,7 @@ function verifyPhone() {
                     </div>
                 `;
             }
-            
+
             setTimeout(() => window.location.reload(), 2000);
         } else {
             showToast('error', data.message || 'Invalid verification code. Please try again.');
@@ -1675,9 +1813,9 @@ function resendVerificationCode() {
         resendBtn.disabled = true;
         resendBtn.style.opacity = '0.5';
     }
-    
+
     sendPhoneVerification();
-    
+
     setTimeout(() => {
         if (resendBtn) {
             resendBtn.disabled = false;
@@ -1689,23 +1827,23 @@ function resendVerificationCode() {
 function startTimer(seconds) {
     const timerDisplay = document.getElementById('countdownTimer');
     if (!timerDisplay) return;
-    
+
     if (countdownInterval) {
         clearInterval(countdownInterval);
     }
-    
+
     let remaining = seconds;
-    
+
     function updateTimerDisplay() {
         const minutes = Math.floor(remaining / 60);
         const secs = remaining % 60;
         timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        
+
         if (remaining <= 0) {
             clearInterval(countdownInterval);
             countdownInterval = null;
             timerDisplay.textContent = 'Expired';
-            
+
             const verificationStatus = document.getElementById('verificationStatus');
             if (verificationStatus) {
                 verificationStatus.innerHTML = `
@@ -1720,7 +1858,7 @@ function startTimer(seconds) {
             }
         }
     }
-    
+
     updateTimerDisplay();
     countdownInterval = setInterval(() => {
         remaining--;
@@ -1731,7 +1869,7 @@ function startTimer(seconds) {
 // Email Verification
 function sendEmailVerification() {
     showToast('info', 'Sending verification email...');
-    
+
     fetch('{{ route("agent.profile.email.verify.send") }}', {
         method: 'POST',
         headers: {
@@ -1779,22 +1917,22 @@ function clearIdDocument() {
 
 function submitIdDocument() {
     const formData = new FormData(document.getElementById('idUploadForm'));
-    
+
     if (!formData.get('id_type')) {
         showToast('error', 'Please select ID type.');
         return;
     }
-    
+
     if (!formData.get('id_number')) {
         showToast('error', 'Please enter ID number.');
         return;
     }
-    
+
     if (!formData.get('id_document')) {
         showToast('error', 'Please select a document to upload.');
         return;
     }
-    
+
     fetch('{{ route("agent.profile.id.upload") }}', {
         method: 'POST',
         body: formData
@@ -1819,7 +1957,7 @@ function submitIdDocument() {
 function togglePassword(fieldId) {
     const field = document.getElementById(fieldId);
     if (!field) return;
-    
+
     const type = field.getAttribute('type') === 'password' ? 'text' : 'password';
     field.setAttribute('type', type);
 }
@@ -1828,16 +1966,16 @@ function checkPasswordStrength(password) {
     const strengthDiv = document.getElementById('passwordStrength');
     const strengthBar = document.getElementById('strengthBar');
     const strengthText = document.getElementById('strengthText');
-    
+
     if (!strengthDiv || !strengthBar || !strengthText) return;
-    
+
     if (password.length === 0) {
         strengthDiv.classList.add('hidden');
         return;
     }
-    
+
     strengthDiv.classList.remove('hidden');
-    
+
     let strength = 0;
     const criteria = [
         password.length >= 8,
@@ -1845,16 +1983,16 @@ function checkPasswordStrength(password) {
         password.match(/[0-9]/),
         password.match(/[@$!%*?&]/)
     ];
-    
+
     strength = criteria.filter(Boolean).length;
-    
+
     const strengths = {
         1: { text: 'Weak', color: '#ef4444', width: '25%' },
         2: { text: 'Fair', color: '#f59e0b', width: '50%' },
         3: { text: 'Good', color: '#3b82f6', width: '75%' },
         4: { text: 'Strong', color: '#10b981', width: '100%' }
     };
-    
+
     const result = strengths[strength] || strengths[1];
     strengthText.textContent = result.text;
     strengthText.style.color = result.color;
@@ -1889,10 +2027,73 @@ function revokeSession(sessionId) {
     }
 }
 
+// =====================================================
+// ✅ NEW: 2FA disable flow
+// -----------------------------------------------------
+// The 2FA card in the Security tab links to /2fa/setup,
+// /2fa/recovery-codes, and (for the disable path) opens a
+// modal that collects the user's password and posts it to
+// the existing /2fa/disable route via a hidden form.
+//
+// We keep the interactive elements OUTSIDE securityInfoForm
+// because nested forms are illegal HTML. The hidden form
+// lives next to the modal, and JS bridges the password
+// input into it before submitting.
+// =====================================================
+function openDisableTwoFactor() {
+    const modal = document.getElementById('disableTwoFactorModal');
+    const input = document.getElementById('disableTwoFactorPasswordConfirm');
+    if (input) input.value = '';
+    if (modal) {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        setTimeout(() => input?.focus(), 50);
+    }
+}
+
+function closeDisableTwoFactor() {
+    const modal = document.getElementById('disableTwoFactorModal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+function submitDisableTwoFactor() {
+    const password = document.getElementById('disableTwoFactorPasswordConfirm')?.value;
+    const hidden   = document.getElementById('disableTwoFactorPassword');
+    const form     = document.getElementById('disableTwoFactorForm');
+
+    if (!password) {
+        showToast('error', 'Please enter your current password.');
+        return;
+    }
+    if (!hidden || !form) return;
+
+    // Bridge the modal input into the hidden form and submit.
+    hidden.value = password;
+    form.submit();
+}
+
+// Close the disable modal on Escape
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+        const modal = document.getElementById('disableTwoFactorModal');
+        if (modal && !modal.classList.contains('hidden')) {
+            closeDisableTwoFactor();
+        }
+    }
+});
+
+// Close the disable modal on backdrop click
+document.getElementById('disableTwoFactorModal')?.addEventListener('click', function (e) {
+    if (e.target === this) closeDisableTwoFactor();
+});
+
 // Statistics Function
 function getProfileStats() {
     showToast('info', 'Loading statistics...');
-    
+
     fetch('{{ route("agent.profile.stats") }}')
         .then(response => response.json())
         .then(data => {
@@ -1910,28 +2111,28 @@ function getProfileStats() {
 function showToast(type, message) {
     const container = document.getElementById('toastContainer');
     if (!container) return;
-    
+
     const toast = document.createElement('div');
     const colors = {
         success: 'bg-green-500',
         error: 'bg-red-500',
         info: 'bg-blue-500'
     };
-    
+
     const icons = {
         success: 'fa-check-circle',
         error: 'fa-exclamation-circle',
         info: 'fa-info-circle'
     };
-    
+
     toast.className = `${colors[type] || 'bg-gray-500'} text-white px-4 py-3 rounded-lg shadow-lg flex items-center transform transition-all duration-300`;
     toast.innerHTML = `
         <i class="fas ${icons[type] || 'fa-bell'} mr-2"></i>
         <span>${message}</span>
     `;
-    
+
     container.appendChild(toast);
-    
+
     setTimeout(() => {
         toast.style.opacity = '0';
         toast.style.transform = 'translateX(100%)';
@@ -1956,7 +2157,7 @@ document.querySelectorAll('.toggle-switch input').forEach(toggle => {
             toggleSwitch.classList.remove('active');
         }
     });
-    
+
     // Set initial state
     if (toggle.checked) {
         toggle.closest('.toggle-switch')?.classList.add('active');
@@ -2183,17 +2384,17 @@ input:checked + .toggle-slider:before {
         font-size: 0.75rem;
         padding: 0.5rem 0.75rem;
     }
-    
+
     .card {
         padding: 1rem !important;
     }
-    
+
     .toggle-item {
         flex-direction: column;
         align-items: flex-start;
         gap: 0.5rem;
     }
-    
+
     .toggle-switch {
         align-self: flex-end;
     }

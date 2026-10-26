@@ -9,6 +9,7 @@ use App\Models\RegistrationPlan;
 use App\Models\PlanAgentAssignment;
 use App\Models\LandlordInvitation;
 use App\Models\TenantInvitation;
+use App\Models\Role;                                    // ✅ ADDED
 use App\Services\PropertyRegistrationService;
 use App\Services\MultiChannelInvitationService;
 use App\Services\GoogleMapsService;
@@ -47,21 +48,109 @@ class FieldAgentPropertyController extends Controller
     }
 
     // ================================================================
-    //  CHANNEL STATUS RESOLUTION
+    //  ROLE ASSIGNMENT HELPERS (NEW)
     // ================================================================
 
     /**
-     * Resolve the system-ready flags for SMS, WhatsApp, and Email.
+     * Ensure a role row exists for the given slug; create it if missing.
      *
-     * @return array{smsStatus: array, whatsappStatus: array, emailStatus: array}
+     * Fixes the "role row was never seeded" failure where `assignRole()`
+     * silently no-ops because the slug has no matching Role record.
      */
+    protected function ensureRoleExists(string $slug): ?Role
+    {
+        try {
+            $role = Role::where('slug', $slug)->first();
+            if ($role) {
+                return $role;
+            }
+
+            $labels = [
+                'landlord' => 'Landlord',
+                'tenant'   => 'Tenant',
+                'admin'    => 'Administrator',
+                'field-agent' => 'Field Agent',
+            ];
+
+            $label = $labels[$slug] ?? ucfirst($slug);
+
+            $role = Role::create([
+                'name'         => $label,
+                'display_name' => $label,
+                'slug'         => $slug,
+                'description'  => "Auto-created {$label} role",
+                'priority'     => 50,
+                'is_system'    => false,
+                'is_default'   => false,
+            ]);
+
+            Log::info('Auto-created missing role (field-agent context)', [
+                'slug' => $slug,
+                'id'   => $role->id,
+            ]);
+
+            return $role;
+        } catch (\Throwable $e) {
+            Log::error('Failed to ensure role exists (field-agent context)', [
+                'slug'  => $slug,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Attach a Spatie role to a user, creating the role row if needed.
+     *
+     * Uses `syncWithoutDetaching` so any pre-existing roles are kept —
+     * important when a landlord is later promoted to admin, or a tenant
+     * becomes a landlord, and a subsequent field-agent registration
+     * re-runs the attach.
+     */
+    protected function assignRoleSafely(User $user, string $slug): void
+    {
+        if (!$user || !$user->exists) {
+            return;
+        }
+
+        try {
+            $role = $this->ensureRoleExists($slug);
+            if (!$role) {
+                Log::warning('Skipping role assignment — role row unavailable (field-agent context)', [
+                    'user_id' => $user->id,
+                    'slug'    => $slug,
+                ]);
+                return;
+            }
+
+            if (method_exists($user, 'hasRole') && $user->hasRole($slug)) {
+                return;
+            }
+
+            $user->roles()->syncWithoutDetaching([$role->id]);
+
+            Log::info('Role assigned to user (field-agent context)', [
+                'user_id' => $user->id,
+                'slug'    => $slug,
+                'role_id' => $role->id,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to assign role to user (field-agent context)', [
+                'user_id' => $user->id ?? null,
+                'slug'    => $slug,
+                'error'   => $e->getMessage(),
+            ]);
+        }
+    }
+
+    // ================================================================
+    //  CHANNEL STATUS RESOLUTION
+    // ================================================================
+
     protected function resolveChannelStatuses(): array
     {
-        // --------------------------------------------------------------
         // SMS
-        // --------------------------------------------------------------
         $smsStatus = ['system_ready' => false, 'health' => 'unknown', 'message' => 'SMS service unavailable'];
-
         try {
             if ($this->smsService) {
                 $resolved = $this->smsService->getSystemStatus();
@@ -91,11 +180,8 @@ class FieldAgentPropertyController extends Controller
                 : 'SMS service is not configured or not ready';
         }
 
-        // --------------------------------------------------------------
         // WhatsApp
-        // --------------------------------------------------------------
         $whatsappStatus = ['system_ready' => false, 'health' => 'unknown', 'message' => 'WhatsApp service unavailable'];
-
         try {
             if (class_exists(WhatsAppService::class)) {
                 $whatsappService = app(WhatsAppService::class);
@@ -135,11 +221,8 @@ class FieldAgentPropertyController extends Controller
                 : 'WhatsApp service is not configured';
         }
 
-        // --------------------------------------------------------------
-        // Email — the tricky one
-        // --------------------------------------------------------------
+        // Email
         $emailStatus = ['system_ready' => false, 'health' => 'unknown', 'message' => 'Email service unavailable'];
-
         try {
             if (class_exists(SystemSetting::class)) {
                 $settings = SystemSetting::getSettings();
@@ -220,9 +303,6 @@ class FieldAgentPropertyController extends Controller
         ];
     }
 
-    /**
-     * Return true if the given channel is ready system-wide.
-     */
     protected function isChannelReady(array $status): bool
     {
         return (bool) (
@@ -236,12 +316,40 @@ class FieldAgentPropertyController extends Controller
     }
 
     // ================================================================
-    //  ✅ NEW: COORDINATE HELPERS
+    //  REGION / AREA HELPERS
     // ================================================================
 
-    /**
-     * Browser-restricted Google Maps key for the map picker.
-     */
+    protected function getAvailableRegions(): array
+    {
+        $regions = config('ghana.regions');
+
+        if (is_array($regions) && !empty($regions)) {
+            return $regions;
+        }
+
+        return [
+            'Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern',
+            'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah',
+            'Upper East', 'Upper West', 'Volta', 'Western', 'Western North',
+        ];
+    }
+
+    protected function buildDuplicateCheckData(Request $request, ?Property $existing = null): array
+    {
+        return [
+            'property_name'   => $request->property_name   ?? $existing?->property_name,
+            'street_name'     => $request->street_name     ?? $existing?->street_name,
+            'house_number'    => $request->house_number    ?? $existing?->house_number,
+            'digital_address' => $request->digital_address ?? $existing?->digital_address,
+            'region'          => $request->region          ?? $existing?->region,
+            'area'            => $request->area            ?? $existing?->area,
+        ];
+    }
+
+    // ================================================================
+    //  COORDINATE HELPERS
+    // ================================================================
+
     protected function getGoogleMapsBrowserKey(): ?string
     {
         $key = config('services.google_maps.browser_key')
@@ -250,13 +358,6 @@ class FieldAgentPropertyController extends Controller
         return is_string($key) && $key !== '' ? $key : null;
     }
 
-    /**
-     * Attach coordinates to a payload.
-     *
-     *  1. Uses submitted lat/lng when present.
-     *  2. Falls back to geocoding the digital address via GoogleMapsService.
-     *  3. Normalizes empty strings to null.
-     */
     protected function resolveCoordinates(array $data, bool $onlyIfMissing = false): array
     {
         $hasLat = isset($data['latitude'])  && $data['latitude']  !== '' && $data['latitude']  !== null;
@@ -330,6 +431,8 @@ class FieldAgentPropertyController extends Controller
         $registrationPlans = RegistrationPlan::whereIn('id', $planIds)->get();
         $propertyTypes = PropertyType::active()->ordered()->get();
 
+        $regions = $this->getAvailableRegions();
+
         if ($request->expectsJson()) {
             return response()->json([
                 'success' => true,
@@ -338,7 +441,12 @@ class FieldAgentPropertyController extends Controller
             ]);
         }
 
-        return view('field-agent.properties.index', compact('properties', 'registrationPlans', 'propertyTypes'));
+        return view('field-agent.properties.index', compact(
+            'properties',
+            'registrationPlans',
+            'propertyTypes',
+            'regions'
+        ));
     }
 
     // ================================================================
@@ -434,8 +542,8 @@ class FieldAgentPropertyController extends Controller
         $whatsappStatus = $channelStatuses['whatsappStatus'];
         $emailStatus    = $channelStatuses['emailStatus'];
 
-        // ✅ NEW: Google Maps browser key for the coordinate picker
         $googleMapsKey = $this->getGoogleMapsBrowserKey();
+        $regions = $this->getAvailableRegions();
 
         Log::info('Step 3 - Data being passed to view', [
             'registrationPlans_count' => $registrationPlans->count(),
@@ -449,6 +557,7 @@ class FieldAgentPropertyController extends Controller
             'whatsapp_ready' => $this->isChannelReady($whatsappStatus),
             'email_ready'    => $this->isChannelReady($emailStatus),
             'has_google_maps_key' => !empty($googleMapsKey),
+            'regions_count' => count($regions),
             'first_plan_details' => $registrationPlans->first() ? [
                 'id' => $registrationPlans->first()->id,
                 'has_next_available' => isset($registrationPlans->first()->next_available_name),
@@ -465,7 +574,8 @@ class FieldAgentPropertyController extends Controller
             'smsStatus',
             'whatsappStatus',
             'emailStatus',
-            'googleMapsKey'
+            'googleMapsKey',
+            'regions'
         ));
     }
 
@@ -473,13 +583,6 @@ class FieldAgentPropertyController extends Controller
     //  STORE
     // ================================================================
 
-    /**
-     * Store a newly created property.
-     *
-     * ✅ NEW: resolves coordinates (submitted values or geocoded from the
-     * digital address) before handing the payload to the registration
-     * service, and patches them after create if the service dropped them.
-     */
     public function store(Request $request)
     {
         $user = auth()->user();
@@ -514,16 +617,18 @@ class FieldAgentPropertyController extends Controller
                 $landlordId = $landlordResult['landlord_id'];
                 $request->merge(['landlord_id' => $landlordId]);
 
-                $propertyData = [
-                    'property_name' => $request->property_name,
-                    'street_name' => $request->street_name,
-                    'house_number' => $request->house_number,
-                    'digital_address' => $request->digital_address,
-                ];
+                $propertyData = $this->buildDuplicateCheckData($request);
 
                 if ($this->isDuplicateProperty($landlordId, $propertyData)) {
                     DB::rollBack();
                     return $this->errorResponse($request, 'This property already exists for this landlord.');
+                }
+            } else {
+                $propertyData = $this->buildDuplicateCheckData($request);
+
+                if ($this->isDuplicateProperty($landlordId, $propertyData)) {
+                    DB::rollBack();
+                    return $this->errorResponse($request, 'This property may already exist for this landlord.');
                 }
             }
 
@@ -538,13 +643,27 @@ class FieldAgentPropertyController extends Controller
                 }
             }
 
-            // ✅ NEW: resolve coordinates before passing to the service
             $coordinatePayload = $this->resolveCoordinates([
                 'digital_address' => $request->digital_address,
                 'latitude'        => $request->latitude,
                 'longitude'       => $request->longitude,
                 'city'            => $request->city,
-            ], /* onlyIfMissing */ false);
+            ], false);
+
+            $region = $request->region;
+            $area   = $request->area;
+
+            if (empty($region) || empty($area)) {
+                $plan = RegistrationPlan::find($request->registration_plan_id);
+                if ($plan) {
+                    if (empty($region) && !empty($plan->region)) {
+                        $region = $plan->region;
+                    }
+                    if (empty($area) && !empty($plan->area)) {
+                        $area = $plan->area;
+                    }
+                }
+            }
 
             $propertyData = [
                 'registration_plan_id' => $request->registration_plan_id,
@@ -557,10 +676,12 @@ class FieldAgentPropertyController extends Controller
                 'block_number' => $request->block_number,
                 'digital_address' => $request->digital_address,
 
-                // ✅ NEW: coordinate fields
                 'latitude'  => $coordinatePayload['latitude']  ?? null,
                 'longitude' => $coordinatePayload['longitude'] ?? null,
                 'city'      => $coordinatePayload['city']      ?? $request->city,
+
+                'region'    => $region,
+                'area'      => $area,
 
                 'zone' => $request->zone ?? $request->manual_zone,
                 'section' => $request->section ?? $request->manual_section,
@@ -579,8 +700,6 @@ class FieldAgentPropertyController extends Controller
             if ($result['success']) {
                 $property = Property::find($result['site_allocation']['id']);
 
-                // ✅ Safety net: ensure coordinates actually persisted even if
-                // the registration service dropped them.
                 if ($property && !$property->has_coordinates) {
                     $patch = array_filter([
                         'latitude'  => $coordinatePayload['latitude']  ?? null,
@@ -595,6 +714,17 @@ class FieldAgentPropertyController extends Controller
                             'latitude'    => $property->latitude,
                             'longitude'   => $property->longitude,
                         ]);
+                    }
+                }
+
+                if ($property) {
+                    $regionAreaPatch = array_filter([
+                        'region' => $region,
+                        'area'   => $area,
+                    ], fn ($v) => $v !== null && $v !== '');
+
+                    if (!empty($regionAreaPatch)) {
+                        $property->update($regionAreaPatch);
                     }
                 }
 
@@ -635,8 +765,6 @@ class FieldAgentPropertyController extends Controller
 
                 $this->updateAgentAssignmentProgress($user->id, $request->registration_plan_id);
 
-                // Auto-advance the plan to `in_progress` the first time an
-                // actively-assigned field agent registers under `assigned`.
                 if (!empty($request->registration_plan_id)) {
                     try {
                         $plan = RegistrationPlan::find($request->registration_plan_id);
@@ -711,7 +839,9 @@ class FieldAgentPropertyController extends Controller
             'send_invitation',
             'invitation_channels',
             'is_rented',
-            'tenants'
+            'tenants',
+            'region',
+            'area',
         ];
 
         foreach ($fieldsToClear as $field) {
@@ -927,8 +1057,8 @@ class FieldAgentPropertyController extends Controller
         $whatsappStatus = $channelStatuses['whatsappStatus'];
         $emailStatus    = $channelStatuses['emailStatus'];
 
-        // ✅ NEW: Google Maps browser key for the coordinate picker
         $googleMapsKey = $this->getGoogleMapsBrowserKey();
+        $regions = $this->getAvailableRegions();
 
         return view('field-agent.properties.edit', compact(
             'property',
@@ -941,7 +1071,8 @@ class FieldAgentPropertyController extends Controller
             'smsStatus',
             'whatsappStatus',
             'emailStatus',
-            'googleMapsKey'
+            'googleMapsKey',
+            'regions'
         ));
     }
 
@@ -991,7 +1122,9 @@ class FieldAgentPropertyController extends Controller
             'section' => 'nullable|string|max:255',
             'status' => 'nullable|string',
 
-            // ✅ NEW: coordinate validation
+            'region' => 'required|string|max:100',
+            'area'   => 'required|string|max:150',
+
             'latitude'  => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'city'      => 'nullable|string|max:100',
@@ -1007,6 +1140,13 @@ class FieldAgentPropertyController extends Controller
             $oldPlanId = $property->registration_plan_id;
             $updateData = $validator->validated();
 
+            if ($request->has('region')) {
+                $updateData['region'] = $request->region;
+            }
+            if ($request->has('area')) {
+                $updateData['area'] = $request->area;
+            }
+
             $customType = PropertyType::where('slug', 'custom')->first();
             if ($request->property_type_id == ($customType->id ?? null)) {
                 $updateData['custom_property_type'] = $request->custom_property_type;
@@ -1014,7 +1154,6 @@ class FieldAgentPropertyController extends Controller
                 $updateData['custom_property_type'] = null;
             }
 
-            // ✅ NEW: coordinate resolution for updates
             $hasSubmittedCoords = $request->filled('latitude') && $request->filled('longitude');
             $digitalChanged     = $request->filled('digital_address')
                 && $request->digital_address !== $property->digital_address;
@@ -1030,7 +1169,7 @@ class FieldAgentPropertyController extends Controller
                     'digital_address' => $request->digital_address,
                     'latitude'        => null,
                     'longitude'       => null,
-                ], /* onlyIfMissing */ true);
+                ], true);
 
                 if (!empty($patched['latitude']) && !empty($patched['longitude'])) {
                     $updateData['latitude']  = $patched['latitude'];
@@ -1040,12 +1179,11 @@ class FieldAgentPropertyController extends Controller
                     }
                 }
             } elseif ($digitalChanged && $property->has_coordinates) {
-                // Refresh coordinates for a changed digital address
                 $patched = $this->resolveCoordinates([
                     'digital_address' => $request->digital_address,
                     'latitude'        => null,
                     'longitude'       => null,
-                ], /* onlyIfMissing */ false);
+                ], false);
 
                 if (!empty($patched['latitude']) && !empty($patched['longitude'])) {
                     $updateData['latitude']  = $patched['latitude'];
@@ -1077,7 +1215,7 @@ class FieldAgentPropertyController extends Controller
     }
 
     // ================================================================
-    //  ✅ NEW: UPDATE COORDINATES ONLY
+    //  UPDATE COORDINATES
     // ================================================================
 
     public function updateCoordinates(Request $request, Property $property)
@@ -1111,7 +1249,7 @@ class FieldAgentPropertyController extends Controller
 
             $patched = $this->resolveCoordinates(
                 array_merge(['digital_address' => $property->digital_address], $data),
-                /* onlyIfMissing */ true
+                true
             );
 
             $updatePayload = array_filter([
@@ -1544,10 +1682,18 @@ class FieldAgentPropertyController extends Controller
         $propertyType = $property->propertyType->name ?? ($property->custom_property_type ?? 'Property');
         $invitationUrl = $invitation->getInvitationUrl();
 
+        $locationBits = array_filter([
+            $property->area,
+            $property->street_name,
+            $property->zone,
+            $property->region,
+        ]);
+        $locationLine = !empty($locationBits) ? implode(', ', $locationBits) : 'N/A';
+
         return "🏠 *Property Registration*\n\n" .
                "Hello {$landlord->name},\n\n" .
                "Your *{$propertyType}* has been registered successfully.\n\n" .
-               "📍 *Location:* {$property->street_name}, " . ($property->zone ?? 'N/A') . "\n" .
+               "📍 *Location:* {$locationLine}\n" .
                "🔢 *Registration ID:* {$property->registration_pattern}\n" .
                "📅 *Registered:* " . ($property->registration_date?->format('M j, Y') ?? 'Today') . "\n\n" .
                "Complete registration here:\n" .
@@ -1638,6 +1784,15 @@ class FieldAgentPropertyController extends Controller
         ];
     }
 
+    /**
+     * ✅ FIXED: Create/get tenant with safe role assignment.
+     *
+     * Both branches (new + existing) now apply the `tenant` role via
+     * `assignRoleSafely()`, which:
+     *   • ensures the role row exists (auto-creates if missing),
+     *   • uses syncWithoutDetaching (doesn't remove existing roles),
+     *   • logs success/failure.
+     */
     private function createOrGetTenant(array $tenantData, Property $property)
     {
         try {
@@ -1664,18 +1819,18 @@ class FieldAgentPropertyController extends Controller
                     'password' => Hash::make($temporaryPassword),
                 ]);
 
-                $tenant->assignRole('tenant', [
-                    'assigned_by' => auth()->id(),
-                    'assignment_reason' => 'Created during property registration by field agent',
-                    'assigned_at' => now(),
-                ]);
+                // ✅ safe role assignment
+                $this->assignRoleSafely($tenant, 'tenant');
 
-                Log::info('New tenant created', [
+                Log::info('New tenant created (field agent)', [
                     'tenant_id' => $tenant->id,
                     'name' => $tenant->name
                 ]);
             } else {
-                Log::info('Existing tenant found', [
+                // ✅ also ensure existing users carry the tenant role
+                $this->assignRoleSafely($tenant, 'tenant');
+
+                Log::info('Existing tenant found (field agent)', [
                     'tenant_id' => $tenant->id,
                     'name' => $tenant->name
                 ]);
@@ -1877,12 +2032,29 @@ class FieldAgentPropertyController extends Controller
             }
         }
 
-        // ✅ NEW: coordinate filters
         if ($request->has('has_coordinates') && $request->has_coordinates !== '') {
             if ($request->has_coordinates === '1') {
                 $query->hasCoordinates();
             } elseif ($request->has_coordinates === '0') {
                 $query->missingCoordinates();
+            }
+        }
+
+        if ($request->filled('region')) {
+            $query->where('region', $request->region);
+        }
+
+        if ($request->filled('area')) {
+            $query->where('area', 'like', '%' . $request->area . '%');
+        }
+
+        if ($request->has('has_region') && $request->has_region !== '') {
+            if ($request->has_region === '1') {
+                $query->whereNotNull('region')->where('region', '!=', '');
+            } elseif ($request->has_region === '0') {
+                $query->where(function ($q) {
+                    $q->whereNull('region')->orWhere('region', '');
+                });
             }
         }
     }
@@ -1900,7 +2072,9 @@ class FieldAgentPropertyController extends Controller
             'block_number' => 'nullable|string|max:50',
             'digital_address' => 'nullable|string|max:255',
 
-            // ✅ NEW: coordinate validation
+            'region' => 'required|string|max:100',
+            'area'   => 'required|string|max:150',
+
             'latitude'  => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
             'city'      => 'nullable|string|max:100',
@@ -1936,6 +2110,8 @@ class FieldAgentPropertyController extends Controller
             'tenants.*.phone.required_with' => 'Tenant phone number is required.',
             'latitude.between' => 'Latitude must be between -90 and 90.',
             'longitude.between' => 'Longitude must be between -180 and 180.',
+            'region.required' => 'Please select the region where the property is located.',
+            'area.required'   => 'Please enter the area/neighbourhood of the property.',
         ];
 
         if (empty($request->landlord_id)) {
@@ -1998,6 +2174,10 @@ class FieldAgentPropertyController extends Controller
         return $validator;
     }
 
+    /**
+     * ✅ FIXED: Resolve or create a landlord, ALWAYS attach the landlord
+     * role via the safe helper (both branches).
+     */
     private function createOrGetLandlord(Request $request): array
     {
         $phone = $request->landlord_phones[0] ?? null;
@@ -2016,13 +2196,8 @@ class FieldAgentPropertyController extends Controller
                 'input_phone' => $phone
             ]);
 
-            if (!$existingLandlord->isLandlord()) {
-                $existingLandlord->assignRole('landlord', [
-                    'assigned_by' => auth()->id(),
-                    'assignment_reason' => 'Auto-assigned during property registration by field agent',
-                    'assigned_at' => now(),
-                ]);
-            }
+            // ✅ safe role assignment for existing users
+            $this->assignRoleSafely($existingLandlord, 'landlord');
 
             if (count($request->landlord_phones) > 1) {
                 $standardizedPrimary = $this->standardizePhoneNumber($phone);
@@ -2056,7 +2231,7 @@ class FieldAgentPropertyController extends Controller
         $standardizedPhone = $this->standardizePhoneNumber($phone);
         $temporaryPassword = Str::random(16);
 
-        Log::info('Creating new landlord', [
+        Log::info('Creating new landlord (field agent)', [
             'name' => $request->landlord_name,
             'phone' => $standardizedPhone,
             'email' => $request->landlord_email
@@ -2074,11 +2249,8 @@ class FieldAgentPropertyController extends Controller
             'password' => Hash::make($temporaryPassword),
         ]);
 
-        $landlord->assignRole('landlord', [
-            'assigned_by' => auth()->id(),
-            'assignment_reason' => 'Created during property registration by field agent',
-            'assigned_at' => now(),
-        ]);
+        // ✅ safe role assignment for new users
+        $this->assignRoleSafely($landlord, 'landlord');
 
         if (count($request->landlord_phones) > 1) {
             $standardizedPrimary = $standardizedPhone;
@@ -2227,6 +2399,23 @@ class FieldAgentPropertyController extends Controller
             if (Property::where('property_name', $propertyData['property_name'])
                 ->where('landlord_id', $landlordId)
                 ->exists()) {
+                return true;
+            }
+        }
+
+        if (!empty($propertyData['street_name']) && !empty($propertyData['house_number'])) {
+            $q = Property::where('street_name', $propertyData['street_name'])
+                ->where('house_number', $propertyData['house_number'])
+                ->where('landlord_id', $landlordId);
+
+            if (!empty($propertyData['region'])) {
+                $q->where('region', $propertyData['region']);
+            }
+            if (!empty($propertyData['area'])) {
+                $q->where('area', $propertyData['area']);
+            }
+
+            if ($q->exists()) {
                 return true;
             }
         }
@@ -2578,9 +2767,6 @@ class FieldAgentPropertyController extends Controller
         $fromDate = $request->input('from_date');
         $toDate   = $request->input('to_date');
 
-        // ------------------------------------------------------------------
-        // Base query — reusable everywhere, respects date filters
-        // ------------------------------------------------------------------
         $baseQuery = $this->getAgentPropertyQuery($user);
 
         if ($fromDate) {
@@ -2592,24 +2778,15 @@ class FieldAgentPropertyController extends Controller
 
         $totalProperties = (clone $baseQuery)->count();
 
-        // ------------------------------------------------------------------
-        // This-month count (own + plan-scoped, deduplicated via closure)
-        // ------------------------------------------------------------------
         $thisMonthCount = (clone $baseQuery)
             ->whereMonth('created_at', now()->month)
             ->whereYear('created_at', now()->year)
             ->count();
 
-        // ------------------------------------------------------------------
-        // Verification status counts
-        // ------------------------------------------------------------------
         $verifiedCount = (clone $baseQuery)->where('verification_status', 'verified')->count();
         $pendingCount  = (clone $baseQuery)->where('verification_status', 'pending')->count();
         $rejectedCount = (clone $baseQuery)->where('verification_status', 'rejected')->count();
 
-        // ------------------------------------------------------------------
-        // Plan assignments
-        // ------------------------------------------------------------------
         $allAssignments = PlanAgentAssignment::where('agent_id', $user->id)
             ->with('registrationPlan')
             ->get();
@@ -2640,16 +2817,10 @@ class FieldAgentPropertyController extends Controller
             ? round($totalProperties / $activePlans, 1)
             : 0;
 
-        // ------------------------------------------------------------------
-        // Verification rate (verified / total) — the blade reads this
-        // ------------------------------------------------------------------
         $verificationRate = $totalProperties > 0
             ? round(($verifiedCount / $totalProperties) * 100, 1)
             : 0;
 
-        // ------------------------------------------------------------------
-        // Monthly trend (last 12 months)
-        // ------------------------------------------------------------------
         $monthlyTrend = (clone $baseQuery)
             ->select(
                 DB::raw('DATE_FORMAT(created_at, "%Y-%m") as month'),
@@ -2673,9 +2844,6 @@ class FieldAgentPropertyController extends Controller
             })
             ->values();
 
-        // ------------------------------------------------------------------
-        // Property type stats (standard + custom)
-        // ------------------------------------------------------------------
         $propertyTypeStats = (clone $baseQuery)
             ->whereNotNull('property_type_id')
             ->select('property_type_id', DB::raw('count(*) as count'))
@@ -2717,9 +2885,6 @@ class FieldAgentPropertyController extends Controller
             ->sortByDesc('count')
             ->values();
 
-        // ------------------------------------------------------------------
-        // Per-plan performance
-        // ------------------------------------------------------------------
         $planPerformance = $activeAssignments->map(function ($assignment) use ($user) {
             $plan = $assignment->registrationPlan;
             if (!$plan) return null;
@@ -2746,9 +2911,6 @@ class FieldAgentPropertyController extends Controller
             ];
         })->filter()->values();
 
-        // ------------------------------------------------------------------
-        // Status distribution (verification_status)
-        // ------------------------------------------------------------------
         $statusDistribution = (clone $baseQuery)
             ->select('verification_status as status', DB::raw('count(*) as count'))
             ->whereNotNull('verification_status')
@@ -2762,9 +2924,6 @@ class FieldAgentPropertyController extends Controller
             })
             ->values();
 
-        // ------------------------------------------------------------------
-        // Top landlords
-        // ------------------------------------------------------------------
         $topLandlords = (clone $baseQuery)
             ->whereNotNull('landlord_id')
             ->select('landlord_id', DB::raw('count(*) as property_count'))
@@ -2781,9 +2940,6 @@ class FieldAgentPropertyController extends Controller
             })
             ->values();
 
-        // ------------------------------------------------------------------
-        // Recent activity
-        // ------------------------------------------------------------------
         $recentActivity = (clone $baseQuery)
             ->with(['propertyType', 'landlord', 'registrationPlan'])
             ->latest('created_at')
@@ -2806,9 +2962,6 @@ class FieldAgentPropertyController extends Controller
             })
             ->values();
 
-        // ------------------------------------------------------------------
-        // Week-over-week activity
-        // ------------------------------------------------------------------
         $thisWeekCount = (clone $baseQuery)
             ->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()])
             ->count();
@@ -2824,18 +2977,21 @@ class FieldAgentPropertyController extends Controller
             ? round((($thisWeekCount - $lastWeekCount) / $lastWeekCount) * 100, 1)
             : ($thisWeekCount > 0 ? 100 : 0);
 
-        // ------------------------------------------------------------------
-        // Photo coverage
-        // ------------------------------------------------------------------
         $propertiesWithPhotos = (clone $baseQuery)->has('photos')->count();
 
         $photoCoverage = $totalProperties > 0
             ? round(($propertiesWithPhotos / $totalProperties) * 100, 1)
             : 0;
 
-        // ------------------------------------------------------------------
-        // Logging
-        // ------------------------------------------------------------------
+        $propertiesWithRegion = (clone $baseQuery)
+            ->whereNotNull('region')
+            ->where('region', '!=', '')
+            ->count();
+
+        $regionCoverage = $totalProperties > 0
+            ? round(($propertiesWithRegion / $totalProperties) * 100, 1)
+            : 0;
+
         \Log::info('Statistics data for agent', [
             'agent_id'                   => $user->id,
             'totalProperties'            => $totalProperties,
@@ -2854,6 +3010,8 @@ class FieldAgentPropertyController extends Controller
             'recentActivity_count'       => $recentActivity->count(),
             'fromDate'                   => $fromDate,
             'toDate'                     => $toDate,
+            'propertiesWithRegion'       => $propertiesWithRegion,
+            'regionCoverage'             => $regionCoverage,
         ]);
 
         return view('field-agent.statistics', [
@@ -2882,6 +3040,9 @@ class FieldAgentPropertyController extends Controller
             'weeklyChange'         => $weeklyChange,
             'propertiesWithPhotos' => $propertiesWithPhotos,
             'photoCoverage'        => $photoCoverage,
+
+            'propertiesWithRegion' => $propertiesWithRegion,
+            'regionCoverage'       => $regionCoverage,
 
             'fromDate'             => $fromDate,
             'toDate'               => $toDate,

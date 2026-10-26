@@ -4,10 +4,9 @@
 
 @push('styles')
 <style>
-    /* CRITICAL THEME STYLES - Prevent Flash of Incorrect Theme */
-    /* These styles load immediately and prevent the white flash */
-    
-    /* Light theme variables (default) */
+    /* ==========================================================================
+       CRITICAL THEME STYLES - Prevent Flash of Incorrect Theme
+       ========================================================================== */
     :root {
         --text-primary: #1f2937;
         --text-secondary: #6b7280;
@@ -28,8 +27,7 @@
         --info-rgb: 6, 182, 212;
         --border-color-rgb: 229, 231, 235;
     }
-    
-    /* Dark theme variables - applied immediately */
+
     html.dark-theme,
     html[data-theme="dark"] {
         --text-primary: #f3f4f6;
@@ -51,8 +49,7 @@
         --info-rgb: 6, 182, 212;
         --border-color-rgb: 55, 65, 81;
     }
-    
-    /* Ensure body background matches theme immediately */
+
     body {
         background-color: var(--bg-secondary);
         margin: 0;
@@ -60,41 +57,63 @@
         transition: background-color 0.3s ease, color 0.3s ease;
     }
 
-    /* Dashboard Container Styles */
     .dashboard-container {
         max-width: 1600px;
         margin: 0 auto;
         padding: 1rem;
     }
 
-    /* Dashboard Switcher Styles */
+    /* ==========================================================================
+       ✅ FIXED: DASHBOARD SWITCHER — bulletproof toggle
+       ========================================================================== */
     .dashboard-switcher {
         position: relative;
+        z-index: 1050;
     }
 
     #dashboardSwitcherMenu {
-        transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-        transform-origin: top right;
+        position: absolute;
+        top: calc(100% + 0.5rem);
+        right: 0;
+        width: 18rem;
+        max-height: 70vh;
+        overflow-y: auto;
+        border-radius: 0.75rem;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15),
+                    0 10px 10px -5px rgba(0, 0, 0, 0.08);
+        z-index: 1060;
+
         opacity: 0;
-        transform: translateY(-10px);
         visibility: hidden;
+        transform: translateY(-8px);
+        pointer-events: none;
+        transition: opacity 0.18s ease,
+                    transform 0.18s ease,
+                    visibility 0.18s ease;
     }
 
-    #dashboardSwitcherMenu.show {
+    #dashboardSwitcherMenu.is-open {
         opacity: 1;
-        transform: translateY(0);
         visibility: visible;
+        transform: translateY(0);
+        pointer-events: auto;
+    }
+
+    #dashboardSwitcherMenu.is-open[hidden] {
         display: block !important;
     }
 
     .dashboard-switch-option {
         transition: all 0.2s ease;
         cursor: pointer;
+        background-color: transparent;
+        border: 0;
+        width: 100%;
+        text-align: left;
     }
 
     .dashboard-switch-option:hover {
         background-color: rgba(var(--primary-rgb), 0.1);
-        padding-left: 1rem;
     }
 
     .active-option {
@@ -102,7 +121,16 @@
         border-left: 3px solid var(--primary);
     }
 
-    /* Stat Cards */
+    #dashboardSwitcherBtn .switcher-chevron {
+        transition: transform 0.18s ease;
+    }
+    #dashboardSwitcherBtn[aria-expanded="true"] .switcher-chevron {
+        transform: rotate(180deg);
+    }
+
+    /* ==========================================================================
+       Stat Cards
+       ========================================================================== */
     .stat-card {
         background: linear-gradient(135deg, var(--card-bg) 0%, var(--bg-secondary) 100%);
         border: 1px solid var(--border-color);
@@ -126,24 +154,40 @@
         justify-content: center;
     }
 
-    .stat-icon-primary {
-        background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+    .stat-icon-primary  { background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%); }
+    .stat-icon-success  { background: linear-gradient(135deg, var(--success) 0%, #059669 100%); }
+    .stat-icon-info     { background: linear-gradient(135deg, var(--info) 0%, #0891b2 100%); }
+    .stat-icon-warning  { background: linear-gradient(135deg, var(--warning) 0%, #d97706 100%); }
+
+    /* ==========================================================================
+       Linked-access line (under the Total Properties number)
+       ========================================================================== */
+    .linked-access-line {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        margin-top: 0.5rem;
+        font-size: 0.75rem;
+        line-height: 1.25;
+        color: var(--text-secondary);
+        flex-wrap: wrap;
     }
 
-    .stat-icon-success {
-        background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+    .linked-access-line .count {
+        font-weight: 600;
+        color: var(--text-primary);
     }
 
-    .stat-icon-info {
-        background: linear-gradient(135deg, var(--info) 0%, #0891b2 100%);
+    .linked-access-line .separator {
+        opacity: 0.5;
+        margin: 0 0.125rem;
     }
 
-    .stat-icon-warning {
-        background: linear-gradient(135deg, var(--warning) 0%, #d97706 100%);
-    }
-
-    /* Financial Summary Cards */
-    .financial-card {
+    /* ==========================================================================
+       Financial / Maintenance cards
+       ========================================================================== */
+    .financial-card,
+    .maintenance-card {
         background: linear-gradient(135deg, var(--card-bg) 0%, var(--bg-secondary) 100%);
         border: 1px solid var(--border-color);
         border-radius: 0.75rem;
@@ -151,7 +195,8 @@
         transition: all 0.2s ease;
     }
 
-    .financial-card:hover {
+    .financial-card:hover,
+    .maintenance-card:hover {
         transform: translateY(-2px);
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
     }
@@ -169,38 +214,14 @@
         letter-spacing: 0.5px;
     }
 
-    /* Maintenance Summary Cards */
-    .maintenance-card {
-        background: linear-gradient(135deg, var(--card-bg) 0%, var(--bg-secondary) 100%);
-        border: 1px solid var(--border-color);
-        border-radius: 0.75rem;
-        padding: 1rem;
-        transition: all 0.2s ease;
-    }
+    .maintenance-count    { font-size: 1.5rem; font-weight: bold; }
+    .maintenance-urgent   { color: var(--danger); }
+    .maintenance-pending  { color: var(--warning); }
+    .maintenance-completed{ color: var(--success); }
 
-    .maintenance-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
-    }
-
-    .maintenance-count {
-        font-size: 1.5rem;
-        font-weight: bold;
-    }
-
-    .maintenance-urgent {
-        color: var(--danger);
-    }
-
-    .maintenance-pending {
-        color: var(--warning);
-    }
-
-    .maintenance-completed {
-        color: var(--success);
-    }
-
-    /* Chart Cards */
+    /* ==========================================================================
+       Chart cards & badges
+       ========================================================================== */
     .chart-card, .stats-card, .recent-card {
         background-color: var(--card-bg);
         border: 1px solid var(--border-color);
@@ -213,7 +234,6 @@
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
     }
 
-    /* Status Badges */
     .badge-active, .badge-completed, .badge-paid, .badge-success {
         background-color: rgba(var(--success-rgb), 0.2);
         color: var(--success);
@@ -254,7 +274,6 @@
         display: inline-block;
     }
 
-    /* Chart Period Buttons */
     .chart-period-btn {
         padding: 0.25rem 0.75rem;
         border-radius: 0.5rem;
@@ -276,7 +295,6 @@
         color: var(--primary);
     }
 
-    /* List Group Items */
     .list-group-item-custom {
         padding: 1rem 1.25rem;
         border-bottom: 1px solid var(--border-color);
@@ -284,15 +302,9 @@
         background-color: var(--card-bg);
     }
 
-    .list-group-item-custom:hover {
-        background-color: rgba(0, 0, 0, 0.02);
-    }
+    .list-group-item-custom:hover { background-color: rgba(0, 0, 0, 0.02); }
+    html.dark-theme .list-group-item-custom:hover { background-color: rgba(255, 255, 255, 0.02); }
 
-    html.dark-theme .list-group-item-custom:hover {
-        background-color: rgba(255, 255, 255, 0.02);
-    }
-
-    /* Dropdown */
     .payment-dropdown {
         position: relative;
         display: inline-block;
@@ -314,9 +326,7 @@
         overflow-y: auto;
     }
 
-    .payment-dropdown-content.hidden {
-        display: none;
-    }
+    .payment-dropdown-content.hidden { display: none; }
 
     .payment-property-item {
         padding: 0.5rem 1rem;
@@ -327,11 +337,8 @@
         color: var(--text-primary);
     }
 
-    .payment-property-item:hover {
-        background-color: rgba(var(--primary-rgb), 0.1);
-    }
+    .payment-property-item:hover { background-color: rgba(var(--primary-rgb), 0.1); }
 
-    /* Error Message */
     .error-message {
         background-color: rgba(var(--danger-rgb), 0.1);
         border: 1px solid var(--danger);
@@ -341,17 +348,10 @@
         margin-bottom: 1rem;
     }
 
-    .error-message.hidden {
-        display: none;
-    }
+    .error-message.hidden { display: none; }
 
-    /* Upcoming Leases Section */
-    .upcoming-leases-list {
-        max-height: 300px;
-        overflow-y: auto;
-    }
+    .upcoming-leases-list { max-height: 300px; overflow-y: auto; }
 
-    /* Progress Bar */
     .progress-bar-container {
         background-color: var(--bg-secondary);
         border-radius: 9999px;
@@ -366,7 +366,6 @@
         transition: width 0.3s ease;
     }
 
-    /* Toast Notification */
     .toast-notification {
         position: fixed;
         bottom: 20px;
@@ -378,89 +377,44 @@
         animation: slideIn 0.3s ease-out;
     }
 
-    .toast-success {
-        background-color: var(--success);
-    }
-
-    .toast-error {
-        background-color: var(--danger);
-    }
-
-    .toast-info {
-        background-color: var(--info);
-    }
+    .toast-success { background-color: var(--success); }
+    .toast-error   { background-color: var(--danger); }
+    .toast-info    { background-color: var(--info); }
 
     @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
+        from { transform: translateX(100%); opacity: 0; }
+        to   { transform: translateX(0);    opacity: 1; }
     }
 
-    /* Loading Spinner */
     .loading-spinner {
         display: inline-block;
-        width: 16px;
-        height: 16px;
-        border: 2px solid rgba(255,255,255,0.3);
+        width: 16px; height: 16px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
         border-radius: 50%;
         border-top-color: white;
         animation: spin 0.6s linear infinite;
         margin-right: 8px;
     }
 
-    @keyframes spin {
-        to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Responsive */
     @media (max-width: 768px) {
-        .dashboard-container {
-            padding: 0.5rem;
-        }
-        
-        .stat-card {
-            padding: 1rem;
-        }
-        
-        .stat-value {
-            font-size: 1.5rem;
-        }
-        
-        .stat-icon {
-            width: 2.5rem;
-            height: 2.5rem;
-        }
-        
-        .stat-icon i {
-            font-size: 1.25rem;
-        }
-        
-        .financial-amount {
-            font-size: 1.25rem;
-        }
-        
-        .maintenance-count {
-            font-size: 1.25rem;
-        }
+        .dashboard-container { padding: 0.5rem; }
+        .stat-card { padding: 1rem; }
+        .stat-value { font-size: 1.5rem; }
+        .stat-icon { width: 2.5rem; height: 2.5rem; }
+        .stat-icon i { font-size: 1.25rem; }
+        .financial-amount { font-size: 1.25rem; }
+        .maintenance-count { font-size: 1.25rem; }
+        #dashboardSwitcherMenu { width: calc(100vw - 2rem); max-width: 22rem; right: 0; }
     }
 
-    .bg-light {
-        background-color: rgba(0, 0, 0, 0.02);
-    }
-    
-    html.dark-theme .bg-light {
-        background-color: rgba(255, 255, 255, 0.02);
-    }
-    
-    /* Occupancy Chart Tooltip */
+    .bg-light { background-color: rgba(0, 0, 0, 0.02); }
+    html.dark-theme .bg-light { background-color: rgba(255, 255, 255, 0.02); }
+
     .occupancy-tooltip {
         position: absolute;
-        background: rgba(0,0,0,0.8);
+        background: rgba(0, 0, 0, 0.8);
         color: white;
         padding: 8px 12px;
         border-radius: 6px;
@@ -471,22 +425,16 @@
 </style>
 @endpush
 
-{{-- CRITICAL: Theme initialization script that runs BEFORE page render --}}
+{{-- CRITICAL: Theme init (must run before paint) --}}
 @push('scripts')
 <script>
-    // THIS MUST RUN IMMEDIATELY TO PREVENT THEME FLASH
     (function() {
-        // Check for saved theme preference
         let savedTheme = localStorage.getItem('theme');
         let theme = savedTheme;
-        
-        // If no saved theme, check system preference
         if (!theme) {
             const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
             theme = prefersDark ? 'dark' : 'light';
         }
-        
-        // Apply theme class IMMEDIATELY to html element
         if (theme === 'dark') {
             document.documentElement.classList.add('dark-theme');
             document.documentElement.setAttribute('data-theme', 'dark');
@@ -494,8 +442,6 @@
             document.documentElement.classList.remove('dark-theme');
             document.documentElement.setAttribute('data-theme', 'light');
         }
-        
-        // Set theme-color meta tag to prevent browser white flash
         const metaThemeColor = document.querySelector('meta[name="theme-color"]');
         if (metaThemeColor) {
             metaThemeColor.content = theme === 'dark' ? '#1f2937' : '#f9fafb';
@@ -505,8 +451,6 @@
             meta.content = theme === 'dark' ? '#1f2937' : '#f9fafb';
             document.head.appendChild(meta);
         }
-        
-        // Also set background color on body immediately
         document.body.style.backgroundColor = theme === 'dark' ? '#111827' : '#f9fafb';
     })();
 </script>
@@ -525,16 +469,15 @@
                 Welcome back, {{ Auth::user()->name }}! Here's what's happening with your properties today.
             </p>
         </div>
-        
+
         <div class="flex items-center gap-3 flex-wrap">
-            <!-- Dashboard Switcher (Multi-Role Support) - DUAL MODE -->
+            <!-- ==========================================================================
+                 Dashboard Switcher (Multi-Role Support) - DUAL MODE
+                 ========================================================================== -->
             @php
-                // ==================== DUAL MODE ROLE DETECTION ====================
-                // Get user roles from role system
                 $roleBasedRoles = auth()->user()->roles ?? collect();
                 $roleBasedRoleSlugs = $roleBasedRoles->pluck('slug')->toArray();
-                
-                // Get legacy type as a "virtual role"
+
                 $legacyType = auth()->user()->type;
                 $legacyTypeRoleMap = [
                     0 => 'super-admin',
@@ -546,22 +489,15 @@
                     6 => 'security-personnel',
                 ];
                 $legacyRoleSlug = $legacyTypeRoleMap[$legacyType] ?? null;
-                
-                // Combine both sources for all roles
+
                 $allRoles = $roleBasedRoleSlugs;
-                
-                // Add legacy type as a role if it's not already in the role-based list
                 if ($legacyRoleSlug && !in_array($legacyRoleSlug, $allRoles)) {
                     $allRoles[] = $legacyRoleSlug;
                 }
-                
-                // Check if user has multiple roles (either from role system OR from legacy type + role)
+
                 $hasMultipleRoles = count($allRoles) > 1;
-                
-                // Get current role from session
                 $currentRole = session('selected_role', 'landlord');
-                
-                // Role icon mapping
+
                 $roleIcons = [
                     'super-admin' => 'crown',
                     'admin' => 'shield-alt',
@@ -572,12 +508,10 @@
                     'developer' => 'code',
                 ];
                 $currentIcon = $roleIcons[$currentRole] ?? 'tachometer-alt';
-                
-                // Build the combined roles list for the switcher menu
+
                 $combinedRoles = [];
                 $addedSlugs = [];
-                
-                // Add legacy type as a role option if it's valid
+
                 if ($legacyRoleSlug && !in_array($legacyRoleSlug, $addedSlugs)) {
                     $combinedRoles[] = (object)[
                         'slug' => $legacyRoleSlug,
@@ -586,8 +520,7 @@
                     ];
                     $addedSlugs[] = $legacyRoleSlug;
                 }
-                
-                // Add role-based roles that aren't already represented
+
                 foreach ($roleBasedRoles as $role) {
                     if (!in_array($role->slug, $addedSlugs)) {
                         $combinedRoles[] = (object)[
@@ -599,19 +532,24 @@
                     }
                 }
             @endphp
-            
+
             @if($hasMultipleRoles)
-            <div class="dashboard-switcher relative">
-                <button id="dashboardSwitcherBtn" 
+            <div class="dashboard-switcher relative" id="dashboardSwitcher">
+                <button id="dashboardSwitcherBtn"
+                        type="button"
+                        aria-haspopup="true"
+                        aria-expanded="false"
+                        aria-controls="dashboardSwitcherMenu"
                         class="flex items-center gap-2 px-4 py-2 rounded-lg transition-all"
                         style="background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%); color: white;">
                     <i class="fas fa-{{ $currentIcon }} mr-1"></i>
                     <span class="text-sm font-medium">{{ ucfirst(str_replace('-', ' ', $currentRole)) }}</span>
-                    <i class="fas fa-chevron-down text-xs ml-1"></i>
+                    <i class="fas fa-chevron-down text-xs ml-1 switcher-chevron"></i>
                 </button>
-                
-                <div id="dashboardSwitcherMenu" 
-                     class="absolute right-0 mt-2 w-72 rounded-xl shadow-lg overflow-hidden z-50 hidden"
+
+                <div id="dashboardSwitcherMenu"
+                     role="menu"
+                     aria-labelledby="dashboardSwitcherBtn"
                      style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
                     <div class="py-2">
                         <div class="px-4 py-2 border-b" style="border-color: var(--border-color);">
@@ -625,16 +563,17 @@
                                 $icon = $roleIcons[$role->slug] ?? 'user';
                             @endphp
                             <button type="button"
-                                    class="dashboard-switch-option w-full text-left flex items-center gap-3 px-4 py-3 transition-all hover:bg-opacity-10 {{ $isActive ? 'active-option' : '' }}"
+                                    role="menuitem"
+                                    class="dashboard-switch-option w-full text-left flex items-center gap-3 px-4 py-3 transition-all {{ $isActive ? 'active-option' : '' }}"
                                     data-role="{{ $role->slug }}"
                                     style="display: flex; color: var(--text-primary); {{ $isActive ? 'background-color: rgba(var(--primary-rgb), 0.1); border-left: 3px solid var(--primary);' : '' }}">
-                                <div class="w-9 h-9 rounded-full flex items-center justify-center" 
+                                <div class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
                                      style="background: {{ $isActive ? 'linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)' : 'rgba(var(--primary-rgb), 0.1)' }}">
                                     <i class="fas fa-{{ $icon }} text-sm" style="color: {{ $isActive ? 'white' : 'var(--primary)' }}"></i>
                                 </div>
-                                <div class="flex-1">
-                                    <p class="text-sm font-medium">{{ ucfirst(str_replace('-', ' ', $role->slug)) }}</p>
-                                    <p class="text-xs" style="color: var(--text-secondary);">
+                                <div class="flex-1 min-w-0">
+                                    <p class="text-sm font-medium truncate">{{ ucfirst(str_replace('-', ' ', $role->slug)) }}</p>
+                                    <p class="text-xs truncate" style="color: var(--text-secondary);">
                                         @if(($role->source ?? '') === 'legacy')
                                             <span class="inline-flex items-center gap-1">
                                                 <i class="fas fa-database text-xs"></i> Legacy Type
@@ -654,7 +593,7 @@
                                     </p>
                                 </div>
                                 @if($isActive)
-                                    <i class="fas fa-check-circle mr-2" style="color: var(--success); font-size: 0.875rem;"></i>
+                                    <i class="fas fa-check-circle mr-2 flex-shrink-0" style="color: var(--success); font-size: 0.875rem;"></i>
                                 @endif
                             </button>
                         @endforeach
@@ -662,7 +601,7 @@
                 </div>
             </div>
             @endif
-            
+
             <button class="chart-period-btn" id="refreshDashboardBtn">
                 <i class="fas fa-sync-alt mr-1"></i> Refresh
             </button>
@@ -681,15 +620,93 @@
         <span id="errorText"></span>
     </div>
 
-    <!-- Quick Stats Cards -->
+    {{-- ============================================================================
+         Quick Stats Cards
+         ─────────────────────────────────────────────────────────────────────────
+         The Total Properties card's HEADLINE number is the total the user can act
+         on: OWNED + LINKED. The secondary line explains the split.
+
+           • Landlord who only owns        → headline = owned, no sub-line
+           • Landlord who also has links   → headline = owned+linked,
+                                             sub-line shows "N owned · M linked"
+           • Family member (owns nothing)  → headline = linked,
+                                             sub-line shows "M linked · 0 owned"
+
+         The headline is the same concept everywhere: "properties I can act on."
+         The sub-line is the honest breakdown. No more contradictory "0 / 2 total
+         access" for family members.
+
+         Data source:
+           $stats['total_properties']  — owned count (from the controller)
+           $stats['linked_properties'] — approved family-link count
+           Fallbacks to User accessors when missing (one extra query, acceptable
+           for a dashboard). Prefer passing both from the controller.
+         ============================================================================ --}}
+    @php
+        $ownedPropertyCount = (int) ($stats['total_properties'] ?? 0);
+
+        $linkedPropertyCount = (int) (
+            $stats['linked_properties']
+            ?? (auth()->user()->linked_property_count ?? 0)
+        );
+
+        $accessiblePropertyCount = $ownedPropertyCount + $linkedPropertyCount;
+
+        $hasLinkedAccess = $linkedPropertyCount > 0;
+        $hasOwnedAccess  = $ownedPropertyCount > 0;
+        $hasMixedAccess  = $hasOwnedAccess && $hasLinkedAccess;
+        $isLinkedOnly    = !$hasOwnedAccess && $hasLinkedAccess;
+    @endphp
+
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div class="stat-card">
             <div class="flex justify-between items-start">
                 <div>
                     <p class="text-sm font-medium mb-1" style="color: var(--text-secondary);">Total Properties</p>
+
+                    {{-- Headline = everything the user can act on. --}}
                     <p class="text-2xl font-bold stat-value" style="color: var(--text-primary);" id="totalProperties">
-                        {{ $stats['total_properties'] ?? 0 }}
+                        {{ $accessiblePropertyCount }}
                     </p>
+
+                    {{-- Secondary line: only appears when there's a linked dimension,
+                         OR when the user owns nothing but has links (the linked-only
+                         case still wants the breakdown so the headline number isn't
+                         unexplained). --}}
+                    @if($hasLinkedAccess)
+                        <div class="linked-access-line" id="linkedAccessLine">
+                            @if($hasMixedAccess)
+                                {{-- Both owned and linked → show the split. --}}
+                                <i class="fas fa-home" style="color: var(--success);"></i>
+                                <span class="count" id="ownedPropertiesCount">{{ $ownedPropertyCount }}</span>
+                                <span>owned</span>
+                                <span class="separator">·</span>
+                                <i class="fas fa-user-friends" style="color: var(--secondary);"></i>
+                                <span class="count" id="linkedPropertiesCount">{{ $linkedPropertyCount }}</span>
+                                <span>linked</span>
+                            @elseif($isLinkedOnly)
+                                {{-- Family member: owns nothing, only linked. --}}
+                                <i class="fas fa-user-friends" style="color: var(--secondary);"></i>
+                                <span class="count" id="linkedPropertiesCount">{{ $linkedPropertyCount }}</span>
+                                <span>linked</span>
+                                <span class="separator">·</span>
+                                <span class="count" id="ownedPropertiesCount">0</span>
+                                <span>owned</span>
+                            @endif
+                        </div>
+                    @else
+                        {{-- No linked access at all — render an empty placeholder so
+                             the JS can reliably toggle visibility later. --}}
+                        <div class="linked-access-line hidden" id="linkedAccessLine">
+                            <i class="fas fa-home" style="color: var(--success);"></i>
+                            <span class="count" id="ownedPropertiesCount">{{ $ownedPropertyCount }}</span>
+                            <span>owned</span>
+                            <span class="separator">·</span>
+                            <i class="fas fa-user-friends" style="color: var(--secondary);"></i>
+                            <span class="count" id="linkedPropertiesCount">0</span>
+                            <span>linked</span>
+                        </div>
+                    @endif
                 </div>
                 <div class="stat-icon stat-icon-primary">
                     <i class="fas fa-building text-white text-xl"></i>
@@ -746,7 +763,6 @@
 
     <!-- Financial & Maintenance Summary Section -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        <!-- Financial Summary Card -->
         <div class="stats-card p-6">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
@@ -784,7 +800,6 @@
             </div>
         </div>
 
-        <!-- Maintenance Summary Card -->
         <div class="stats-card p-6">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
@@ -855,7 +870,7 @@
             <canvas id="occupancyChart" height="250" style="max-height: 250px;"></canvas>
             <div class="mt-3 text-center">
                 <small class="text-xs" style="color: var(--text-secondary);">
-                    <i class="fas fa-info-circle mr-1"></i> 
+                    <i class="fas fa-info-circle mr-1"></i>
                     Occupancy is calculated based on active rental agreements (tenants who have signed and are currently renting)
                 </small>
             </div>
@@ -986,8 +1001,8 @@
                 <a href="{{ route('landlord.maintenance.analytics') }}" class="chart-period-btn text-center py-2" style="background-color: var(--warning); color: white; text-decoration: none;">
                     <i class="fas fa-tools mr-1"></i> Maintenance Overview
                 </a>
-                <a href="{{ route('dashboard.testimonials.index') }}" 
-                   class="chart-period-btn text-center py-2" 
+                <a href="{{ route('dashboard.testimonials.index') }}"
+                   class="chart-period-btn text-center py-2"
                    style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success); border: 1px solid rgba(var(--success-rgb), 0.3); text-decoration: none;">
                     <i class="fas fa-star mr-1"></i> Share Feedback
                 </a>
@@ -1132,38 +1147,36 @@
 <script>
 // Store route URLs as JavaScript variables
 const routes = {
-    dashboardStats: '{{ route("landlord.dashboard.stats") }}',
-    dashboardCharts: '{{ route("landlord.dashboard.charts") }}',
-    dashboardExport: '{{ route("landlord.dashboard.export") }}',
-    dashboardWidgetsUpdate: '{{ route("landlord.dashboard.widgets.update") }}',
-    dashboardWidgetsReset: '{{ route("landlord.dashboard.widgets.reset") }}',
-    dashboardRefresh: '{{ route("landlord.dashboard.refresh") }}',
-    financialSummary: '{{ route("landlord.financial.summary") }}',
-    maintenanceSummary: '{{ route("landlord.maintenance.summary") }}',
-    paymentsHistory: '{{ route("landlord.payments.history") }}',
-    propertiesIndex: '{{ route("landlord.properties.index") }}',
-    leasesAnalytics: '{{ route("landlord.leases.analytics") }}',
-    notificationsIndex: '{{ route("landlord.notifications.index") }}',
-    notificationsReadAll: '{{ route("landlord.notifications.read-all") }}',
-    notificationsClear: '{{ route("landlord.notifications.clear") }}',
-    csrfToken: '{{ csrf_token() }}'
+    dashboardStats:          '{{ route("landlord.dashboard.stats") }}',
+    dashboardCharts:         '{{ route("landlord.dashboard.charts") }}',
+    dashboardExport:         '{{ route("landlord.dashboard.export") }}',
+    dashboardWidgetsUpdate:  '{{ route("landlord.dashboard.widgets.update") }}',
+    dashboardWidgetsReset:   '{{ route("landlord.dashboard.widgets.reset") }}',
+    dashboardRefresh:        '{{ route("landlord.dashboard.refresh") }}',
+    financialSummary:        '{{ route("landlord.financial.summary") }}',
+    maintenanceSummary:      '{{ route("landlord.maintenance.summary") }}',
+    paymentsHistory:         '{{ route("landlord.payments.history") }}',
+    propertiesIndex:         '{{ route("landlord.properties.index") }}',
+    leasesAnalytics:         '{{ route("landlord.leases.analytics") }}',
+    notificationsIndex:      '{{ route("landlord.notifications.index") }}',
+    notificationsReadAll:    '{{ route("landlord.notifications.read-all") }}',
+    notificationsClear:      '{{ route("landlord.notifications.clear") }}',
+    csrfToken:               '{{ csrf_token() }}'
 };
 
-// Store initial data from server
-const initialStats = @json($stats);
-const initialPendingActions = @json($pendingActions);
-const initialFinancialSummary = @json($financialSummary ?? []);
-const initialMaintenanceSummary = @json($maintenanceSummary ?? []);
-const initialChartData = @json($chartData ?? []);
-const initialRecentPayments = @json($recentPayments ?? []);
-const initialUpcomingLeases = @json($upcomingLeaseExpirations ?? []);
-const initialNotifications = @json($notifications ?? []);
+const initialStats             = @json($stats);
+const initialPendingActions    = @json($pendingActions);
+const initialFinancialSummary  = @json($financialSummary ?? []);
+const initialMaintenanceSummary= @json($maintenanceSummary ?? []);
+const initialChartData         = @json($chartData ?? []);
+const initialRecentPayments    = @json($recentPayments ?? []);
+const initialUpcomingLeases    = @json($upcomingLeaseExpirations ?? []);
+const initialNotifications     = @json($notifications ?? []);
 
 let revenueChart = null;
 let occupancyChart = null;
 let dashboardStats = initialStats;
 
-// Widget visibility state
 let widgetVisibility = {
     stats: true,
     financial_summary: true,
@@ -1177,13 +1190,12 @@ let widgetVisibility = {
 };
 
 function showNotification(message, type = 'success') {
-    const existingNotif = document.querySelectorAll('.dashboard-notification');
-    existingNotif.forEach(n => n.remove());
-    
+    document.querySelectorAll('.dashboard-notification').forEach(n => n.remove());
+
     const notification = document.createElement('div');
     notification.className = `dashboard-notification fixed top-20 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-white text-sm transition-all duration-300`;
     notification.style.zIndex = '9999';
-    
+
     if (type === 'success') {
         notification.style.backgroundColor = '#10b981';
         notification.innerHTML = `<div class="flex items-center gap-2"><i class="fas fa-check-circle"></i><span>${message}</span></div>`;
@@ -1194,80 +1206,108 @@ function showNotification(message, type = 'success') {
         notification.style.backgroundColor = '#3b82f6';
         notification.innerHTML = `<div class="flex items-center gap-2"><i class="fas fa-info-circle"></i><span>${message}</span></div>`;
     }
-    
+
     document.body.appendChild(notification);
-    
     setTimeout(() => {
         notification.style.opacity = '0';
         setTimeout(() => notification.remove(), 300);
     }, 3000);
 }
 
-// ==================== DASHBOARD SWITCHER INITIALIZATION ====================
+// ============================================================================
+// ✅ FIXED: DASHBOARD SWITCHER INIT
+// ============================================================================
 document.addEventListener('DOMContentLoaded', function() {
     console.log('🚀 Landlord Dashboard Initializing...');
-    
-    function initDashboardSwitcher() {
-        const switcherBtn = document.getElementById('dashboardSwitcherBtn');
+
+    // ---------------------------------------------------------------------
+    // Dashboard switcher (bulletproof)
+    // ---------------------------------------------------------------------
+    (function initDashboardSwitcher() {
+        const switcherBtn  = document.getElementById('dashboardSwitcherBtn');
         const switcherMenu = document.getElementById('dashboardSwitcherMenu');
-        
+
         if (!switcherBtn || !switcherMenu) {
-            console.log('Dashboard switcher not present (no multiple roles)');
+            console.log('ℹ️ Dashboard switcher not present (no multiple roles)');
             return;
         }
-        
-        let currentRole = '{{ $currentRole ?? "landlord" }}';
-        console.log('🔧 Dashboard Switcher Init - Current Role:', currentRole);
-        console.log('Has Multiple Roles:', {{ $hasMultipleRoles ? 'true' : 'false' }});
-        
-        // Toggle dropdown
-        switcherBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            e.preventDefault();
-            switcherMenu.classList.toggle('show');
-        });
-        
-        // Close dropdown when clicking outside
-        document.addEventListener('click', function(e) {
-            if (!switcherBtn.contains(e.target) && !switcherMenu.contains(e.target)) {
-                switcherMenu.classList.remove('show');
+
+        const currentRole = @json($currentRole ?? 'landlord');
+
+        function openMenu() {
+            switcherMenu.classList.add('is-open');
+            switcherBtn.setAttribute('aria-expanded', 'true');
+        }
+        function closeMenu() {
+            switcherMenu.classList.remove('is-open');
+            switcherBtn.setAttribute('aria-expanded', 'false');
+        }
+        function toggleMenu(e) {
+            if (e) { e.preventDefault(); e.stopPropagation(); }
+            if (switcherMenu.classList.contains('is-open')) {
+                closeMenu();
+            } else {
+                openMenu();
+            }
+        }
+
+        switcherBtn.addEventListener('mousedown', toggleMenu);
+        switcherBtn.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleMenu(e);
             }
         });
-        
-        // Handle switch options
-        const switchOptions = document.querySelectorAll('.dashboard-switch-option');
-        console.log('📋 Switch Options Found:', switchOptions.length);
-        
-        switchOptions.forEach(option => {
+        switcherBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!switcherMenu.classList.contains('is-open')) return;
+            if (switcherBtn.contains(e.target)) return;
+            if (switcherMenu.contains(e.target)) return;
+            closeMenu();
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && switcherMenu.classList.contains('is-open')) {
+                closeMenu();
+                switcherBtn.focus();
+            }
+        });
+
+        switcherMenu.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+
+        switcherMenu.querySelectorAll('.dashboard-switch-option').forEach(option => {
             option.addEventListener('click', async function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                
+
                 const roleSlug = this.dataset.role;
-                console.log('🎯 Dashboard option clicked:', roleSlug);
-                
                 if (roleSlug === currentRole) {
                     showNotification(`Already on ${roleSlug.replace('-', ' ')} dashboard`, 'info');
-                    switcherMenu.classList.remove('show');
+                    closeMenu();
                     return;
                 }
-                
-                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+
+                const csrfToken =
+                    document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+                    || routes.csrfToken;
+
                 if (!csrfToken) {
                     showNotification('Security error. Please refresh the page.', 'error');
                     return;
                 }
-                
-                // Show loading state
+
                 const originalHTML = switcherBtn.innerHTML;
                 switcherBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Switching...';
                 switcherBtn.disabled = true;
                 switcherBtn.style.opacity = '0.7';
-                switcherMenu.classList.remove('show');
-                
+                closeMenu();
+
                 try {
-                    console.log('📤 Sending switch request for role:', roleSlug);
-                    
                     const response = await fetch('/dashboard/switch', {
                         method: 'POST',
                         headers: {
@@ -1278,17 +1318,12 @@ document.addEventListener('DOMContentLoaded', function() {
                         },
                         body: JSON.stringify({ role: roleSlug })
                     });
-                    
+
                     const data = await response.json();
-                    console.log('📥 Response data:', data);
-                    
+
                     if (response.ok && data.success && data.redirect_url) {
-                        console.log('✅ Switch successful! Redirecting to:', data.redirect_url);
                         showNotification(data.message || `Switching to ${roleSlug.replace('-', ' ')} dashboard...`, 'success');
-                        
-                        setTimeout(function() {
-                            window.location.href = data.redirect_url;
-                        }, 300);
+                        setTimeout(() => { window.location.href = data.redirect_url; }, 200);
                     } else {
                         throw new Error(data.message || `Server returned ${response.status}`);
                     }
@@ -1301,27 +1336,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
         });
-    }
-    
-    setTimeout(initDashboardSwitcher, 100);
-    
-    // Load saved widget preferences from localStorage
+
+        console.log('✅ Dashboard switcher initialized');
+    })();
+
+    // ---------------------------------------------------------------------
+    // Widget preferences
+    // ---------------------------------------------------------------------
     loadWidgetPreferences();
-    
-    // Initialize with server-side data
     updateUI(initialStats);
     updatePendingActions(initialPendingActions);
     updateFinancialSummary(initialFinancialSummary);
     updateMaintenanceSummary(initialMaintenanceSummary);
-    
-    // Display initial data immediately
     displayRecentPayments(initialRecentPayments);
     displayUpcomingLeases(initialUpcomingLeases);
     displayNotifications(initialNotifications);
-    
+
     initializeCharts();
     loadDashboardData(false);
-    
+
     // Event handlers
     $('#refreshDashboardBtn').on('click', function() { refreshDashboard(); });
     $('#exportDashboardBtn').on('click', function() { exportDashboard(); });
@@ -1331,16 +1364,15 @@ document.addEventListener('DOMContentLoaded', function() {
     $('#markAllReadBtn').on('click', function() { markAllNotificationsRead(); });
     $('#clearAllNotificationsBtn').on('click', function() { clearAllNotifications(); });
     $('#revenueYearSelect').on('change', function() { loadRevenueChart(); });
-    
+
     $('.occupancy-period-btn').on('click', function() {
         $('.occupancy-period-btn').removeClass('active');
         $(this).addClass('active');
         loadOccupancyChart($(this).data('period'));
     });
-    
+
     setupCollectPaymentDropdown();
-    
-    // Auto-refresh every 60 seconds
+
     setInterval(function() { if (!document.hidden) loadDashboardData(false); }, 60000);
 });
 
@@ -1366,57 +1398,49 @@ function applyWidgetVisibility() {
     } else {
         $('.grid-cols-1.md\\:grid-cols-2.lg\\:grid-cols-4').first().hide();
     }
-    
-    // Financial Summary
+
     if (widgetVisibility.financial_summary) {
         $('.stats-card.p-6').first().closest('.grid').find('.stats-card.p-6').first().parent().show();
     } else {
         $('.stats-card.p-6').first().parent().hide();
     }
-    
-    // Maintenance Summary
+
     if (widgetVisibility.maintenance_summary) {
         $('.stats-card.p-6').eq(1).parent().show();
     } else {
         $('.stats-card.p-6').eq(1).parent().hide();
     }
-    
-    // Charts Section
+
     if (widgetVisibility.charts) {
         $('.chart-card').first().closest('.grid-cols-1.lg\\:grid-cols-2').show();
     } else {
         $('.chart-card').first().closest('.grid-cols-1.lg\\:grid-cols-2').hide();
     }
-    
-    // Recent Payments
+
     if (widgetVisibility.recent_payments) {
         $('#recentPaymentsList').closest('.recent-card').show();
     } else {
         $('#recentPaymentsList').closest('.recent-card').hide();
     }
-    
-    // Upcoming Leases
+
     if (widgetVisibility.upcoming_leases) {
         $('#upcomingLeasesList').closest('.recent-card').show();
     } else {
         $('#upcomingLeasesList').closest('.recent-card').hide();
     }
-    
-    // Pending Actions
+
     if (widgetVisibility.pending_actions) {
         $('.stats-card.p-6').eq(2).show();
     } else {
         $('.stats-card.p-6').eq(2).hide();
     }
-    
-    // Quick Actions
+
     if (widgetVisibility.quick_actions) {
         $('.stats-card.p-6').eq(3).show();
     } else {
         $('.stats-card.p-6').eq(3).hide();
     }
-    
-    // Notifications
+
     if (widgetVisibility.notifications) {
         $('.mt-8 > .recent-card').show();
     } else {
@@ -1425,7 +1449,6 @@ function applyWidgetVisibility() {
 }
 
 function openWidgetSettings() {
-    // Update modal checkboxes to match current visibility
     $('#widgetStats').prop('checked', widgetVisibility.stats);
     $('#widgetFinancialSummary').prop('checked', widgetVisibility.financial_summary);
     $('#widgetMaintenanceSummary').prop('checked', widgetVisibility.maintenance_summary);
@@ -1435,27 +1458,26 @@ function openWidgetSettings() {
     $('#widgetPendingActions').prop('checked', widgetVisibility.pending_actions);
     $('#widgetQuickActions').prop('checked', widgetVisibility.quick_actions);
     $('#widgetNotifications').prop('checked', widgetVisibility.notifications);
-    
+
     $('#widgetSettingsModal').modal('show');
 }
 
 function saveWidgetSettings() {
     widgetVisibility = {
-        stats: $('#widgetStats').is(':checked'),
-        financial_summary: $('#widgetFinancialSummary').is(':checked'),
-        maintenance_summary: $('#widgetMaintenanceSummary').is(':checked'),
-        charts: $('#widgetCharts').is(':checked'),
-        recent_payments: $('#widgetRecentPayments').is(':checked'),
-        upcoming_leases: $('#widgetUpcomingLeases').is(':checked'),
-        pending_actions: $('#widgetPendingActions').is(':checked'),
-        quick_actions: $('#widgetQuickActions').is(':checked'),
-        notifications: $('#widgetNotifications').is(':checked')
+        stats:              $('#widgetStats').is(':checked'),
+        financial_summary:  $('#widgetFinancialSummary').is(':checked'),
+        maintenance_summary:$('#widgetMaintenanceSummary').is(':checked'),
+        charts:             $('#widgetCharts').is(':checked'),
+        recent_payments:    $('#widgetRecentPayments').is(':checked'),
+        upcoming_leases:    $('#widgetUpcomingLeases').is(':checked'),
+        pending_actions:    $('#widgetPendingActions').is(':checked'),
+        quick_actions:      $('#widgetQuickActions').is(':checked'),
+        notifications:      $('#widgetNotifications').is(':checked')
     };
-    
+
     saveWidgetPreferences();
     applyWidgetVisibility();
-    
-    // Also save to server
+
     const widgets = Object.keys(widgetVisibility).filter(key => widgetVisibility[key]);
     $.ajax({
         url: routes.dashboardWidgetsUpdate,
@@ -1483,11 +1505,10 @@ function resetWidgetSettings() {
         quick_actions: true,
         notifications: true
     };
-    
+
     saveWidgetPreferences();
     applyWidgetVisibility();
-    
-    // Also reset on server
+
     $.ajax({
         url: routes.dashboardWidgetsReset,
         type: 'POST',
@@ -1506,29 +1527,29 @@ function initializeCharts() {
     const revenueCtx = document.getElementById('revenueChart');
     const occupancyCtx = document.getElementById('occupancyChart');
     if (!revenueCtx || !occupancyCtx) return;
-    
-    const revenueData = initialChartData.revenue || { labels: [], data: [] };
+
+    const revenueData   = initialChartData.revenue   || { labels: [], data: [] };
     const occupancyData = initialChartData.occupancy || { labels: [], data: [] };
-    
+
     try {
         revenueChart = new Chart(revenueCtx, {
             type: 'line',
-            data: { 
-                labels: revenueData.labels || ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], 
-                datasets: [{ 
-                    label: 'Revenue (GH₵)', 
-                    data: revenueData.data || Array(12).fill(0), 
-                    borderColor: '#3b82f6', 
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)', 
-                    borderWidth: 3, 
-                    tension: 0.4, 
-                    fill: true 
-                }] 
+            data: {
+                labels: revenueData.labels || ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
+                datasets: [{
+                    label: 'Revenue (GH₵)',
+                    data: revenueData.data || Array(12).fill(0),
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderWidth: 3,
+                    tension: 0.4,
+                    fill: true
+                }]
             },
-            options: { 
-                responsive: true, 
-                maintainAspectRatio: true, 
-                plugins: { 
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
                     legend: { position: 'top' },
                     tooltip: {
                         callbacks: {
@@ -1537,31 +1558,36 @@ function initializeCharts() {
                             }
                         }
                     }
-                }, 
-                scales: { y: { beginAtZero: true, ticks: { callback: function(value) { return 'GH₵ ' + value.toLocaleString(); } } } } 
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { callback: function(value) { return 'GH₵ ' + value.toLocaleString(); } }
+                    }
+                }
             }
         });
     } catch(e) { console.error('Revenue chart error:', e); }
-    
+
     try {
         occupancyChart = new Chart(occupancyCtx, {
             type: 'bar',
-            data: { 
-                labels: occupancyData.labels || ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], 
-                datasets: [{ 
-                    label: 'Occupancy Rate (%)', 
-                    data: occupancyData.data || Array(12).fill(0), 
-                    backgroundColor: 'rgba(16, 185, 129, 0.7)', 
-                    borderColor: '#10b981', 
-                    borderWidth: 2, 
+            data: {
+                labels: occupancyData.labels || ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
+                datasets: [{
+                    label: 'Occupancy Rate (%)',
+                    data: occupancyData.data || Array(12).fill(0),
+                    backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                    borderColor: '#10b981',
+                    borderWidth: 2,
                     borderRadius: 8,
                     hoverBackgroundColor: 'rgba(16, 185, 129, 0.9)'
-                }] 
+                }]
             },
-            options: { 
-                responsive: true, 
-                maintainAspectRatio: true, 
-                plugins: { 
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
                     legend: { position: 'top' },
                     tooltip: {
                         callbacks: {
@@ -1573,28 +1599,18 @@ function initializeCharts() {
                             }
                         }
                     }
-                }, 
-                scales: { 
-                    y: { 
-                        beginAtZero: true, 
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
                         max: 100,
-                        title: {
-                            display: true,
-                            text: 'Occupancy Rate (%)',
-                            color: 'var(--text-secondary)'
-                        },
-                        ticks: { 
-                            callback: function(value) { return value + '%'; } 
-                        }
+                        title: { display: true, text: 'Occupancy Rate (%)', color: 'var(--text-secondary)' },
+                        ticks: { callback: function(value) { return value + '%'; } }
                     },
                     x: {
-                        title: {
-                            display: true,
-                            text: 'Period',
-                            color: 'var(--text-secondary)'
-                        }
+                        title: { display: true, text: 'Period', color: 'var(--text-secondary)' }
                     }
-                } 
+                }
             }
         });
     } catch(e) { console.error('Occupancy chart error:', e); }
@@ -1604,56 +1620,82 @@ function setupCollectPaymentDropdown() {
     const btn = $('#collectPaymentBtn');
     const dropdown = $('#collectPaymentDropdown');
     let loaded = false;
-    btn.on('click', function(e) { e.stopPropagation(); dropdown.toggleClass('hidden'); if (!loaded) { loadPropertiesForPayment(); loaded = true; } });
-    $(document).on('click', function(e) { if (!btn.is(e.target) && !dropdown.is(e.target) && dropdown.has(e.target).length === 0) dropdown.addClass('hidden'); });
+    btn.on('click', function(e) {
+        e.stopPropagation();
+        dropdown.toggleClass('hidden');
+        if (!loaded) { loadPropertiesForPayment(); loaded = true; }
+    });
+    $(document).on('click', function(e) {
+        if (!btn.is(e.target) && !dropdown.is(e.target) && dropdown.has(e.target).length === 0) {
+            dropdown.addClass('hidden');
+        }
+    });
 }
 
 function loadPropertiesForPayment() {
-    $.ajax({ url: routes.propertiesIndex, type: 'GET', data: { limit: 50 }, success: function(response) {
-        let html = '';
-        if (response.data && response.data.length) { 
-            response.data.forEach(function(p) { 
-                html += '<a href="/landlord/properties/' + p.id + '/pay" class="payment-property-item"><div class="flex justify-between items-center"><div><span class="font-medium">' + escapeHtml(p.property_name) + '</span><span class="text-xs block" style="color: var(--text-secondary);">' + (p.units_count || 0) + ' units</span></div><i class="fas fa-chevron-right text-xs"></i></div></a>'; 
-            }); 
-        } else { 
-            html = '<div class="text-center py-4 text-sm">No properties found.</div>'; 
+    $.ajax({
+        url: routes.propertiesIndex,
+        type: 'GET',
+        data: { limit: 50 },
+        success: function(response) {
+            let html = '';
+            if (response.data && response.data.length) {
+                response.data.forEach(function(p) {
+                    html += '<a href="/landlord/properties/' + p.id + '/pay" class="payment-property-item"><div class="flex justify-between items-center"><div><span class="font-medium">' + escapeHtml(p.property_name) + '</span><span class="text-xs block" style="color: var(--text-secondary);">' + (p.units_count || 0) + ' units</span></div><i class="fas fa-chevron-right text-xs"></i></div></a>';
+                });
+            } else {
+                html = '<div class="text-center py-4 text-sm">No properties found.</div>';
+            }
+            $('#propertyListForPayment').html(html);
+        },
+        error: function() {
+            $('#propertyListForPayment').html('<div class="text-center py-4 text-sm text-danger">Error loading properties.</div>');
         }
-        $('#propertyListForPayment').html(html);
-    }, error: function() { 
-        $('#propertyListForPayment').html('<div class="text-center py-4 text-sm text-danger">Error loading properties.</div>');
-    } });
+    });
 }
 
 function loadDashboardData(showLoader) {
     if (showLoader !== false) showLoading();
-    $.ajax({ url: routes.dashboardStats, type: 'GET', success: function(response) {
-        dashboardStats = response; 
-        updateUI(response); 
-        updatePendingActionsFromStats(response);
-        loadFinancialSummary(); 
-        loadMaintenanceSummary(); 
-        loadRecentPayments();
-        loadUpcomingLeases();
-        // loadNotifications() removed
-        hideErrorMessage(); 
-        if (showLoader !== false) hideLoading(); 
-    }, error: function(xhr) { 
-        if (showLoader !== false) hideLoading(); 
-        showErrorMessage('Error loading dashboard data'); 
-    } });
+    $.ajax({
+        url: routes.dashboardStats,
+        type: 'GET',
+        success: function(response) {
+            dashboardStats = response;
+            updateUI(response);
+            updatePendingActionsFromStats(response);
+            loadFinancialSummary();
+            loadMaintenanceSummary();
+            loadRecentPayments();
+            loadUpcomingLeases();
+            hideErrorMessage();
+            if (showLoader !== false) hideLoading();
+        },
+        error: function(xhr) {
+            if (showLoader !== false) hideLoading();
+            showErrorMessage('Error loading dashboard data');
+        }
+    });
 }
 
 function loadFinancialSummary() {
-    $.ajax({ url: routes.financialSummary, type: 'GET', success: function(response) { updateFinancialSummary(response); }, 
-             error: function() { if (initialFinancialSummary) updateFinancialSummary(initialFinancialSummary); } });
+    $.ajax({
+        url: routes.financialSummary,
+        type: 'GET',
+        success: function(response) { updateFinancialSummary(response); },
+        error: function() { if (initialFinancialSummary) updateFinancialSummary(initialFinancialSummary); }
+    });
 }
 
 function loadMaintenanceSummary() {
-    $.ajax({ url: routes.maintenanceSummary, type: 'GET', success: function(response) { updateMaintenanceSummary(response); }, 
-             error: function() { if (initialMaintenanceSummary) updateMaintenanceSummary(initialMaintenanceSummary); } });
+    $.ajax({
+        url: routes.maintenanceSummary,
+        type: 'GET',
+        success: function(response) { updateMaintenanceSummary(response); },
+        error: function() { if (initialMaintenanceSummary) updateMaintenanceSummary(initialMaintenanceSummary); }
+    });
 }
 
-function updateFinancialSummary(data) { 
+function updateFinancialSummary(data) {
     if (!data) return;
     $('#totalRevenue').text('GH₵' + formatNumber(data.total_revenue || 0));
     $('#totalOutstanding').text('GH₵' + formatNumber(data.total_outstanding || 0));
@@ -1664,7 +1706,7 @@ function updateFinancialSummary(data) {
     $('#unpaidInvoices').text((data.total_invoices - data.paid_invoices) || 0);
 }
 
-function updateMaintenanceSummary(data) { 
+function updateMaintenanceSummary(data) {
     if (!data) return;
     $('#totalRequests').text(data.total_requests || 0);
     $('#completionRate').text((data.completion_rate || 0) + '%');
@@ -1675,13 +1717,79 @@ function updateMaintenanceSummary(data) {
     $('#totalMaintenanceCost').text('GH₵' + formatNumber(data.total_cost || 0));
 }
 
+/**
+ * Update the visible dashboard numbers from the stats payload.
+ *
+ * ✅ The Total Properties card's HEADLINE number is the total the
+ *    user can act on: owned + linked. The secondary line under it
+ *    explains the split.
+ *
+ *    This is a deliberate design choice: a family member who owns
+ *    nothing but has linked access sees their linked count as the
+ *    headline — not "0". A landlord with mixed access sees the sum
+ *    plus a "N owned · M linked" breakdown.
+ */
 function updateUI(stats) {
-    $('#totalProperties').text(stats.total_properties || 0);
+    // ── Other card values (unchanged) ──
     $('#totalUnits').text(stats.total_units || 0);
     $('#occupancyRate').text((stats.occupancy_rate || 0) + '%');
     $('#monthlyRevenue').text('GH₵' + formatNumber(stats.monthly_revenue || 0));
     $('#totalTenants').text(stats.total_tenants || 0);
-    if (stats.pending_lease_signatures !== undefined) $('#pendingLeaseSignatures').text(stats.pending_lease_signatures);
+    if (stats.pending_lease_signatures !== undefined) {
+        $('#pendingLeaseSignatures').text(stats.pending_lease_signatures);
+    }
+
+    // ── Total Properties card ──
+    updateTotalPropertiesCard(stats);
+}
+
+/**
+ * Repaint the Total Properties card:
+ *   • headline  = owned + linked  (total the user can act on)
+ *   • secondary = the split, shown only when there's linked access
+ *
+ * Zero-floors the counts when the line is hidden so a future reveal
+ * never shows stale numbers.
+ */
+function updateTotalPropertiesCard(stats) {
+    const owned  = parseInt(stats.total_properties, 10) || 0;
+    const linked = parseInt(stats.linked_properties, 10) || 0;
+    const total  = owned + linked;
+
+    // Headline: always the total the user can act on.
+    const headlineEl = document.getElementById('totalProperties');
+    if (headlineEl) headlineEl.textContent = total;
+
+    // Secondary line
+    const line = document.getElementById('linkedAccessLine');
+    if (!line) return;
+
+    const ownedEl  = document.getElementById('ownedPropertiesCount');
+    const linkedEl = document.getElementById('linkedPropertiesCount');
+
+    if (linked > 0) {
+        // Update the two counts in place. The DOM structure (which label
+        // comes first) was set at server-render time and we don't touch
+        // it here — only the numbers.
+        if (ownedEl)  ownedEl.textContent  = owned;
+        if (linkedEl) linkedEl.textContent = linked;
+
+        line.classList.remove('hidden');
+    } else {
+        // No linked access — hide the line and zero-floor so no stale
+        // counts survive a future reveal.
+        line.classList.add('hidden');
+        if (ownedEl)  ownedEl.textContent  = owned;
+        if (linkedEl) linkedEl.textContent = 0;
+    }
+}
+
+/**
+ * Backward-compatibility shim — old callers that referenced
+ * `updateLinkedAccessLine` are redirected to the new function.
+ */
+function updateLinkedAccessLine(stats) {
+    updateTotalPropertiesCard(stats);
 }
 
 function updatePendingActions(stats) {
@@ -1696,7 +1804,11 @@ function updatePendingActionsFromStats(stats) {
     if (stats.pending_lease_signatures !== undefined) $('#pendingLeaseSignatures').text(stats.pending_lease_signatures);
 }
 
-function showErrorMessage(message) { $('#errorText').text(message); $('#errorMessage').removeClass('hidden'); setTimeout(function() { $('#errorMessage').addClass('hidden'); }, 5000); }
+function showErrorMessage(message) {
+    $('#errorText').text(message);
+    $('#errorMessage').removeClass('hidden');
+    setTimeout(function() { $('#errorMessage').addClass('hidden'); }, 5000);
+}
 function hideErrorMessage() { $('#errorMessage').addClass('hidden'); }
 
 function displayRecentPayments(payments) {
@@ -1723,16 +1835,22 @@ function displayRecentPayments(payments) {
 }
 
 function loadRecentPayments() {
-    $.ajax({ url: routes.paymentsHistory, type: 'GET', data: { limit: 5 }, success: function(response) {
-        let payments = [];
-        if (response.data && Array.isArray(response.data)) payments = response.data;
-        else if (response.payments && Array.isArray(response.payments)) payments = response.payments;
-        else if (Array.isArray(response)) payments = response;
-        displayRecentPayments(payments);
-    }, error: function() {
-        if (initialRecentPayments && initialRecentPayments.length > 0) displayRecentPayments(initialRecentPayments);
-        else $('#recentPaymentsList').html('<div class="px-6 py-8 text-center"><p style="color: var(--text-secondary);">Unable to load payments</p></div>');
-    } });
+    $.ajax({
+        url: routes.paymentsHistory,
+        type: 'GET',
+        data: { limit: 5 },
+        success: function(response) {
+            let payments = [];
+            if (response.data && Array.isArray(response.data)) payments = response.data;
+            else if (response.payments && Array.isArray(response.payments)) payments = response.payments;
+            else if (Array.isArray(response)) payments = response;
+            displayRecentPayments(payments);
+        },
+        error: function() {
+            if (initialRecentPayments && initialRecentPayments.length > 0) displayRecentPayments(initialRecentPayments);
+            else $('#recentPaymentsList').html('<div class="px-6 py-8 text-center"><p style="color: var(--text-secondary);">Unable to load payments</p></div>');
+        }
+    });
 }
 
 function displayUpcomingLeases(leases) {
@@ -1761,13 +1879,19 @@ function displayUpcomingLeases(leases) {
 }
 
 function loadUpcomingLeases() {
-    $.ajax({ url: routes.leasesAnalytics, type: 'GET', data: { upcoming: true, limit: 5 }, success: function(response) {
-        let leases = response.leases || response.data || (Array.isArray(response) ? response : []);
-        displayUpcomingLeases(leases);
-    }, error: function() {
-        if (initialUpcomingLeases && initialUpcomingLeases.length > 0) displayUpcomingLeases(initialUpcomingLeases);
-        else $('#upcomingLeasesList').html('<div class="px-6 py-8 text-center"><p style="color: var(--text-secondary);">Unable to load leases</p></div>');
-    } });
+    $.ajax({
+        url: routes.leasesAnalytics,
+        type: 'GET',
+        data: { upcoming: true, limit: 5 },
+        success: function(response) {
+            let leases = response.leases || response.data || (Array.isArray(response) ? response : []);
+            displayUpcomingLeases(leases);
+        },
+        error: function() {
+            if (initialUpcomingLeases && initialUpcomingLeases.length > 0) displayUpcomingLeases(initialUpcomingLeases);
+            else $('#upcomingLeasesList').html('<div class="px-6 py-8 text-center"><p style="color: var(--text-secondary);">Unable to load leases</p></div>');
+        }
+    });
 }
 
 function displayNotifications(notifications) {
@@ -1796,75 +1920,90 @@ function displayNotifications(notifications) {
         html = '<div class="px-6 py-8 text-center"><i class="fas fa-bell text-3xl mb-2" style="color: var(--text-secondary); opacity: 0.5;"></i><p style="color: var(--text-secondary);">No notifications</p></div>';
     }
     $('#notificationsList').html(html);
-    
+
     $('.mark-read-btn').off('click').on('click', function() { markNotificationRead($(this).data('id')); });
     $('.delete-notification-btn').off('click').on('click', function() { deleteNotification($(this).data('id')); });
 }
 
-// [removed] legacy loadNotifications � superseded by notification-bell component, error: function() {
-        if (initialNotifications && initialNotifications.length > 0) displayNotifications(initialNotifications);
-        else $('#notificationsList').html('<div class="px-6 py-8 text-center"><p style="color: var(--text-secondary);">Unable to load notifications</p></div>');
-    } });
-}
-
 function markNotificationRead(id) {
-    $.ajax({ url: '{{ url("/landlord/notifications") }}/' + id + '/read', type: 'POST', data: { _token: routes.csrfToken }, 
-             success: function() { // loadNotifications() removed - Alpine bell handles this loadDashboardData(false); } });
+    $.ajax({
+        url: '{{ url("/landlord/notifications") }}/' + id + '/read',
+        type: 'POST',
+        data: { _token: routes.csrfToken },
+        success: function() { loadDashboardData(false); }
+    });
 }
 
 function deleteNotification(id) {
-    $.ajax({ url: '{{ url("/landlord/notifications") }}/' + id, type: 'DELETE', data: { _token: routes.csrfToken }, 
-             success: function() { // loadNotifications() removed - Alpine bell handles this } });
+    $.ajax({
+        url: '{{ url("/landlord/notifications") }}/' + id,
+        type: 'DELETE',
+        data: { _token: routes.csrfToken },
+        success: function() { /* Alpine bell handles refresh */ }
+    });
 }
 
 function markAllNotificationsRead() {
-    $.ajax({ url: routes.notificationsReadAll, type: 'POST', data: { _token: routes.csrfToken }, 
-             success: function() { // loadNotifications() removed - Alpine bell handles this loadDashboardData(false); showToast('All notifications marked as read'); } });
+    $.ajax({
+        url: routes.notificationsReadAll,
+        type: 'POST',
+        data: { _token: routes.csrfToken },
+        success: function() { loadDashboardData(false); showToast('All notifications marked as read'); }
+    });
 }
 
 function clearAllNotifications() {
     if (confirm('Delete all notifications? This cannot be undone.')) {
-        $.ajax({ url: routes.notificationsClear, type: 'DELETE', data: { _token: routes.csrfToken }, 
-                 success: function() { // loadNotifications() removed - Alpine bell handles this showToast('All notifications cleared'); } });
+        $.ajax({
+            url: routes.notificationsClear,
+            type: 'DELETE',
+            data: { _token: routes.csrfToken },
+            success: function() { showToast('All notifications cleared'); }
+        });
     }
 }
 
 function loadRevenueChart() {
     const year = $('#revenueYearSelect').val();
-    $.ajax({ url: routes.dashboardCharts, type: 'GET', data: { type: 'revenue', year: year }, success: function(response) {
-        const labels = response.labels || ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        const data = response.data || Array(12).fill(0);
-        if (revenueChart) { revenueChart.data.labels = labels; revenueChart.data.datasets[0].data = data; revenueChart.update(); }
-    } });
+    $.ajax({
+        url: routes.dashboardCharts,
+        type: 'GET',
+        data: { type: 'revenue', year: year },
+        success: function(response) {
+            const labels = response.labels || ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            const data = response.data || Array(12).fill(0);
+            if (revenueChart) {
+                revenueChart.data.labels = labels;
+                revenueChart.data.datasets[0].data = data;
+                revenueChart.update();
+            }
+        }
+    });
 }
 
 function loadOccupancyChart(period) {
     period = period || 'monthly';
-    $.ajax({ 
-        url: routes.dashboardCharts, 
-        type: 'GET', 
-        data: { type: 'occupancy', period: period }, 
+    $.ajax({
+        url: routes.dashboardCharts,
+        type: 'GET',
+        data: { type: 'occupancy', period: period },
         success: function(response) {
             let labels, data;
-            if (period === 'quarterly') { 
-                labels = response.labels || ['Q1', 'Q2', 'Q3', 'Q4']; 
-                data = response.data || [0, 0, 0, 0]; 
-            } else { 
-                labels = response.labels || ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']; 
-                data = response.data || Array(12).fill(0); 
+            if (period === 'quarterly') {
+                labels = response.labels || ['Q1', 'Q2', 'Q3', 'Q4'];
+                data = response.data || [0, 0, 0, 0];
+            } else {
+                labels = response.labels || ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                data = response.data || Array(12).fill(0);
             }
-            
-            console.log('Occupancy data loaded:', { period: period, labels: labels, data: data });
-            
             const totalOccupancy = data.reduce((a, b) => a + b, 0);
             if (totalOccupancy === 0 && occupancyChart) {
                 console.warn('No occupancy data available. This could mean no rental agreements exist yet.');
             }
-            
-            if (occupancyChart) { 
-                occupancyChart.data.labels = labels; 
-                occupancyChart.data.datasets[0].data = data; 
-                occupancyChart.update(); 
+            if (occupancyChart) {
+                occupancyChart.data.labels = labels;
+                occupancyChart.data.datasets[0].data = data;
+                occupancyChart.update();
             }
         },
         error: function(xhr) {
@@ -1876,28 +2015,60 @@ function loadOccupancyChart(period) {
 
 function refreshDashboard() {
     showLoading();
-    $.ajax({ url: routes.dashboardRefresh, type: 'POST', data: { _token: routes.csrfToken }, success: function(response) {
-        if (response.success && response.data) {
-            updateUI(response.data.stats);
-            updateFinancialSummary(response.data.financial_summary);
-            updateMaintenanceSummary(response.data.maintenance_summary);
-            updatePendingActionsFromStats(response.data.stats);
-            loadRecentPayments();
-            loadUpcomingLeases();
-            loadRevenueChart();
-            loadOccupancyChart($('.occupancy-period-btn.active').data('period') || 'monthly');
+    $.ajax({
+        url: routes.dashboardRefresh,
+        type: 'POST',
+        data: { _token: routes.csrfToken },
+        success: function(response) {
+            if (response.success && response.data) {
+                updateUI(response.data.stats);
+                updateFinancialSummary(response.data.financial_summary);
+                updateMaintenanceSummary(response.data.maintenance_summary);
+                updatePendingActionsFromStats(response.data.stats);
+                loadRecentPayments();
+                loadUpcomingLeases();
+                loadRevenueChart();
+                loadOccupancyChart($('.occupancy-period-btn.active').data('period') || 'monthly');
+                showToast('Dashboard refreshed!');
+            }
+            hideLoading();
+        },
+        error: function() {
+            loadDashboardData(true);
             showToast('Dashboard refreshed!');
+            hideLoading();
         }
-        hideLoading();
-    }, error: function() { loadDashboardData(true); showToast('Dashboard refreshed!'); hideLoading(); } });
+    });
 }
 
-function exportDashboard() { window.location.href = routes.dashboardExport + '?format=csv'; showToast('Exporting...'); }
+function exportDashboard() {
+    window.location.href = routes.dashboardExport + '?format=csv';
+    showToast('Exporting...');
+}
 
-function formatNumber(num) { if (!num && num !== 0) return '0'; return parseFloat(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function escapeHtml(text) { if (!text) return ''; const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
-function showLoading() { $('#refreshDashboardBtn').html('<span class="loading-spinner"></span> Loading...').prop('disabled', true); }
-function hideLoading() { $('#refreshDashboardBtn').html('<i class="fas fa-sync-alt mr-1"></i> Refresh').prop('disabled', false); }
-function showToast(message, type) { type = type || 'success'; const toast = $('<div class="toast-notification toast-' + type + '">' + message + '</div>'); $('body').append(toast); setTimeout(function() { toast.fadeOut(300, function() { toast.remove(); }); }, 3000); }
+function formatNumber(num) {
+    if (!num && num !== 0) return '0';
+    return parseFloat(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+function showLoading() {
+    $('#refreshDashboardBtn').html('<span class="loading-spinner"></span> Loading...').prop('disabled', true);
+}
+function hideLoading() {
+    $('#refreshDashboardBtn').html('<i class="fas fa-sync-alt mr-1"></i> Refresh').prop('disabled', false);
+}
+function showToast(message, type) {
+    type = type || 'success';
+    const toast = $('<div class="toast-notification toast-' + type + '">' + message + '</div>');
+    $('body').append(toast);
+    setTimeout(function() {
+        toast.fadeOut(300, function() { toast.remove(); });
+    }, 3000);
+}
 </script>
 @endpush

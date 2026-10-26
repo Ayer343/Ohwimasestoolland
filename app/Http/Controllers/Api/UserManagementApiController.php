@@ -16,6 +16,7 @@ use App\Events\UserCreated;
 use App\Events\UserUpdated;
 use App\Events\UserDeleted;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
@@ -34,8 +35,14 @@ class UserManagementApiController extends Controller
     protected const PER_PAGE_OPTIONS = [10, 15, 25, 50, 100];
     protected const MAX_PER_PAGE = 100;
 
+    /** Photo upload constraints — kept in one place for easy tuning. */
+    protected const PHOTO_MAX_KB    = 5120;   // 5 MB
+    protected const PHOTO_MIMES     = 'jpeg,jpg,png,webp,gif';
+    protected const PHOTO_DIRECTORY = 'users/photos';
+    protected const PHOTO_FIELD     = 'photo';
+
     /**
-     * ✅ Canonical map of user-type slugs → backend integer constants.
+     * Canonical map of user-type slugs → backend integer constants.
      */
     protected const TYPE_SLUG_TO_CONSTANT = [
         'super_admin'          => User::TYPE_SUPER_ADMIN,
@@ -50,9 +57,6 @@ class UserManagementApiController extends Controller
         'sanitation_personnel' => User::TYPE_SANITATION_PERSONNEL,
     ];
 
-    /**
-     * ✅ Slugs that can actually be created via the API.
-     */
     protected const CREATABLE_TYPE_SLUGS = [
         'admin',
         'landlord',
@@ -122,6 +126,163 @@ class UserManagementApiController extends Controller
         return $this->apiResponse(false, null, $message, $status, $extra);
     }
 
+    // ==================== PHOTO HELPERS ====================
+
+    /**
+     * Persist an uploaded photo for the given user and return the new
+     * filename.
+     *
+     * Contract:
+     *   - Deletes the previous file (if any) so we don't accumulate orphans.
+     *   - Versions the filename with a timestamp so the public URL changes
+     *     and Flutter's ImageCache cannot serve stale bytes.
+     *   - Returns `null` when no file was uploaded **or** when the write
+     *     to disk fails — callers must not persist a filename that isn't
+     *     actually on disk.
+     *
+     * ⚠️ The previous file is only deleted **after** the new file has been
+     *    successfully written. This way a failed write cannot leave the
+     *    account without any photo.
+     *
+     * @param  Request       $request
+     * @param  User          $user
+     * @param  string|null   $filenameOverride  Explicit filename (used when
+     *                                           the client sends bytes with
+     *                                           no original extension).
+     * @return string|null
+     */
+    protected function handlePhotoUpload(
+        Request $request,
+        User $user,
+        ?string $filenameOverride = null
+    ): ?string {
+        if (!$request->hasFile(self::PHOTO_FIELD)) {
+            return null;
+        }
+
+        /** @var UploadedFile $file */
+        $file = $request->file(self::PHOTO_FIELD);
+
+        if (!$file || !$file->isValid()) {
+            Log::warning('Photo upload rejected: invalid file', [
+                'user_id' => $user->id,
+                'error'   => $file?->getErrorMessage(),
+            ]);
+            return null;
+        }
+
+        // Resolve extension from the actual mime type when possible —
+        // `getClientOriginalExtension()` can be spoofed or missing (web
+        // uploads from `MultipartFile.fromBytes` often have no name).
+        $ext = $this->resolvePhotoExtension($file);
+
+        $filename = $filenameOverride
+            ?? ('user_' . $user->id . '_' . time() . '.' . $ext);
+
+        $path = self::PHOTO_DIRECTORY . '/' . $filename;
+
+        try {
+            // `putFileAs` returns the stored path (string) on success,
+            // `false` on failure.
+            $stored = Storage::disk('public')->putFileAs(
+                self::PHOTO_DIRECTORY,
+                $file,
+                $filename
+            );
+        } catch (\Throwable $e) {
+            Log::error('Photo upload threw', [
+                'user_id' => $user->id,
+                'error'   => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        if ($stored === false || !Storage::disk('public')->exists($path)) {
+            Log::error('Photo upload failed: file was not written', [
+                'user_id'  => $user->id,
+                'filename' => $filename,
+                'path'     => $path,
+            ]);
+            return null;
+        }
+
+        // ✅ Only NOW is it safe to delete the previous file.
+        if ($user->photo && $user->photo !== $filename) {
+            $this->deletePhotoFile($user, quiet: true);
+        }
+
+        return $filename;
+    }
+
+    /**
+     * Resolve a sensible extension for an uploaded photo.
+     *
+     * Prefers the real mime-derived extension; falls back to the client
+     * extension; falls back to `jpg` when nothing is available.
+     */
+    protected function resolvePhotoExtension(UploadedFile $file): string
+    {
+        $mime = $file->getMimeType();
+        $map = [
+            'image/jpeg' => 'jpg',
+            'image/jpg'  => 'jpg',
+            'image/png'  => 'png',
+            'image/webp' => 'webp',
+            'image/gif'  => 'gif',
+        ];
+
+        if ($mime && isset($map[$mime])) {
+            return $map[$mime];
+        }
+
+        $clientExt = strtolower((string) $file->getClientOriginalExtension());
+        if ($clientExt !== '' && in_array($clientExt, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) {
+            return $clientExt === 'jpeg' ? 'jpg' : $clientExt;
+        }
+
+        return 'jpg';
+    }
+
+    /**
+     * Delete the current photo file from disk (but not the DB column).
+     *
+     * @param  User  $user
+     * @param  bool  $quiet  When true, failures are logged at debug level.
+     */
+    protected function deletePhotoFile(User $user, bool $quiet = false): void
+    {
+        if (!$user->photo) {
+            return;
+        }
+
+        $path = self::PHOTO_DIRECTORY . '/' . $user->photo;
+
+        try {
+            if (Storage::disk('public')->exists($path)) {
+                Storage::disk('public')->delete($path);
+            }
+        } catch (\Throwable $e) {
+            Log::log(
+                $quiet ? 'debug' : 'warning',
+                'Failed to delete photo file',
+                ['user_id' => $user->id, 'path' => $path, 'error' => $e->getMessage()]
+            );
+        }
+    }
+
+    /**
+     * ✅ True when the incoming request is a method-spoofed multipart PUT.
+     * Used only for diagnostics — Laravel's router already honors `_method`.
+     */
+    protected function isSpoofedMultipartPut(Request $request): bool
+    {
+        return $request->isMethod('post')
+            && strtoupper((string) $request->input('_method')) === 'PUT'
+            && $request->isMethod('post')
+            && $request->header('Content-Type') !== null
+            && str_contains((string) $request->header('Content-Type'), 'multipart/form-data');
+    }
+
     // ==================== METADATA / FORM HELPERS ====================
 
     public function create()
@@ -141,11 +302,11 @@ class UserManagementApiController extends Controller
             : collect();
 
         return $this->apiResponse(true, [
-            'user_types'                 => $userTypes,
-            'statuses'                   => User::getUserStatuses(),
-            'communication_status'       => $this->getCommunicationServiceStatus(),
-            'available_roles'            => $availableRoles,
-            'sanitation_supervisors'     => $this->getAvailableSanitationSupervisors(),
+            'user_types'                  => $userTypes,
+            'statuses'                    => User::getUserStatuses(),
+            'communication_status'        => $this->getCommunicationServiceStatus(),
+            'available_roles'             => $availableRoles,
+            'sanitation_supervisors'      => $this->getAvailableSanitationSupervisors(),
             'default_supervisor_settings' => ['can_be_supervisor' => false],
         ], 'Create form metadata loaded.');
     }
@@ -189,6 +350,13 @@ class UserManagementApiController extends Controller
         $perPage = min($this->getPerPage($request->get('per_page')), self::MAX_PER_PAGE);
 
         $users = $this->userRepository->getPaginatedUsers($request->all(), $currentUser, $perPage);
+
+        $users->getCollection()->each(function ($user) {
+            $user->loadCount([
+                'ownedProperties as properties_count',
+                'approvedFamilyLinks as linked_properties_count',
+            ]);
+        });
 
         $stats = $this->userRepository->getDashboardStats($currentUser, $request->all());
 
@@ -284,7 +452,18 @@ class UserManagementApiController extends Controller
     public function show($id)
     {
         $currentUser = auth()->user();
-        $user = User::with(['roles', 'creator', 'properties', 'invitations' => fn($q) => $q->latest()->limit(5)])
+
+        $user = User::with([
+                'roles',
+                'creator',
+                'properties',
+                'invitations' => fn($q) => $q->latest()->limit(5),
+                'approvedFamilyLinks.property',
+            ])
+            ->withCount([
+                'ownedProperties as properties_count',
+                'approvedFamilyLinks as linked_properties_count',
+            ])
             ->findOrFail($id);
 
         try {
@@ -320,6 +499,10 @@ class UserManagementApiController extends Controller
             'digital_address' => 'nullable|string|max:100',
             'region'   => 'nullable|string|max:100',
             'location' => 'nullable|string|max:255',
+
+            // ✅ Accept an optional profile photo at creation time.
+            'photo'    => 'sometimes|image|mimes:' . self::PHOTO_MIMES . '|max:' . self::PHOTO_MAX_KB,
+
             'send_invitation' => 'boolean',
             'invitation_channels' => 'required_if:send_invitation,true|array',
             'invitation_channels.*' => 'in:sms,email,whatsapp',
@@ -356,7 +539,10 @@ class UserManagementApiController extends Controller
         DB::beginTransaction();
 
         try {
-            $userData = $request->all();
+            // ✅ Strip the raw `photo` file from the array — we handle it
+            //    separately after the user row exists (needs an ID for
+            //    the versioned filename).
+            $userData = $request->except([self::PHOTO_FIELD]);
             $userData['type'] = $typeConstant;
 
             $isSanitation = $typeConstant === User::TYPE_SANITATION_PERSONNEL;
@@ -396,6 +582,17 @@ class UserManagementApiController extends Controller
 
             $user = $this->userRepository->createUser($userData, $currentUser);
 
+            // ✅ Now that we have an ID, upload the photo (if any).
+            //    On failure we simply don't set `photo` — the user is
+            //    still created, just without a photo.
+            if ($request->hasFile(self::PHOTO_FIELD)) {
+                $filename = $this->handlePhotoUpload($request, $user);
+                if ($filename) {
+                    $user->photo = $filename;
+                    $user->save();
+                }
+            }
+
             $skipSpatieRoles = in_array($typeConstant, [
                 User::TYPE_SANITATION_PERSONNEL,
                 User::TYPE_SECURITY_PERSONNEL,
@@ -416,8 +613,17 @@ class UserManagementApiController extends Controller
 
             $invitationResult = null;
             if ($request->boolean('send_invitation')) {
+                $requestedChannels = $request->input('invitation_channels');
+
+                if (!is_array($requestedChannels) || empty($requestedChannels)) {
+                    $available = $this->invitationService->getAvailableChannels($user);
+                    $requestedChannels = !empty($available)
+                        ? (array_is_list($available) ? $available : array_keys(array_filter($available)))
+                        : ['sms'];
+                }
+
                 $invitationResult = $this->invitationService->sendInvitation($user, [
-                    'invitation_channels' => $request->input('invitation_channels', ['email']),
+                    'invitation_channels' => $requestedChannels,
                     'invitation_type'     => $request->input('invitation_type', 'welcome'),
                     'expires_in_days'     => $request->input('expires_in_days', 7),
                 ]);
@@ -435,14 +641,16 @@ class UserManagementApiController extends Controller
                 'created_by' => $currentUser->id,
                 'type_slug'  => $typeSlug,
                 'type_const' => $typeConstant,
+                'has_photo'  => !empty($user->fresh()->photo),
             ]);
 
             return $this->apiResponse(
                 true,
-                $this->formatUserForApi($user, $currentUser),
+                $this->formatUserForApi($user->fresh(), $currentUser),
                 $this->buildSuccessMessage($user, $invitationResult),
                 201,
                 [
+                    'photo_updated' => !empty($user->fresh()->photo),
                     'invitation' => $invitationResult ? [
                         'sent'           => $invitationResult['success'],
                         'channels'       => $invitationResult['channels_successful'] ?? [],
@@ -470,6 +678,19 @@ class UserManagementApiController extends Controller
             return $this->apiError($e->getMessage(), $e->getStatusCode());
         }
 
+        // ✅ Diagnostic: when the client sends a method-spoofed multipart
+        //    PUT (POST + _method=PUT), log the file-detection result once.
+        //    This is the single most common reason "the photo doesn't
+        //    save" — the request never reaches handlePhotoUpload().
+        if ($this->isSpoofedMultipartPut($request)) {
+            Log::debug('Spoofed multipart PUT received on user update', [
+                'user_id'    => $id,
+                'has_photo'  => $request->hasFile(self::PHOTO_FIELD),
+                'files'      => array_keys($request->allFiles()),
+                'fields'     => array_keys($request->except([self::PHOTO_FIELD])),
+            ]);
+        }
+
         $validator = Validator::make($request->all(), [
             'name'     => 'sometimes|string|max:255',
             'email'    => ['sometimes', 'email', Rule::unique('users')->ignore($user->id)],
@@ -482,6 +703,10 @@ class UserManagementApiController extends Controller
             'region'   => 'nullable|string|max:100',
             'location' => 'nullable|string|max:255',
             'roles'    => 'nullable|array|exists:roles,id',
+
+            // ✅ Accept an uploaded image.
+            'photo'    => 'sometimes|image|mimes:' . self::PHOTO_MIMES . '|max:' . self::PHOTO_MAX_KB,
+
             'remove_photo'               => 'sometimes|boolean',
             'remove_phone_verification'  => 'sometimes|boolean',
             'auto_verify_phone'          => 'sometimes|boolean',
@@ -500,9 +725,11 @@ class UserManagementApiController extends Controller
             $oldData  = $user->toArray();
             $oldRoles = $user->roles->pluck('id')->toArray();
 
+            // ✅ Strip binary + control flags — handled explicitly below.
             $updateData = $request->except([
                 'remove_photo', 'remove_phone_verification', 'auto_verify_phone',
                 'can_be_supervisor', 'roles',
+                self::PHOTO_FIELD,
             ]);
 
             if ($request->filled('type')) {
@@ -519,10 +746,12 @@ class UserManagementApiController extends Controller
                 $updateData['type'] = $typeConstant;
             }
 
-            if ($request->boolean('remove_photo') && $user->photo) {
-                if (Storage::disk('public')->exists('users/photos/' . $user->photo)) {
-                    Storage::disk('public')->delete('users/photos/' . $user->photo);
-                }
+            // ✅ Explicit photo removal. Only applies when no new file is
+            //    being uploaded — otherwise the upload wins (see below).
+            $hasNewPhotoFile = $request->hasFile(self::PHOTO_FIELD);
+
+            if (!$hasNewPhotoFile && $request->boolean('remove_photo') && $user->photo) {
+                $this->deletePhotoFile($user);
                 $updateData['photo'] = null;
             }
 
@@ -554,6 +783,24 @@ class UserManagementApiController extends Controller
                 throw new \Exception('Failed to update user');
             }
 
+            // ✅ Persist the new photo AFTER the scalar update has
+            //    succeeded. `handlePhotoUpload()` only deletes the old
+            //    file once the new one is safely on disk.
+            $photoUpdated = false;
+            if ($hasNewPhotoFile) {
+                $filename = $this->handlePhotoUpload($request, $user);
+                if ($filename) {
+                    $user->photo = $filename;
+                    $user->save();
+                    $user->touch(); // bump updated_at so the URL cache-buster changes
+                    $photoUpdated = true;
+                } else {
+                    Log::warning('Photo upload returned null during update', [
+                        'user_id' => $user->id,
+                    ]);
+                }
+            }
+
             $skipSpatieRoles = in_array($effectiveType, [
                 User::TYPE_SANITATION_PERSONNEL,
                 User::TYPE_SECURITY_PERSONNEL,
@@ -571,16 +818,27 @@ class UserManagementApiController extends Controller
 
             DB::commit();
 
-            $changes = $this->getChanges($oldData, $user->fresh()->toArray());
-            $changes['roles'] = ['old' => $oldRoles, 'new' => $user->roles->pluck('id')->toArray()];
-            event(new UserUpdated($user, $currentUser, $changes));
+            $fresh = $user->fresh();
+            $changes = $this->getChanges($oldData, $fresh->toArray());
+            $changes['roles'] = ['old' => $oldRoles, 'new' => $fresh->roles->pluck('id')->toArray()];
+            if ($photoUpdated) {
+                $changes['photo'] = ['old' => $oldData['photo'] ?? null, 'new' => $fresh->photo];
+            }
 
-            Log::info('User updated via API', ['user_id' => $user->id, 'updated_by' => $currentUser->id]);
+            event(new UserUpdated($fresh, $currentUser, $changes));
+
+            Log::info('User updated via API', [
+                'user_id'       => $user->id,
+                'updated_by'    => $currentUser->id,
+                'photo_updated' => $photoUpdated,
+            ]);
 
             return $this->apiResponse(
                 true,
-                $this->formatUserForApi($user->fresh(), $currentUser, true),
-                $this->buildUpdateSuccessMessage($user, $updateData)
+                $this->formatUserForApi($fresh, $currentUser, true),
+                $this->buildUpdateSuccessMessage($fresh, $updateData),
+                200,
+                ['photo_updated' => $photoUpdated]
             );
 
         } catch (\Exception $e) {
@@ -639,46 +897,9 @@ class UserManagementApiController extends Controller
         }
     }
 
-    public function forceDelete(Request $request, $id)
-    {
-        $currentUser = auth()->user();
-
-        if (!$currentUser->isSuperAdmin()) {
-            return $this->apiError('Only Super Administrators can permanently delete users.', 403);
-        }
-
-        $user = User::onlyTrashed()->findOrFail($id);
-
-        if ($user->type === User::TYPE_DEVELOPER) {
-            return $this->apiError('Cannot delete developer accounts.', 403);
-        }
-
-        DB::beginTransaction();
-        try {
-            $user->roles()->detach();
-
-            if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
-                Storage::disk('public')->delete('users/photos/' . $user->photo);
-            }
-
-            $user->forceDelete();
-
-            DB::commit();
-            Log::info('User permanently deleted via API', ['user_id' => $user->id, 'deleted_by' => $currentUser->id]);
-
-            return $this->apiResponse(true, null, 'User permanently deleted successfully!');
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return $this->apiError('Failed to permanently delete user: ' . $e->getMessage(), 500);
-        }
-    }
-
-    public function forceDestroy(Request $request, $id)
-    {
-        return $this->forceDelete($request, $id);
-    }
-
+    /**
+     * Restore a soft-deleted user (trash, not archival pipeline).
+     */
     public function restore($id)
     {
         $currentUser = auth()->user();
@@ -698,14 +919,26 @@ class UserManagementApiController extends Controller
         DB::beginTransaction();
         try {
             $user->restore();
+
             $user->update([
-                'status'     => User::STATUS_PENDING,
-                'deleted_at' => null,
-                'deleted_by' => null,
+                'status'          => User::STATUS_PENDING,
+                'deleted_at'      => null,
+                'deleted_by'      => null,
+                'deletion_reason' => null,
             ]);
 
+            $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
+            if (isset($metadata['deletion_info'])) {
+                unset($metadata['deletion_info']);
+                $user->update(['metadata' => !empty($metadata) ? $metadata : null]);
+            }
+
             DB::commit();
-            Log::info('User restored via API', ['user_id' => $user->id, 'restored_by' => $currentUser->id]);
+            Log::info('User restored via API', [
+                'user_id'          => $user->id,
+                'restored_by'      => $currentUser->id,
+                'restored_by_name' => $currentUser->name,
+            ]);
 
             return $this->apiResponse(
                 true,
@@ -717,6 +950,92 @@ class UserManagementApiController extends Controller
             DB::rollBack();
             return $this->apiError('Failed to restore user: ' . $e->getMessage(), 500);
         }
+    }
+
+    /**
+     * Permanently delete a soft-deleted user (PII scrubbing included).
+     */
+    public function forceDelete(Request $request, $id)
+    {
+        $currentUser = auth()->user();
+
+        if (!$currentUser->isSuperAdmin()) {
+            return $this->apiError('Only Super Administrators can permanently delete users.', 403);
+        }
+
+        $user = User::onlyTrashed()->findOrFail($id);
+
+        if ($user->type === User::TYPE_DEVELOPER) {
+            return $this->apiError('Cannot delete developer accounts.', 403);
+        }
+
+        if ($user->type === User::TYPE_SUPER_ADMIN && $user->id !== $currentUser->id) {
+            return $this->apiError('You cannot delete other Super Admin accounts.', 403);
+        }
+
+        DB::beginTransaction();
+        try {
+            $userInfo = [
+                'id'    => $user->id,
+                'name'  => $user->name,
+                'email' => $user->email,
+                'type'  => $user->type,
+                'photo' => $user->photo,
+            ];
+
+            $this->scrubUserPii($user);
+
+            if (!empty($userInfo['photo'])
+                && Storage::disk('public')->exists(self::PHOTO_DIRECTORY . '/' . $userInfo['photo'])) {
+                Storage::disk('public')->delete(self::PHOTO_DIRECTORY . '/' . $userInfo['photo']);
+            }
+
+            $user->roles()->detach();
+            $user->forceDelete();
+
+            DB::commit();
+            Log::warning('User permanently deleted via API (PII scrubbed)', [
+                'user_id'          => $userInfo['id'],
+                'user_name_before' => $userInfo['name'],
+                'user_email_before'=> $userInfo['email'],
+                'user_type'        => $userInfo['type'],
+                'deleted_by'       => $currentUser->id,
+                'deleted_by_name'  => $currentUser->name,
+                'deletion_reason'  => $request->input('deletion_reason'),
+            ]);
+
+            return $this->apiResponse(true, null, 'User permanently deleted successfully!');
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return $this->apiError('Failed to permanently delete user: ' . $e->getMessage(), 500);
+        }
+    }
+
+    public function forceDestroy(Request $request, $id)
+    {
+        return $this->forceDelete($request, $id);
+    }
+
+    /**
+     * ✅ Single source of truth for PII scrubbing before a hard delete.
+     *    Used by both `forceDelete()` and `bulkPermanentDelete()`.
+     */
+    protected function scrubUserPii(User $user): void
+    {
+        $user->forceFill([
+            'name'              => 'Deleted User',
+            'email'             => "deleted_{$user->id}@deleted.example",
+            'phone'             => null,
+            'username'          => "deleted_{$user->id}",
+            'digital_address'   => null,
+            'location'          => null,
+            'photo'             => null,
+            'phone_verified_at' => null,
+            'email_verified_at' => null,
+            'last_login_at'     => null,
+            'last_activity_at'  => null,
+        ])->saveQuietly();
     }
 
     // ==================== TRASHED USERS ====================
@@ -761,9 +1080,22 @@ class UserManagementApiController extends Controller
         $users = $query->orderBy('deleted_at', 'desc')->paginate($perPage);
 
         $users->getCollection()->transform(function ($user) {
-            // ✅ FIX: safe decode.
             $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
             $archivalInfo = $metadata['archival_info'] ?? [];
+            $deletionInfo = $metadata['deletion_info'] ?? [];
+
+            $deletedByName = $archivalInfo['archived_by_name']
+                ?? $deletionInfo['deleted_by_name']
+                ?? null;
+
+            if (!$deletedByName) {
+                $deleterId = $deletionInfo['deleted_by'] ?? $user->deleted_by;
+                if ($deleterId) {
+                    $deleter = User::withTrashed()->find($deleterId);
+                    $deletedByName = $deleter?->name;
+                }
+            }
+            $deletedByName = $deletedByName ?: 'System';
 
             return [
                 'id'                     => $user->id,
@@ -773,8 +1105,11 @@ class UserManagementApiController extends Controller
                 'type'                   => $user->type,
                 'type_label'             => $user->type_name,
                 'deleted_at'             => $user->deleted_at?->toISOString(),
-                'deletion_reason'        => $archivalInfo['archived_reason'] ?? 'No reason provided',
-                'deleted_by'             => $archivalInfo['archived_by_name'] ?? 'System',
+                'deletion_reason'        => $archivalInfo['archived_reason']
+                    ?? $deletionInfo['reason']
+                    ?? $user->deletion_reason
+                    ?? 'No reason provided',
+                'deleted_by_name'        => $deletedByName,
                 'deletion_scheduled_at'  => $user->deletion_scheduled_at?->toISOString(),
                 'can_restore'            => $this->canRestoreUser($user),
             ];
@@ -810,7 +1145,6 @@ class UserManagementApiController extends Controller
             }
 
             $deletedBy = $user->deleted_by ? User::withTrashed()->find($user->deleted_by) : null;
-            // ✅ FIX: safe decode.
             $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
 
             $deletionInfo = $metadata['deletion_info'] ?? [
@@ -891,9 +1225,25 @@ class UserManagementApiController extends Controller
         $users = $query->orderBy('deleted_at', 'desc')->paginate($perPage);
 
         $archivedUsers = $users->getCollection()->map(function ($user) {
-            // ✅ FIX: safe decode.
             $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
             $archivalInfo = $metadata['archival_info'] ?? [];
+            $legacyArchived = $metadata['archived'] ?? [];
+
+            $archivedByName = $archivalInfo['archived_by_name']
+                ?? $legacyArchived['archived_by_name']
+                ?? null;
+
+            if (!$archivedByName) {
+                $deleterId = $archivalInfo['archived_by']
+                    ?? $legacyArchived['archived_by']
+                    ?? $user->deleted_by
+                    ?? null;
+                if ($deleterId) {
+                    $deleter = User::withTrashed()->find($deleterId);
+                    $archivedByName = $deleter?->name;
+                }
+            }
+            $archivedByName = $archivedByName ?: 'System';
 
             return [
                 'id'                    => $user->id,
@@ -905,15 +1255,28 @@ class UserManagementApiController extends Controller
                 'initials'              => $user->initials,
                 'avatar_url'            => $user->avatar_url,
                 'archived_at'           => $user->deleted_at?->toISOString(),
-                'archival_reason'       => $archivalInfo['archived_reason'] ?? 'No reason provided',
-                'archived_by_name'      => $archivalInfo['archived_by_name'] ?? 'System',
+                'archival_reason'       => $archivalInfo['archived_reason']
+                    ?? $legacyArchived['reason']
+                    ?? 'No reason provided',
+                'archived_by_name'      => $archivedByName,
                 'deletion_scheduled_at' => $user->deletion_scheduled_at?->toISOString(),
-                'original_email'        => $archivalInfo['original_email'] ?? $user->email,
-                'original_phone'        => $archivalInfo['original_phone'] ?? $user->phone,
-                'days_since_archival'   => $user->deleted_at ? now()->diffInDays($user->deleted_at) : 0,
+                'original_email'        => $archivalInfo['original_email']
+                    ?? $legacyArchived['original_email']
+                    ?? $user->email,
+                'original_phone'        => $archivalInfo['original_phone']
+                    ?? $legacyArchived['original_phone']
+                    ?? $user->phone,
+                'original_username'     => $archivalInfo['original_username']
+                    ?? $legacyArchived['original_username']
+                    ?? $user->username,
+                'days_since_archival'   => $user->deleted_at ? (int) $user->deleted_at->diffInDays(now()) : 0,
                 'days_until_deletion'   => $user->deletion_scheduled_at
-                    ? max(0, now()->diffInDays($user->deletion_scheduled_at, false))
+                    ? max(0, (int) now()->diffInDays($user->deletion_scheduled_at, false))
                     : null,
+                'user_type_at_archival' => $archivalInfo['user_type_at_archival']
+                    ?? $legacyArchived['user_type']
+                    ?? $user->type,
+                'archival_type'         => $archivalInfo['archival_type'] ?? 'manual_admin',
             ];
         });
 
@@ -927,12 +1290,35 @@ class UserManagementApiController extends Controller
                 'total'        => $users->total(),
             ],
             'stats' => [
-                'total_archived'          => (clone $trashedBase)->count(),
-                'archived_today'          => (clone $trashedBase)->whereDate('deleted_at', today())->count(),
-                'archived_this_week'      => (clone $trashedBase)->where('deleted_at', '>=', now()->startOfWeek())->count(),
-                'archived_this_month'     => (clone $trashedBase)->whereMonth('deleted_at', now()->month)->count(),
-                'scheduled_for_deletion'  => (clone $trashedBase)->whereNotNull('deletion_scheduled_at')->count(),
-                'pending_restore_requests'=> 0,
+                'total_archived' => (clone $trashedBase)->count(),
+
+                'archived_today' => (clone $trashedBase)
+                    ->whereDate('deleted_at', today())
+                    ->count(),
+
+                'archived_this_week' => (clone $trashedBase)
+                    ->where('deleted_at', '>=', now()->startOfWeek())
+                    ->count(),
+
+                'archived_this_month' => (clone $trashedBase)
+                    ->whereMonth('deleted_at', now()->month)
+                    ->count(),
+
+                'scheduled_for_deletion' => (clone $trashedBase)
+                    ->whereNotNull('deletion_scheduled_at')
+                    ->where('deletion_scheduled_at', '>', now())
+                    ->count(),
+
+                'restored_this_month' => User::query()
+                    ->whereNotNull('metadata->restored->restored_at')
+                    ->where('metadata->restored->restored_at', '>=', now()->startOfMonth()->toISOString())
+                    ->count(),
+
+                'restored_count' => User::query()
+                    ->whereNotNull('metadata->restored->restored_at')
+                    ->count(),
+
+                'pending_restore_requests' => 0,
             ],
             'filters' => $request->only(['search', 'type', 'archival_period', 'deletion_status']),
         ]);
@@ -952,8 +1338,25 @@ class UserManagementApiController extends Controller
             return $this->apiError('Unauthorized.', 403);
         }
 
-        // ✅ FIX: safe decode.
         $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
+        $archivalInfo = $metadata['archival_info'] ?? [];
+        $legacyArchived = $metadata['archived'] ?? [];
+
+        $archivedByName = $archivalInfo['archived_by_name']
+            ?? $legacyArchived['archived_by_name']
+            ?? null;
+
+        if (!$archivedByName) {
+            $deleterId = $archivalInfo['archived_by']
+                ?? $legacyArchived['archived_by']
+                ?? $user->deleted_by
+                ?? null;
+            if ($deleterId) {
+                $deleter = User::withTrashed()->find($deleterId);
+                $archivedByName = $deleter?->name;
+            }
+        }
+        $archivedByName = $archivedByName ?: 'System';
 
         return $this->apiResponse(true, [
             'id'                    => $user->id,
@@ -966,14 +1369,23 @@ class UserManagementApiController extends Controller
             'initials'              => $user->initials,
             'avatar_url'            => $user->avatar_url,
             'archived_at'           => $user->deleted_at?->toISOString(),
-            'archival_reason'       => $metadata['archival_info']['archived_reason'] ?? 'No reason provided',
-            'archived_by_name'      => $metadata['archival_info']['archived_by_name'] ?? 'System',
+            'archival_reason'       => $archivalInfo['archived_reason']
+                ?? $legacyArchived['reason']
+                ?? 'No reason provided',
+            'archived_by_name'      => $archivedByName,
             'deletion_scheduled_at' => $user->deletion_scheduled_at?->toISOString(),
-            'original_email'        => $metadata['archival_info']['original_email'] ?? $user->email,
-            'original_phone'        => $metadata['archival_info']['original_phone'] ?? $user->phone,
-            'days_since_archival'   => $user->deleted_at ? now()->diffInDays($user->deleted_at) : 0,
+            'original_email'        => $archivalInfo['original_email']
+                ?? $legacyArchived['original_email']
+                ?? $user->email,
+            'original_phone'        => $archivalInfo['original_phone']
+                ?? $legacyArchived['original_phone']
+                ?? $user->phone,
+            'original_username'     => $archivalInfo['original_username']
+                ?? $legacyArchived['original_username']
+                ?? $user->username,
+            'days_since_archival'   => $user->deleted_at ? (int) $user->deleted_at->diffInDays(now()) : 0,
         ], null, 200, [
-            'archival_info'    => $metadata['archival_info'] ?? [],
+            'archival_info'    => $archivalInfo,
             'deletion_info'    => $metadata['deletion_info'] ?? [],
             'properties_count' => $user->properties()->count(),
         ]);
@@ -997,35 +1409,67 @@ class UserManagementApiController extends Controller
 
         DB::beginTransaction();
         try {
-            // ✅ FIX: safe decode.
             $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
             $archivalInfo = $metadata['archival_info'] ?? [];
+            $legacyArchived = $metadata['archived'] ?? [];
 
-            if (!empty($archivalInfo['original_email'])
-                && !User::where('email', $archivalInfo['original_email'])->where('id', '!=', $user->id)->exists()) {
-                $user->email = $archivalInfo['original_email'];
-            }
-            if (!empty($archivalInfo['original_phone'])
-                && !User::where('phone', $archivalInfo['original_phone'])->where('id', '!=', $user->id)->exists()) {
-                $user->phone = $archivalInfo['original_phone'];
-            }
-            if (!empty($archivalInfo['original_username'])
-                && !User::where('username', $archivalInfo['original_username'])->where('id', '!=', $user->id)->exists()) {
-                $user->username = $archivalInfo['original_username'];
-            }
+            $originalEmail = $archivalInfo['original_email']
+                ?? $legacyArchived['original_email']
+                ?? null;
+            $originalUsername = $archivalInfo['original_username']
+                ?? $legacyArchived['original_username']
+                ?? null;
+            $originalPhone = $archivalInfo['original_phone']
+                ?? $legacyArchived['original_phone']
+                ?? null;
 
-            $user->status = User::STATUS_PENDING;
-            $user->deleted_by = null;
-            $user->deletion_scheduled_at = null;
-
-            unset($metadata['archival_info'], $metadata['deletion_info']);
-            $user->metadata = !empty($metadata) ? $metadata : null;
-
-            $user->save();
             $user->restore();
 
+            $restoreData = [
+                'deletion_scheduled_at' => null,
+                'deleted_by'            => null,
+                'status'                => User::STATUS_ACTIVE,
+            ];
+
+            if (!empty($originalEmail)
+                && !User::where('email', $originalEmail)
+                    ->where('id', '!=', $user->id)->exists()) {
+                $restoreData['email'] = $originalEmail;
+            }
+
+            if (!empty($originalUsername)
+                && !User::where('username', $originalUsername)
+                    ->where('id', '!=', $user->id)->exists()) {
+                $restoreData['username'] = $originalUsername;
+            }
+
+            if (!empty($originalPhone)
+                && !User::where('phone', $originalPhone)
+                    ->where('id', '!=', $user->id)->exists()) {
+                $restoreData['phone'] = $originalPhone;
+            }
+
+            unset($metadata['archival_info'], $metadata['deletion_info'], $metadata['archived']);
+
+            $metadata['restored'] = [
+                'restored_at'      => now()->toISOString(),
+                'restored_by'      => $currentUser->id,
+                'restored_by_name' => $currentUser->name,
+                'previous_email'   => $user->getOriginal('email'),
+                'previous_username'=> $user->getOriginal('username'),
+            ];
+
+            $restoreData['metadata'] = !empty($metadata) ? $metadata : null;
+
+            $user->update($restoreData);
+
             DB::commit();
-            Log::info('Archived user restored via API', ['user_id' => $user->id, 'restored_by' => $currentUser->id]);
+            Log::info('Archived user restored via API', [
+                'user_id'          => $user->id,
+                'restored_email'   => $user->email,
+                'restored_by'      => $currentUser->id,
+                'restored_by_name' => $currentUser->name,
+            ]);
 
             return $this->apiResponse(
                 true,
@@ -1037,6 +1481,11 @@ class UserManagementApiController extends Controller
             DB::rollBack();
             return $this->apiError('Failed to restore user: ' . $e->getMessage(), 500);
         }
+    }
+
+    public function restoreArchived($id)
+    {
+        return $this->restoreArchivedUser($id);
     }
 
     public function bulkRestoreArchived(Request $request)
@@ -1076,30 +1525,48 @@ class UserManagementApiController extends Controller
                         continue;
                     }
 
-                    // ✅ FIX: safe decode.
                     $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
                     $archivalInfo = $metadata['archival_info'] ?? [];
+                    $legacyArchived = $metadata['archived'] ?? [];
 
-                    if (!empty($archivalInfo['original_email'])
-                        && !User::where('email', $archivalInfo['original_email'])->where('id', '!=', $user->id)->exists()) {
-                        $user->email = $archivalInfo['original_email'];
-                    }
-                    if (!empty($archivalInfo['original_phone'])
-                        && !User::where('phone', $archivalInfo['original_phone'])->where('id', '!=', $user->id)->exists()) {
-                        $user->phone = $archivalInfo['original_phone'];
-                    }
-                    if (!empty($archivalInfo['original_username'])
-                        && !User::where('username', $archivalInfo['original_username'])->where('id', '!=', $user->id)->exists()) {
-                        $user->username = $archivalInfo['original_username'];
-                    }
+                    $originalEmail = $archivalInfo['original_email']
+                        ?? $legacyArchived['original_email']
+                        ?? null;
+                    $originalUsername = $archivalInfo['original_username']
+                        ?? $legacyArchived['original_username']
+                        ?? null;
+                    $originalPhone = $archivalInfo['original_phone']
+                        ?? $legacyArchived['original_phone']
+                        ?? null;
 
-                    unset($metadata['archival_info'], $metadata['deletion_info']);
-                    $user->metadata = !empty($metadata) ? $metadata : null;
-                    $user->status = User::STATUS_PENDING;
-                    $user->deleted_by = null;
-                    $user->deletion_scheduled_at = null;
-                    $user->save();
                     $user->restore();
+
+                    $restoreData = [
+                        'status'                => User::STATUS_PENDING,
+                        'deletion_scheduled_at' => null,
+                        'deleted_by'            => null,
+                    ];
+
+                    if (!empty($originalEmail)
+                        && !User::where('email', $originalEmail)
+                            ->where('id', '!=', $user->id)->exists()) {
+                        $restoreData['email'] = $originalEmail;
+                    }
+                    if (!empty($originalPhone)
+                        && !User::where('phone', $originalPhone)
+                            ->where('id', '!=', $user->id)->exists()) {
+                        $restoreData['phone'] = $originalPhone;
+                    }
+                    if (!empty($originalUsername)
+                        && !User::where('username', $originalUsername)
+                            ->where('id', '!=', $user->id)->exists()) {
+                        $restoreData['username'] = $originalUsername;
+                    }
+
+                    unset($metadata['archival_info'], $metadata['deletion_info'], $metadata['archived']);
+                    $restoreData['metadata'] = !empty($metadata) ? $metadata : null;
+
+                    $user->update($restoreData);
 
                     $results['success']++;
                     $results['restored_count']++;
@@ -1148,7 +1615,6 @@ class UserManagementApiController extends Controller
         try {
             $user->deletion_scheduled_at = null;
 
-            // ✅ FIX: safe decode.
             $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
             unset($metadata['deletion_info']);
             $user->metadata = !empty($metadata) ? $metadata : null;
@@ -1197,8 +1663,8 @@ class UserManagementApiController extends Controller
 
                     $user->roles()->detach();
 
-                    if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
-                        Storage::disk('public')->delete('users/photos/' . $user->photo);
+                    if ($user->photo && Storage::disk('public')->exists(self::PHOTO_DIRECTORY . '/' . $user->photo)) {
+                        Storage::disk('public')->delete(self::PHOTO_DIRECTORY . '/' . $user->photo);
                     }
 
                     $user->forceDelete();
@@ -1420,7 +1886,6 @@ class UserManagementApiController extends Controller
         $lastInvitation = $user->invitations->first();
 
         if ($lastInvitation) {
-            // ✅ FIX: safe decode for channels (was `is_string(...) ? ... : ...`).
             $channels = $this->_decodeMaybeJson($lastInvitation->channels) ?? [];
 
             return $this->apiResponse(true, [
@@ -1455,6 +1920,11 @@ class UserManagementApiController extends Controller
         ]);
     }
 
+    public function getUserChannels($id)
+    {
+        return $this->getAvailableChannels($id);
+    }
+
     // ==================== ROLES ====================
 
     public function getUserRoles($id)
@@ -1465,7 +1935,12 @@ class UserManagementApiController extends Controller
             return $this->apiError('Only Super Administrators can manage roles.', 403);
         }
 
-        $user = User::with('roles')->findOrFail($id);
+        $user = User::with('roles')
+            ->withCount([
+                'ownedProperties as properties_count',
+                'approvedFamilyLinks as linked_properties_count',
+            ])
+            ->findOrFail($id);
 
         if ($user->type === User::TYPE_DEVELOPER) {
             return $this->apiError('Cannot manage roles for developer accounts.', 403);
@@ -1473,16 +1948,23 @@ class UserManagementApiController extends Controller
 
         $availableRoles = Role::where('slug', '!=', 'developer')->orderBy('priority')->get();
 
+        $ownedCount  = (int) ($user->properties_count ?? 0);
+        $linkedCount = (int) ($user->linked_properties_count ?? 0);
+
         return $this->apiResponse(true, [
             'user' => [
-                'id'               => $user->id,
-                'name'             => $user->name,
-                'email'            => $user->email,
-                'type'             => $user->type,
-                'is_property_owner'=> $user->is_property_owner,
-                'property_count'   => $user->properties()->count(),
-                'current_roles'    => $user->roles->map(function ($r) {
-                    // ✅ Same safe-decode pattern as formatUserForApi.
+                'id'      => $user->id,
+                'name'    => $user->name,
+                'email'   => $user->email,
+                'type'    => $user->type,
+
+                'is_property_owner'         => $ownedCount > 0,
+                'has_property_access'       => ($ownedCount + $linkedCount) > 0,
+                'property_count'            => $ownedCount,
+                'linked_property_count'     => $linkedCount,
+                'accessible_property_count' => $ownedCount + $linkedCount,
+
+                'current_roles' => $user->roles->map(function ($r) {
                     $pivot = $r->pivot ?? null;
                     return [
                         'id'           => $r->id,
@@ -1506,6 +1988,11 @@ class UserManagementApiController extends Controller
                 'priority'     => $r->priority,
             ]),
         ]);
+    }
+
+    public function getUserRolesData($id)
+    {
+        return $this->getUserRoles($id);
     }
 
     public function updateUserRoles(Request $request, $id)
@@ -1627,8 +2114,8 @@ class UserManagementApiController extends Controller
                         "User owns {$propertyCount} property(s). You must either transfer properties or use force_remove flag.",
                         422,
                         [
-                            'property_count'     => $propertyCount,
-                            'requires_transfer'  => true,
+                            'property_count'    => $propertyCount,
+                            'requires_transfer' => true,
                         ]
                     );
                 }
@@ -1929,9 +2416,12 @@ class UserManagementApiController extends Controller
                         continue;
                     }
 
+                    // ✅ PII scrubbing now matches single-user force-delete.
+                    $this->scrubUserPii($user);
+
                     $user->roles()->detach();
-                    if ($user->photo && Storage::disk('public')->exists('users/photos/' . $user->photo)) {
-                        Storage::disk('public')->delete('users/photos/' . $user->photo);
+                    if ($user->photo && Storage::disk('public')->exists(self::PHOTO_DIRECTORY . '/' . $user->photo)) {
+                        Storage::disk('public')->delete(self::PHOTO_DIRECTORY . '/' . $user->photo);
                     }
                     $user->forceDelete();
 
@@ -1980,35 +2470,54 @@ class UserManagementApiController extends Controller
         }
 
         $perPage = min($this->getPerPage($request->get('per_page')), self::MAX_PER_PAGE);
+        $ownersOnly = $request->boolean('owners_only', false);
 
-        $query = User::where(function ($q) {
-            $q->whereHas('roles', fn($r) => $r->where('slug', 'landlord'))
-              ->orWhere('type', User::TYPE_LANDLORD);
-        })
-        ->whereHas('properties')
-        ->with([
-            'properties' => fn($q) => $q->select(
-                'id', 'landlord_id', 'property_name', 'digital_address', 'status',
-                'property_type_id', 'custom_property_type', 'zone'
-            ),
-            'roles',
-        ]);
-
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%")
-                  ->orWhere('phone', 'like', "%{$search}%");
+        $baseQuery = User::query()
+            ->when($ownersOnly, function ($q) {
+                $q->where(function ($qq) {
+                    $qq->whereHas('roles', fn ($r) => $r->where('slug', 'landlord'))
+                       ->orWhere('type', User::TYPE_LANDLORD);
+                })
+                ->whereHas('properties', fn ($p) => $p->whereNull('deleted_at'));
+            }, function ($q) {
+                $q->withPropertyAccess();
             });
-        }
-        if ($request->filled('multi_role') && $request->multi_role === 'yes') {
-            $query->has('roles', '>', 1);
-        }
 
-        $propertyOwners = $query->orderBy('name')->paginate($perPage);
+        $propertyOwners = (clone $baseQuery)
+            ->with([
+                'properties' => function ($q) {
+                    $q->select('id', 'landlord_id', 'property_name', 'digital_address', 'status',
+                               'property_type_id', 'custom_property_type', 'zone', 'created_at');
+                },
+                'roles',
+                'linkedProperties:id,property_name,digital_address,status',
+            ])
+            ->withCount([
+                'ownedProperties as properties_count',
+                'approvedFamilyLinks as linked_properties_count',
+            ])
+            ->when($request->filled('search'), function ($query) use ($request) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                      ->orWhere('email', 'like', "%{$search}%")
+                      ->orWhere('phone', 'like', "%{$search}%");
+                });
+            })
+            ->when($request->filled('multi_role'), function ($query) use ($request) {
+                if ($request->multi_role === 'yes') {
+                    $query->has('roles', '>', 1);
+                } elseif ($request->multi_role === 'no') {
+                    $query->has('roles', '=', 1);
+                }
+            })
+            ->orderBy('name')
+            ->paginate($perPage);
 
         $propertyOwners->getCollection()->transform(function ($user) {
+            $ownedCount  = (int) ($user->properties_count ?? 0);
+            $linkedCount = (int) ($user->linked_properties_count ?? 0);
+
             return [
                 'id'                    => $user->id,
                 'name'                  => $user->name,
@@ -2016,8 +2525,17 @@ class UserManagementApiController extends Controller
                 'phone'                 => $user->phone,
                 'type'                  => $user->type,
                 'type_label'            => $user->type_name,
-                'property_count'        => $user->properties->count(),
-                'active_property_count' => $user->properties->where('status', 'active')->count(),
+                'avatar'                => $user->avatar_url,
+                'initials'              => $user->initials,
+
+                'property_count'             => $ownedCount,
+                'linked_property_count'      => $linkedCount,
+                'accessible_property_count'  => $ownedCount + $linkedCount,
+                'active_property_count'      => $user->properties
+                    ? $user->properties->where('status', 'active')->count()
+                    : 0,
+                'is_linked_only'             => $ownedCount === 0 && $linkedCount > 0,
+
                 'properties' => $user->properties->map(fn($p) => [
                     'id'              => $p->id,
                     'name'            => $p->property_name,
@@ -2026,17 +2544,66 @@ class UserManagementApiController extends Controller
                     'property_type'   => $p->custom_property_type ?? optional($p->propertyType)->name,
                     'city'            => $p->zone,
                 ]),
-                'roles'         => $user->roles->map(fn($r) => $r->display_name ?? $r->name),
-                'is_multi_role' => $user->roles->count() > 1,
-                'avatar'        => $user->avatar_url,
-                'initials'      => $user->initials,
+                'linked_properties' => $user->linkedProperties->map(fn($p) => [
+                    'id'              => $p->id,
+                    'name'            => $p->property_name,
+                    'digital_address' => $p->digital_address,
+                    'status'          => $p->status,
+                ]),
+
+                'roles'              => $user->roles->map(fn($r) => $r->display_name ?? $r->name),
+                'role_names'         => $user->roles->pluck('display_name', 'slug')->implode(', '),
+                'is_multi_role'      => $user->roles->count() > 1,
+                'is_admin_and_landlord' => $user->hasRole('admin') && $user->hasRole('landlord'),
             ];
         });
 
-        $baseQuery = User::where(function ($q) {
-            $q->whereHas('roles', fn($r) => $r->where('slug', 'landlord'))
-              ->orWhere('type', User::TYPE_LANDLORD);
-        })->whereHas('properties');
+        $statsBase = (clone $baseQuery);
+
+        $stats = [
+            'total_property_owners' => (clone $statsBase)->count(),
+            'total_properties'      => Property::count(),
+
+            'multi_role_property_owners' => (clone $statsBase)
+                ->has('roles', '>', 1)
+                ->count(),
+
+            'linked_only_members' => User::query()
+                ->withPropertyAccess()
+                ->whereDoesntHave('ownedProperties')
+                ->whereHas('approvedFamilyLinks')
+                ->count(),
+
+            'multi_role_breakdown' => [
+                'admin_landlords' => User::whereHas('roles', fn($q) => $q->where('slug', 'landlord'))
+                    ->whereHas('roles', fn($q) => $q->where('slug', 'admin'))
+                    ->whereHas('properties')->count(),
+                'super_admin_landlords' => User::whereHas('roles', fn($q) => $q->where('slug', 'landlord'))
+                    ->whereHas('roles', fn($q) => $q->where('slug', 'super-admin'))
+                    ->whereHas('properties')->count(),
+                'field_agent_landlords' => User::whereHas('roles', fn($q) => $q->where('slug', 'landlord'))
+                    ->whereHas('roles', fn($q) => $q->where('slug', 'field-agent'))
+                    ->whereHas('properties')->count(),
+                'security_landlords' => User::whereHas('roles', fn($q) => $q->where('slug', 'landlord'))
+                    ->whereHas('roles', fn($q) => $q->where('slug', 'security-personnel'))
+                    ->whereHas('properties')->count(),
+                'tenant_landlords' => User::whereHas('roles', fn($q) => $q->where('slug', 'landlord'))
+                    ->whereHas('roles', fn($q) => $q->where('slug', 'tenant'))
+                    ->whereHas('properties')->count(),
+            ],
+
+            'property_owners_without_phone' => (clone $statsBase)->whereNull('phone')->count(),
+            'property_owners_without_email' => (clone $statsBase)->whereNull('email')->count(),
+
+            'avg_properties_per_owner' => round(
+                (float) (clone $statsBase)
+                    ->withCount(['ownedProperties', 'approvedFamilyLinks'])
+                    ->get()
+                    ->avg(fn ($u) => ($u->owned_properties_count ?? 0) + ($u->approved_family_links_count ?? 0))
+                ?? 0,
+                1
+            ),
+        ];
 
         return $this->apiResponse(true, $propertyOwners->items(), null, 200, [
             'meta' => [
@@ -2045,14 +2612,8 @@ class UserManagementApiController extends Controller
                 'per_page'     => $propertyOwners->perPage(),
                 'total'        => $propertyOwners->total(),
             ],
-            'stats' => [
-                'total_property_owners'          => (clone $baseQuery)->count(),
-                'total_properties'               => Property::count(),
-                'multi_role_property_owners'     => User::whereHas('roles', fn($q) => $q->where('slug', 'landlord'))
-                    ->whereHas('properties')->has('roles', '>', 1)->count(),
-                'property_owners_without_phone'  => (clone $baseQuery)->whereNull('phone')->count(),
-                'avg_properties_per_owner'       => round((clone $baseQuery)->withCount('properties')->get()->avg('properties_count') ?? 0, 1),
-            ],
+            'stats'           => $stats,
+            'per_page_options'=> self::PER_PAGE_OPTIONS,
         ]);
     }
 
@@ -2307,7 +2868,24 @@ class UserManagementApiController extends Controller
             $user->update(['password' => Hash::make($request->password)]);
 
             if ($request->boolean('notify_user')) {
-                $this->sendPasswordChangeNotification($user, $request->input('notification_channels', ['email']));
+                $channels = $request->input('notification_channels', ['email']);
+
+                if (empty($user->email)) {
+                    $channels = array_values(array_diff($channels, ['email']));
+                }
+                if (empty($user->phone)) {
+                    $channels = array_values(array_diff($channels, ['sms', 'whatsapp']));
+                }
+
+                if (!empty($channels)) {
+                    $this->sendPasswordChangeNotification($user, $channels);
+                } else {
+                    Log::info('Password change notification skipped — no contact channels available', [
+                        'user_id'   => $user->id,
+                        'has_email' => !empty($user->email),
+                        'has_phone' => !empty($user->phone),
+                    ]);
+                }
             }
 
             DB::commit();
@@ -2341,7 +2919,7 @@ class UserManagementApiController extends Controller
 
         return $this->apiResponse(
             true,
-            $this->formatUserForApi($user->fresh(), $currentUser),
+            $this->formatUserForApi($user->fresh(), $currentUser, true),
             'Phone marked as verified successfully!'
         );
     }
@@ -2359,34 +2937,58 @@ class UserManagementApiController extends Controller
         try {
             $user = User::findOrFail($id);
 
-            if ($user->type !== User::TYPE_LANDLORD) {
-                return $this->apiError('Only landlord accounts can be archived.', 422);
+            $isLandlord = $user->type === User::TYPE_LANDLORD;
+            $isTenant   = $user->type === User::TYPE_TENANT;
+
+            if (!$isLandlord && !$isTenant) {
+                return $this->apiError('Only landlord or tenant accounts can be archived.', 422);
             }
+
             if ($user->trashed()) {
                 return $this->apiError('This user is already archived.', 422);
             }
 
-            $propertyCount = $user->properties()->count();
-            if ($propertyCount > 0) {
-                return $this->apiError(
-                    "Cannot archive landlord with {$propertyCount} active property(s). Transfer all properties first.",
-                    422,
-                    ['property_count' => $propertyCount]
-                );
+            if ($isLandlord) {
+                $propertyCount = $user->properties()->count();
+                if ($propertyCount > 0) {
+                    return $this->apiError(
+                        "Cannot archive landlord with {$propertyCount} active property(s). Transfer all properties first.",
+                        422,
+                        ['property_count' => $propertyCount]
+                    );
+                }
+            }
+
+            $approvedUnitCount = 0;
+            if ($isTenant) {
+                $approvedUnitCount = \App\Models\PropertyUnit::where('tenant_id', $user->id)
+                    ->where('tenant_status', \App\Models\PropertyUnit::TENANT_STATUS_APPROVED)
+                    ->count();
+
+                if ($approvedUnitCount > 0) {
+                    return $this->apiError(
+                        "Cannot archive tenant with {$approvedUnitCount} active property unit assignment(s). Vacate the unit first.",
+                        422,
+                        ['unit_count' => $approvedUnitCount]
+                    );
+                }
             }
 
             $settings = SystemSetting::getSettings();
             $permanentDeletionDays = $settings->account_archival['permanent_deletion_days'] ?? 365;
-            $archivalReason = $request->input('reason', 'Landlord has no properties - manual archival by admin');
 
-            $originalEmail = $user->email;
+            $defaultReason = $isTenant
+                ? 'Tenant has not been assigned to any property unit - manual archival by admin'
+                : 'Landlord has no properties - manual archival by admin';
+            $archivalReason = $request->input('reason', $defaultReason);
+
+            $originalEmail    = $user->email;
             $originalUsername = $user->username;
-            $originalPhone = $user->phone;
+            $originalPhone    = $user->phone;
 
-            // ✅ FIX: safe decode.
             $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
 
-            $metadata['archival_info'] = [
+            $archivalInfo = [
                 'archived_at'                    => now()->toISOString(),
                 'archived_reason'                => $archivalReason,
                 'archived_by'                    => $currentUser->id,
@@ -2395,8 +2997,24 @@ class UserManagementApiController extends Controller
                 'original_phone'                 => $originalPhone,
                 'original_username'              => $originalUsername,
                 'archival_type'                  => 'manual_admin',
-                'property_count_at_archival'     => 0,
+                'user_type_at_archival'          => $user->type,
+                'property_count_at_archival'     => $isLandlord ? 0 : null,
+                'unassigned_days_at_archival'    => $isTenant && $user->created_at
+                    ? (int) $user->created_at->diffInDays(now())
+                    : null,
                 'days_until_permanent_deletion'  => $permanentDeletionDays,
+            ];
+
+            $metadata['archival_info'] = $archivalInfo;
+            $metadata['archived'] = [
+                'archived_at'       => now()->toISOString(),
+                'archived_by'       => $currentUser->id,
+                'archived_by_name'  => $currentUser->name,
+                'reason'            => $archivalReason,
+                'original_email'    => $originalEmail,
+                'original_username' => $originalUsername,
+                'original_phone'    => $originalPhone,
+                'user_type'         => $user->type,
             ];
 
             $deletionScheduledAt = now()->addDays($permanentDeletionDays);
@@ -2407,29 +3025,92 @@ class UserManagementApiController extends Controller
             ];
 
             $user->update([
-                'status'                 => 'archived',
-                'metadata'               => $metadata,
-                'deletion_scheduled_at'  => $deletionScheduledAt,
-                'deleted_by'             => $currentUser->id,
-                'email'                  => $this->getArchivedEmail($originalEmail, $user->id),
-                'username'               => $this->getArchivedUsername($originalUsername, $user->id),
+                'status'                => 'archived',
+                'metadata'              => $metadata,
+                'deletion_scheduled_at' => $deletionScheduledAt,
+                'deleted_by'            => $currentUser->id,
+                'email'                 => $this->getArchivedEmail($originalEmail, $user->id),
+                'username'              => $this->getArchivedUsername($originalUsername, $user->id),
             ]);
 
             $user->delete();
 
-            Log::info('User archived via API', ['user_id' => $user->id, 'archived_by' => $currentUser->id]);
+            Log::info('User archived via API', [
+                'user_id'               => $user->id,
+                'user_name'             => $user->name,
+                'user_type'             => $user->type,
+                'original_email'        => $originalEmail,
+                'archived_email'        => $user->email,
+                'archived_by'           => $currentUser->id,
+                'reason'                => $archivalReason,
+                'deletion_scheduled_at' => $deletionScheduledAt->toISOString(),
+            ]);
+
+            $this->sendArchivalNotification($user, $archivalReason, $deletionScheduledAt);
+
+            $typeLabel = $isTenant ? 'Tenant' : 'Landlord';
 
             return $this->apiResponse(
                 true,
                 null,
-                "User account archived successfully! The account will be permanently deleted after {$permanentDeletionDays} days.",
+                "{$typeLabel} account archived successfully! The account will be permanently deleted after {$permanentDeletionDays} days.",
                 200,
                 ['deletion_scheduled_at' => $deletionScheduledAt->toISOString()]
             );
 
         } catch (\Exception $e) {
-            Log::error('Failed to archive user via API: ' . $e->getMessage(), ['user_id' => $id]);
+            Log::error('Failed to archive user via API: ' . $e->getMessage(), [
+                'user_id' => $id,
+                'trace'   => $e->getTraceAsString(),
+            ]);
             return $this->apiError('Failed to archive user: ' . $e->getMessage(), 500);
+        }
+    }
+
+    private function sendArchivalNotification(User $user, $reason, $deletionScheduledAt): void
+    {
+        try {
+            $metadata = $this->_decodeMaybeJson($user->metadata) ?? [];
+            $archivalInfo = $metadata['archival_info'] ?? [];
+            $legacyArchived = $metadata['archived'] ?? [];
+
+            $originalEmail = $archivalInfo['original_email']
+                ?? $legacyArchived['original_email']
+                ?? $user->email;
+
+            if (!$originalEmail || !filter_var($originalEmail, FILTER_VALIDATE_EMAIL)) {
+                Log::info('Archival notification skipped — no valid email on file', [
+                    'user_id'   => $user->id,
+                    'user_type' => $user->type,
+                ]);
+                return;
+            }
+
+            $isTenant = $user->type === User::TYPE_TENANT;
+
+            $subject = $isTenant
+                ? 'Your tenant account has been archived'
+                : 'Your landlord account has been archived';
+
+            $body = $isTenant
+                ? "Your tenant account has been archived. Reason: {$reason}\n\n" .
+                  "If you are assigned to a property unit in the future, please contact support."
+                : "Your landlord account has been archived. Reason: {$reason}\n\n" .
+                  "To restore your account, contact support.";
+
+            Log::info('Archival notification prepared', [
+                'user_id'       => $user->id,
+                'user_type'     => $user->type,
+                'email'         => $originalEmail,
+                'subject'       => $subject,
+                'reason'        => $reason,
+                'deletion_date' => $deletionScheduledAt->toISOString(),
+            ]);
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to send archival notification: ' . $e->getMessage(), [
+                'user_id' => $user->id,
+            ]);
         }
     }
 
@@ -2444,9 +3125,17 @@ class UserManagementApiController extends Controller
         }
 
         try {
-            $query = User::whereNotNull('email')
-                ->where('email', '!=', '')
-                ->where('type', '!=', User::TYPE_DEVELOPER);
+            $query = User::with(['emailAccounts' => function ($q) {
+                    $q->orderByDesc('is_primary')
+                      ->orderByRaw("CASE WHEN status = 'verified' THEN 1 ELSE 0 END DESC")
+                      ->orderBy('id');
+                }])
+                ->where('type', '!=', User::TYPE_DEVELOPER)
+                ->where(function ($q) {
+                    $q->whereNotNull('email')
+                      ->where('email', '!=', '')
+                      ->orWhereHas('emailAccounts');
+                });
 
             if ($currentUser->isAdmin() && !$currentUser->isSuperAdmin()) {
                 $query->where('type', '!=', User::TYPE_SUPER_ADMIN);
@@ -2476,31 +3165,72 @@ class UserManagementApiController extends Controller
                 ->limit($limit)
                 ->get();
 
-            return $this->apiResponse(true, $users->map(fn($user) => [
-                'id'           => $user->id,
-                'name'         => $user->name ?? 'Unknown User',
-                'email'        => $user->email,
-                'type'         => $user->type,
-                'type_label'   => $this->getUserTypeLabel($user->type),
-                'is_landlord'  => $user->type === User::TYPE_LANDLORD,
-                'has_photo'    => !empty($user->photo),
-                'photo_url'    => $user->photo_url ?? null,
-                'status'       => $user->status,
-                'status_label' => $this->getStatusLabel($user->status),
-            ]));
+            return $this->apiResponse(true, $users->map(function ($user) {
+                $accounts = $user->emailAccounts ?? collect();
+
+                $sortedAccounts = $accounts->sortByDesc(function ($a) {
+                    $primary  = (int) $a->getRawOriginal('is_primary');
+                    $verified = $a->getRawOriginal('status') === 'verified' ? 1 : 0;
+                    return ($primary * 100) + ($verified * 10);
+                })->values();
+
+                $firstAccount = $sortedAccounts->first();
+
+                $recipientEmail  = null;
+                $recipientSource = null;
+
+                if ($firstAccount) {
+                    $rawEmail = $firstAccount->getRawOriginal('email') ?: $firstAccount->email;
+                    if (!empty($rawEmail)) {
+                        $recipientEmail  = $rawEmail;
+                        $recipientSource = 'linked';
+                    }
+                }
+
+                if (empty($recipientEmail) && !empty($user->email)) {
+                    $recipientEmail  = $user->email;
+                    $recipientSource = 'profile';
+                }
+
+                if (empty($recipientEmail)) {
+                    return null;
+                }
+
+                $accountMeta = $sortedAccounts->map(fn($a) => [
+                    'email'      => $a->getRawOriginal('email') ?: $a->email,
+                    'status'     => $a->getRawOriginal('status') ?: $a->status,
+                    'is_primary' => (bool) $a->getRawOriginal('is_primary'),
+                    'provider'   => $a->getRawOriginal('provider'),
+                ])->all();
+
+                return [
+                    'id'               => $user->id,
+                    'name'             => $user->name ?? 'Unknown User',
+                    'email'            => $user->email,
+                    'type'             => $user->type,
+                    'type_label'       => $this->getUserTypeLabel($user->type),
+                    'is_landlord'      => $user->type === User::TYPE_LANDLORD,
+                    'has_photo'        => !empty($user->photo),
+                    'photo_url'        => $user->photo_url ?? null,
+                    'status'           => $user->status,
+                    'status_label'     => $this->getStatusLabel($user->status),
+                    'recipient_email'  => $recipientEmail,
+                    'recipient_source' => $recipientSource,
+                    'email_accounts'   => $accountMeta,
+                ];
+            })->filter()->values());
 
         } catch (\Exception $e) {
-            Log::error('Error loading users for email composer: ' . $e->getMessage());
+            Log::error('Error loading users for email composer: ' . $e->getMessage(), [
+                'user_id' => $currentUser->id,
+                'trace'   => $e->getTraceAsString(),
+            ]);
             return $this->apiError('An error occurred while loading users: ' . $e->getMessage(), 500);
         }
     }
 
     // ==================== HELPERS ====================
 
-    /**
-     * ✅ Resolve a slug (or a numeric string, for backward compatibility)
-     * into a `User::TYPE_*` integer constant.
-     */
     private function resolveTypeConstant(?string $type): ?int
     {
         if ($type === null || $type === '') {
@@ -2523,22 +3253,6 @@ class UserManagementApiController extends Controller
         return null;
     }
 
-    /**
-     * ✅ THE FIX for the "json_decode(): Argument #1 ($json) must be of type
-     * string, array given" error.
-     *
-     * Laravel auto-decodes `JSON` columns and `array`-cast attributes, so a
-     * value like `$role->pivot->metadata` can arrive as:
-     *   • a JSON string    → decode it
-     *   • an array         → return as-is
-     *   • a stdClass       → cast to array
-     *   • null / empty     → return null
-     *   • malformed JSON   → return null (never throw)
-     *
-     * Calling `json_decode()` directly on an array throws a TypeError, which
-     * was crashing `/api/v1/admin/users/{id}`. This helper makes the pattern
-     * safe everywhere it's used.
-     */
     private function _decodeMaybeJson($value): ?array
     {
         if ($value === null) {
@@ -2550,7 +3264,6 @@ class UserManagementApiController extends Controller
         }
 
         if (is_object($value)) {
-            // stdClass / JsonSerializable → plain array.
             return (array) $value;
         }
 
@@ -2568,7 +3281,6 @@ class UserManagementApiController extends Controller
             }
         }
 
-        // Numbers, booleans, etc. — not valid JSON blobs, return null.
         return null;
     }
 
@@ -2720,6 +3432,16 @@ class UserManagementApiController extends Controller
             }
         }
 
+        if ($user->type === User::TYPE_TENANT) {
+            $approvedUnitCount = \App\Models\PropertyUnit::where('tenant_id', $user->id)
+                ->where('tenant_status', \App\Models\PropertyUnit::TENANT_STATUS_APPROVED)
+                ->count();
+
+            if ($approvedUnitCount > 0) {
+                $critical[] = "{$approvedUnitCount} assigned unit(s)";
+            }
+        }
+
         if ($user->type === User::TYPE_FIELD_AGENT && $user->assignedPlans()->where('status', 'active')->exists()) {
             $critical[] = 'active assignments';
         }
@@ -2778,8 +3500,17 @@ class UserManagementApiController extends Controller
                     return ['id' => $userId, 'success' => true, 'message' => 'Account deleted'];
 
                 case 'send_invitation':
+                    $requestedChannels = $data['invitation_channels'] ?? null;
+
+                    if (empty($requestedChannels)) {
+                        $available = $this->invitationService->getAvailableChannels($user);
+                        $requestedChannels = !empty($available)
+                            ? (array_is_list($available) ? $available : array_keys(array_filter($available)))
+                            : ['sms'];
+                    }
+
                     $result = $this->invitationService->sendInvitation($user, [
-                        'invitation_channels' => $data['invitation_channels'] ?? ['email'],
+                        'invitation_channels' => $requestedChannels,
                         'invitation_type'     => $data['invitation_type'] ?? 'welcome',
                         'custom_message'      => $data['custom_message'] ?? null,
                         'expires_in_days'     => $data['expires_in_days'] ?? 7,
@@ -2801,15 +3532,22 @@ class UserManagementApiController extends Controller
     private function buildSuccessMessage(User $user, ?array $invitationResult): string
     {
         $message = 'User created successfully!';
+
         if ($user->type === User::TYPE_LANDLORD) {
             $message .= ' Landlord role has been automatically assigned.';
         }
+
         if ($user->type === User::TYPE_SANITATION_PERSONNEL && $user->sanitationPersonnel) {
             $message .= " Sanitation personnel created with role: " . ucfirst($user->sanitationPersonnel->role ?? 'worker') . ".";
         }
+
         if ($invitationResult && $invitationResult['success']) {
-            $channels = implode(', ', $invitationResult['channels_successful'] ?? []);
-            $message .= " Invitation sent via {$channels}.";
+            $successful = $invitationResult['channels_successful'] ?? [];
+            if (!empty($successful)) {
+                $message .= " Invitation sent via " . implode(', ', $successful) . ".";
+            } else {
+                $message .= " Invitation processed.";
+            }
             if (!empty($invitationResult['failed_channels'])) {
                 $message .= " Failed channels: " . implode(', ', $invitationResult['failed_channels']) . ".";
             }
@@ -2897,13 +3635,7 @@ class UserManagementApiController extends Controller
             $data = $user->toArray();
         }
 
-        // ✅ Always include the creator in the API response.
-        // Prefer the eager-loaded `creator` relation when present,
-        // fall back to a lazy lookup if it wasn't eager-loaded.
-        $creator = $user->relationLoaded('creator')
-            ? $user->creator
-            : $user->creator;
-
+        $creator = $user->creator;
         if ($creator) {
             $data['creator'] = [
                 'id'    => $creator->id,
@@ -2945,19 +3677,36 @@ class UserManagementApiController extends Controller
                 ];
             }
 
-            $data['recent_invitations'] = $user->invitations()->latest()->limit(5)->get()->map(fn($inv) => [
-                'id'         => $inv->id,
-                'sent_at'    => $inv->created_at->toISOString(),
-                'expires_at' => $inv->expires_at?->toISOString(),
-                // ✅ FIX: safe decode for invitation channels.
-                'channels'   => $this->_decodeMaybeJson($inv->channels) ?? [],
-                'is_valid'   => $inv->isValid(),
-                'used'       => !is_null($inv->used_at),
-            ])->values()->all();
+            $data['recent_invitations'] = $user->invitations()
+                ->latest()
+                ->limit(5)
+                ->get()
+                ->map(function ($inv) {
+                    $isValid = false;
+
+                    if (method_exists($inv, 'isValid')) {
+                        $isValid = (bool) $inv->isValid();
+                    } else {
+                        $status = $inv->status ?? null;
+                        $isTerminal = in_array($status, ['accepted', 'cancelled', 'expired'], true);
+                        $notExpired = empty($inv->expires_at)
+                            || $inv->expires_at->isFuture();
+                        $isValid = !$isTerminal && $notExpired;
+                    }
+
+                    return [
+                        'id'         => $inv->id,
+                        'sent_at'    => $inv->created_at->toISOString(),
+                        'expires_at' => $inv->expires_at?->toISOString(),
+                        'channels'   => $this->_decodeMaybeJson($inv->channels) ?? [],
+                        'is_valid'   => $isValid,
+                        'used'       => !is_null($inv->used_at),
+                    ];
+                })
+                ->values()
+                ->all();
         }
 
-        // ✅ FIX: roles now use `_decodeMaybeJson` for pivot metadata +
-        // permissions_override — this was the exact line that crashed.
         $data['roles'] = $user->roles->map(function ($role) {
             $pivot = $role->pivot ?? null;
 
@@ -3046,9 +3795,28 @@ class UserManagementApiController extends Controller
 
     private function canRestoreUser(User $user): bool
     {
-        return !User::where(function ($q) use ($user) {
-            $q->where('email', $user->email)->orWhere('phone', $user->phone);
-        })->where('id', '!=', $user->id)->exists();
+        $exists = User::query()
+            ->where('id', '!=', $user->id)
+            ->where(function ($q) use ($user) {
+                $hasCondition = false;
+
+                if (!empty($user->email)) {
+                    $q->orWhere('email', $user->email);
+                    $hasCondition = true;
+                }
+
+                if (!empty($user->phone)) {
+                    $q->orWhere('phone', $user->phone);
+                    $hasCondition = true;
+                }
+
+                if (!$hasCondition) {
+                    $q->whereRaw('1 = 0');
+                }
+            })
+            ->exists();
+
+        return !$exists;
     }
 
     private function getArchivedEmail($originalEmail, $userId)

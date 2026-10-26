@@ -2,6 +2,17 @@
 
 @section('title', 'Edit Property')
 
+@php
+    // ✅ NEW: Region list for the region picker
+    if (!isset($regions) || !is_array($regions)) {
+        $regions = config('ghana.regions', [
+            'Ahafo', 'Ashanti', 'Bono', 'Bono East', 'Central', 'Eastern',
+            'Greater Accra', 'North East', 'Northern', 'Oti', 'Savannah',
+            'Upper East', 'Upper West', 'Volta', 'Western', 'Western North',
+        ]);
+    }
+@endphp
+
 @section('content')
 <div class="grid grid-cols-1 gap-6 mb-6">
     <!-- Header Card -->
@@ -123,6 +134,9 @@
                                             data-next-available="{{ $plan->next_available_name ?? $plan->starting_point }}"
                                             data-zone="{{ $plan->zone }}"
                                             data-section="{{ $plan->section }}"
+                                            {{-- ✅ NEW: region/area carried on the plan, for auto-fill --}}
+                                            data-region="{{ $plan->region ?? '' }}"
+                                            data-area="{{ $plan->area ?? '' }}"
                                             data-estimated-houses="{{ $plan->estimated_houses }}"
                                             data-registered-houses="{{ $plan->properties_count ?? 0 }}"
                                             data-plan-status="{{ $plan->status }}"
@@ -523,10 +537,70 @@
                         </div>
                     </div>
 
+                    {{-- ============================================================ --}}
+                    {{-- ✅ NEW: REGIONAL LOCATION (region + area)                    --}}
+                    {{-- Sits ABOVE zone/section so the hierarchy reads top-down:     --}}
+                    {{-- Region → Area → Zone → Section → Block → Street → House      --}}
+                    {{-- ============================================================ --}}
+                    <div class="border rounded p-4" style="border-color: var(--border-color); background-color: var(--bg-secondary);">
+                        <h4 class="text-sm font-semibold mb-3" style="color: var(--text-primary);">
+                            <i class="fas fa-globe-africa mr-1" style="color: var(--primary);"></i>
+                            Regional Location
+                            <span class="text-xs font-normal text-gray-500 ml-1">(where the property sits in the region)</span>
+                        </h4>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {{-- Region --}}
+                            <div>
+                                <label for="region" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                    Region *
+                                </label>
+                                <select name="region" id="region"
+                                        class="w-full p-2 border rounded"
+                                        style="background-color: var(--bg-tertiary); color: var(--text-primary); border-color: var(--border-color);"
+                                        required>
+                                    <option value="">Select Region</option>
+                                    @foreach($regions as $regionOption)
+                                        <option value="{{ $regionOption }}"
+                                                {{ old('region', $property->region) == $regionOption ? 'selected' : '' }}>
+                                            {{ $regionOption }}
+                                        </option>
+                                    @endforeach
+                                </select>
+                                @error('region')
+                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+
+                            {{-- Area / Neighbourhood --}}
+                            <div>
+                                <label for="area" class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                    Area / Neighbourhood *
+                                </label>
+                                <input type="text" name="area" id="area"
+                                       class="w-full p-2 border rounded"
+                                       style="background-color: var(--bg-tertiary); color: var(--text-primary); border-color: var(--border-color);"
+                                       value="{{ old('area', $property->area) }}"
+                                       placeholder="e.g., Madina, East Legon, Tema Community 5"
+                                       maxlength="150"
+                                       required>
+                                <p class="text-xs text-gray-500 mt-1">
+                                    The neighbourhood or suburb within the region where the property is located.
+                                </p>
+                                @error('area')
+                                    <p class="text-red-500 text-sm mt-1">{{ $message }}</p>
+                                @enderror
+                            </div>
+                        </div>
+                    </div>
+                    {{-- ============================================================ --}}
+
                     <!-- Auto-filled Zone and Section -->
                     <div id="auto-filled-fields">
                         <div class="mb-4">
-                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Zone</label>
+                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                Zone <span class="text-xs font-normal text-gray-500">(community-level)</span>
+                            </label>
                             <div class="p-2 border rounded bg-gray-50" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                                 <span id="zone-display" class="text-gray-500">{{ $property->zone ?: 'Select a registration plan' }}</span>
                                 <input type="hidden" name="zone" id="zone" value="{{ old('zone', $property->zone) }}">
@@ -534,7 +608,9 @@
                         </div>
 
                         <div class="mb-4">
-                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Section</label>
+                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                Section <span class="text-xs font-normal text-gray-500">(community-level)</span>
+                            </label>
                             <div class="p-2 border rounded bg-gray-50" style="background-color: var(--bg-secondary); border-color: var(--border-color);">
                                 <span id="section-display" class="text-gray-500">{{ $property->section ?: 'Select a registration plan' }}</span>
                                 <input type="hidden" name="section" id="section" value="{{ old('section', $property->section) }}">
@@ -1858,6 +1934,10 @@ function updateChannelOptions(availableChannels) {
     });
 }
 
+/**
+ * ✅ UPDATED: now includes region + area in the invitation preview
+ * location line.
+ */
 function updateInvitationPreview() {
     const invitationPreview = document.getElementById('invitation-preview');
     const invitationMessage = document.getElementById('invitation-message-preview');
@@ -1872,12 +1952,17 @@ function updateInvitationPreview() {
     const streetName = document.getElementById('street_name')?.value || 'Unknown Street';
     const zone = document.getElementById('zone')?.value || document.getElementById('manual_zone')?.value || 'Unknown Zone';
     const registrationPattern = document.getElementById('registration_pattern')?.value || 'Unknown Pattern';
+
+    // ✅ NEW: region + area in the preview
+    const region = document.getElementById('region')?.value || '';
+    const area   = document.getElementById('area')?.value   || '';
+    const locationBits = [area, zone, streetName, region].filter(Boolean).join(', ');
     
     const message = `Hello ${landlordName}!
 
 Your property has been registered in our system:
 🏠 Property: ${propertyName}
-📍 Location: ${streetName}, ${zone}
+📍 Location: ${locationBits || 'Unknown location'}
 🔢 Registration: ${registrationPattern}
 
 To complete your registration and access your landlord portal, please set your password using the link we've sent you.
@@ -2436,6 +2521,35 @@ function updateZoneAndSection(planOption) {
     if (sectionInput) sectionInput.value = sectionValue || '';
 }
 
+// ==================== ✅ NEW: REGION / AREA AUTO-FILL ====================
+
+/**
+ * Inherit region/area from the selected registration plan when available.
+ * Only fills fields that are still blank so manual edits aren't clobbered.
+ */
+function applyFieldAgentRegionAreaFromPlan(planOption) {
+    if (!planOption || !planOption.value) return;
+
+    const planRegion = (planOption.dataset.region || '').trim();
+    const planArea   = (planOption.dataset.area   || '').trim();
+
+    const regionSelect = document.getElementById('region');
+    const areaInput    = document.getElementById('area');
+
+    if (planRegion && regionSelect && !regionSelect.value) {
+        const match = Array.from(regionSelect.options).find(
+            opt => opt.value.toLowerCase() === planRegion.toLowerCase()
+        );
+        if (match) {
+            regionSelect.value = match.value;
+        }
+    }
+
+    if (planArea && areaInput && !areaInput.value) {
+        areaInput.value = planArea;
+    }
+}
+
 function updateSequenceTypeInfo(sequenceType) {
     const sequenceTypeInfo = document.getElementById('sequence-type-info');
     const sequenceTypeText = document.getElementById('sequence-type-text');
@@ -2648,11 +2762,18 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Listen to property changes for invitation preview
-    ['property_name', 'street_name', 'registration_pattern'].forEach(fieldId => {
+    // ✅ NEW: include region/area in the invitation-preview refresh triggers
+    ['property_name', 'street_name', 'registration_pattern', 'region', 'area'].forEach(fieldId => {
         const field = document.getElementById(fieldId);
         if (field) {
             field.addEventListener('input', function() {
+                const sendInvitationYesLocal = document.getElementById('send_invitation_yes');
+                if (sendInvitationYesLocal && sendInvitationYesLocal.checked) {
+                    updateInvitationPreview();
+                }
+            });
+            // <select> fires 'change', not 'input' in older browsers
+            field.addEventListener('change', function() {
                 const sendInvitationYesLocal = document.getElementById('send_invitation_yes');
                 if (sendInvitationYesLocal && sendInvitationYesLocal.checked) {
                     updateInvitationPreview();
@@ -2686,6 +2807,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 updatePlanProgress(selectedOption);
                 updateZoneAndSection(selectedOption);
                 updateSequenceTypeInfo(selectedOption.dataset.sequenceType);
+
+                // ✅ NEW: inherit region/area from the plan when available
+                applyFieldAgentRegionAreaFromPlan(selectedOption);
             } else {
                 const registrationPatternInput = document.getElementById('registration_pattern');
                 const refreshPatternButton = document.getElementById('refresh-pattern');
@@ -2851,7 +2975,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Please enter a property name.');
                 return false;
             }
-            
+
+            // ✅ NEW: require region + area
+            const regionSelect = document.getElementById('region');
+            const areaInput   = document.getElementById('area');
+
+            if (!regionSelect?.value) {
+                e.preventDefault();
+                alert('Please select the region where the property is located.');
+                if (regionSelect) regionSelect.focus();
+                return false;
+            }
+
+            if (!areaInput?.value?.trim()) {
+                e.preventDefault();
+                alert('Please enter the area/neighbourhood of the property.');
+                if (areaInput) areaInput.focus();
+                return false;
+            }
+
             const manualLocationContainerCheck = document.getElementById('manual-location-container');
             const zoneInputCheck = document.getElementById('zone');
             const manualZoneInputCheck = document.getElementById('manual_zone');

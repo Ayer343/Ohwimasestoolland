@@ -1,4 +1,4 @@
-{{-- ⭐ ADDED: Defensive defaults so the view never breaks if $systemSettings or $stats are missing --}}
+{{-- ⭐ Defensive defaults so the view never breaks if $systemSettings or $stats are missing --}}
 @php
     if (!isset($systemSettings)) {
         $systemSettings = (object) [
@@ -33,21 +33,214 @@
             $faviconUrl = null;
         }
     }
+
+    // ============================================================
+    // ⭐ Homepage content config (set via System Settings → Homepage Content)
+    // ============================================================
+    $homeConfig = method_exists($systemSettings, 'getHomepageConfig')
+        ? $systemSettings->getHomepageConfig()
+        : [
+            'hero' => [
+                'title'         => null,
+                'subtitle'      => 'Your trusted platform for property registration and estate management. Register your land or property today and join our growing community.',
+                'background'    => null,
+                'cta_primary'   => 'Register Your Land/Property',
+                'cta_secondary' => 'Share Your Experience',
+            ],
+            'sections' => array_fill_keys([
+                'how_it_works','services','benefits','stats',
+                'testimonials','payment_methods','faq','cta','contact',
+            ], true),
+            'social'  => array_fill_keys([
+                'facebook','twitter','instagram','whatsapp','linkedin','youtube','tiktok',
+            ], ''),
+            'contact' => [
+                'email'   => null,
+                'phone'   => null,
+                'address' => null,
+                'hours'   => "Mon-Fri: 8:00 AM - 5:00 PM\nSat: 9:00 AM - 1:00 PM",
+            ],
+            'footer'  => ['copyright' => null],
+            'theme'   => [
+                'preset'  => 'default',
+                'colors'  => ['primary' => null, 'secondary' => null, 'accent' => null, 'hero_bg' => null, 'hero_text' => '#ffffff'],
+                'fonts'   => ['family' => 'system', 'base_size' => 16, 'heading_weight' => '700'],
+                'hero'    => ['overlay_opacity' => 0.35, 'text_align' => 'center', 'height' => 'standard'],
+                'layout'  => ['container_width' => 1200, 'section_padding' => 'normal', 'radius_style' => 'rounded'],
+                'buttons' => ['shape' => 'rounded', 'shadow' => true],
+            ],
+        ];
+
+    $heroImageUrl = method_exists($systemSettings, 'getHomepageHeroImageUrl')
+        ? $systemSettings->getHomepageHeroImageUrl()
+        : null;
+
+    // Effective hero values (config → system fallback)
+    $heroTitle        = $homeConfig['hero']['title']        ?: ($systemSettings->system_name ?? 'Community Portal');
+    $heroSubtitle     = $homeConfig['hero']['subtitle']     ?: 'Your trusted platform for property registration and estate management. Register your land or property today and join our growing community.';
+    $heroPrimaryCta   = $homeConfig['hero']['cta_primary']  ?: 'Register Your Land/Property';
+    $heroSecondaryCta = $homeConfig['hero']['cta_secondary']?: 'Share Your Experience';
+
+    // Background: use uploaded image if present, else the default Unsplash photo
+    $heroBgUrl = $heroImageUrl
+        ?: 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?ixlib=rb-4.0.3&auto=format&fit=crop&w=1773&q=80';
+
+    // Contact fallbacks
+    $contactEmail   = $homeConfig['contact']['email']   ?: ($systemSettings->system_email  ?? 'support@hilltop.com');
+    $contactPhone   = $homeConfig['contact']['phone']   ?: ($systemSettings->system_phone  ?? '+233 123 456 789');
+    $contactAddress = $homeConfig['contact']['address'] ?: ('Estate Office, ' . ($systemSettings->system_name ?? 'Community Portal'));
+    $contactHours   = $homeConfig['contact']['hours']   ?: "Mon-Fri: 8:00 AM - 5:00 PM\nSat: 9:00 AM - 1:00 PM";
+
+    // Footer copyright
+    $footerCopyright = $homeConfig['footer']['copyright']
+        ?: ('© ' . date('Y') . ' ' . ($systemSettings->system_name ?? 'Community Portal') . '. All rights reserved.');
+
+    // Which sections are visible?
+    $sectionsOn = $homeConfig['sections'] ?? [];
+
+    // Social links (non-empty only)
+    $socialLinks = array_filter($homeConfig['social'] ?? [], fn($v) => !empty($v));
+
+    // Meta for rendering social icons
+    $socialMeta = [
+        'facebook'  => ['fab fa-facebook-f', 'Facebook',  '#1877F2'],
+        'twitter'   => ['fab fa-x-twitter',  'Twitter',   '#000000'],
+        'instagram' => ['fab fa-instagram',  'Instagram', '#E4405F'],
+        'whatsapp'  => ['fab fa-whatsapp',   'WhatsApp',  '#25D366'],
+        'linkedin'  => ['fab fa-linkedin-in','LinkedIn',  '#0A66C2'],
+        'youtube'   => ['fab fa-youtube',    'YouTube',   '#FF0000'],
+        'tiktok'    => ['fab fa-tiktok',     'TikTok',    '#000000'],
+    ];
+
+    // Is this a preview request from the admin editor?
+    $isPreviewMode = $preview ?? request()->boolean('preview');
+
+    // ============================================================
+    // 📢 AD SPACE — resolve featured ads
+    // ------------------------------------------------------------
+    // The HomeController passes $featuredAds (a collection of AdCampaign
+    // models with unit.photos, unit.property, landlord eager-loaded).
+    // In preview mode, we show a demo card so the admin can see the
+    // layout even if no campaigns exist yet.
+    // ============================================================
+    $featuredAds = $featuredAds ?? collect();
+
+    // In preview mode, if no ads exist, fabricate one placeholder so
+    // the admin can see the section. Not shown on the real homepage.
+    if ($isPreviewMode && $featuredAds->isEmpty()) {
+        $featuredAds = collect([(object) [
+            'uuid'         => 'preview-demo',
+            'unit'         => (object) [
+                'unit_name'    => 'Sample 2-Bedroom Apartment',
+                'unit_number'  => 'A-101',
+                'monthly_rent' => 1500,
+                'bedrooms'     => 2,
+                'bathrooms'    => 2,
+                'photos'       => collect(),
+                'property'     => (object) [
+                    'address' => 'East Legon, Accra',
+                    'property_name' => 'Hilltop Gardens',
+                ],
+            ],
+            'landlord'     => (object) ['name' => 'Sample Landlord'],
+            'plan_name'    => 'Standard Monthly',
+            'ends_at'      => now()->addDays(20),
+            'is_preview'   => true,
+        ]]);
+    }
+
+    $hasFeaturedAds = $featuredAds->isNotEmpty();
+
+    // ============================================================
+    // 🎨 THEME CUSTOMIZATION — resolve all values
+    // ============================================================
+    $theme   = $homeConfig['theme']   ?? [];
+    $tColors = $theme['colors']       ?? [];
+    $tFonts  = $theme['fonts']        ?? [];
+    $tHero   = $theme['hero']         ?? [];
+    $tLayout = $theme['layout']       ?? [];
+    $tBtn    = $theme['buttons']      ?? [];
+
+    // Hero height map
+    $heroHeightMap = [
+        'compact'  => '55vh',
+        'standard' => '75vh',
+        'tall'     => '90vh',
+        'full'     => '100vh',
+    ];
+    $heroHeight = $heroHeightMap[$tHero['height'] ?? 'standard'] ?? '75vh';
+
+    // Section padding map
+    $sectionPaddingMap = [
+        'compact'  => '2.5rem',
+        'normal'   => '4rem',
+        'spacious' => '6rem',
+    ];
+    $sectionPadding = $sectionPaddingMap[$tLayout['section_padding'] ?? 'normal'] ?? '4rem';
+
+    // Card radius map
+    $radiusMap = [
+        'sharp'   => '0px',
+        'rounded' => '0.75rem',
+        'pill'    => '2rem',
+    ];
+    $radius = $radiusMap[$tLayout['radius_style'] ?? 'rounded'] ?? '0.75rem';
+
+    // Button radius map
+    $btnRadiusMap = [
+        'rounded' => '0.5rem',
+        'pill'    => '50px',
+        'square'  => '0px',
+    ];
+    $btnRadius = $btnRadiusMap[$tBtn['shape'] ?? 'rounded'] ?? '0.5rem';
+
+    // Font stacks
+    $fontStacks = [
+        'system'   => "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+        'inter'    => "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        'poppins'  => "'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        'roboto'   => "'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+        'playfair' => "'Playfair Display', Georgia, serif",
+    ];
+    $fontStack = $fontStacks[$tFonts['family'] ?? 'system'] ?? $fontStacks['system'];
+
+    // Google Fonts to load (skip if system)
+    $googleFontMap = [
+        'inter'    => 'Inter:wght@400;500;600;700;800',
+        'poppins'  => 'Poppins:wght@400;500;600;700;800',
+        'roboto'   => 'Roboto:wght@400;500;700;900',
+        'playfair' => 'Playfair+Display:wght@400;600;700;900',
+    ];
+    $googleFont = $googleFontMap[$tFonts['family'] ?? 'system'] ?? null;
+
+    // Effective theme values
+    $cPrimary   = !empty($tColors['primary'])   ? $tColors['primary']   : null;
+    $cSecondary = !empty($tColors['secondary']) ? $tColors['secondary'] : null;
+    $cAccent    = !empty($tColors['accent'])    ? $tColors['accent']    : null;
+    $cHeroBg    = !empty($tColors['hero_bg'])   ? $tColors['hero_bg']   : null;
+    $cHeroText  = !empty($tColors['hero_text']) ? $tColors['hero_text'] : '#ffffff';
+
+    $heroOverlayOpacity = (float) ($tHero['overlay_opacity'] ?? 0.35);
+    $heroTextAlign      = $tHero['text_align'] ?? 'center';
+    $containerWidth     = (int)   ($tLayout['container_width'] ?? 1200);
+    $baseFontSize       = (int)   ($tFonts['base_size']       ?? 16);
+    $headingWeight      = $tFonts['heading_weight'] ?? '700';
+    $buttonShadow       = (bool)  ($tBtn['shadow'] ?? true);
 @endphp
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    
+
     <!-- CSRF Token -->
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    
+
     <!-- SEO Meta Tags -->
     <meta name="description" content="{{ $systemSettings->system_name ?? 'Community Portal' }} - Register your property, manage estate services, and connect with your community">
     <meta name="keywords" content="property registration, estate management, community portal, land registration">
     <meta name="author" content="{{ $systemSettings->system_name ?? 'Community Portal' }}">
-    
+
     <!-- ============ FAVICON ============ -->
     @if($faviconUrl)
         <link rel="icon" href="{{ $faviconUrl }}" type="image/x-icon">
@@ -60,7 +253,7 @@
         <link rel="icon" href="{{ asset('favicon.ico') }}" type="image/x-icon">
         <link rel="shortcut icon" href="{{ asset('favicon.ico') }}" type="image/x-icon">
     @endif
-    
+
     <!-- ============ CRITICAL: Theme initialization - PREVENTS FLASH ============ -->
     <script>
         (function() {
@@ -84,7 +277,7 @@
             }
         })();
     </script>
-    
+
     <!-- ============ CRITICAL: Inline CSS to prevent flash ============ -->
     <style>
         .theme-loading *,
@@ -105,7 +298,7 @@
             background-color: #ffffff !important;
         }
         [x-cloak] { display: none !important; }
-        
+
         /* CSS Variables for themes */
         [data-theme="light"] {
             --bg-primary: #ffffff;
@@ -133,7 +326,7 @@
             --radius-lg: 0.75rem;
             --touch-target-size: 44px;
         }
-        
+
         [data-theme="dark"] {
             --bg-primary: #1a1a2e;
             --bg-secondary: #16213e;
@@ -161,13 +354,13 @@
             --touch-target-size: 44px;
         }
     </style>
-    
+
     <title>{{ $systemSettings->system_name ?? 'Community Portal' }} | Property Registration & Estate Management</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
+
     <!-- Main Stylesheet -->
     <link rel="stylesheet" href="{{ asset('css/welcome.css') }}">
-    
+
     <style>
         /* ============================================
            RESET & BASE STYLES
@@ -178,12 +371,12 @@
             box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
         }
-        
+
         html {
             scroll-behavior: smooth;
             -webkit-text-size-adjust: 100%;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background-color: var(--bg-primary);
@@ -192,17 +385,17 @@
             min-height: 100vh;
             overflow-x: hidden;
         }
-        
+
         a, button, input, select, textarea {
             touch-action: manipulation;
         }
-        
+
         button {
             cursor: pointer;
             -webkit-touch-callout: none;
             user-select: none;
         }
-        
+
         /* ============================================
            CONTAINER
            ============================================ */
@@ -212,7 +405,7 @@
             padding: 0 1rem;
             width: 100%;
         }
-        
+
         /* ============================================
            HEADER - FULLY RESPONSIVE
            ============================================ */
@@ -226,11 +419,11 @@
             backdrop-filter: blur(10px);
             background: rgba(var(--card-bg-rgb, 255, 255, 255), 0.95);
         }
-        
+
         [data-theme="dark"] header {
             background: rgba(30, 41, 59, 0.95);
         }
-        
+
         .header-container {
             display: flex;
             justify-content: space-between;
@@ -238,7 +431,7 @@
             gap: 0.75rem;
             flex-wrap: wrap;
         }
-        
+
         .logo {
             display: flex;
             align-items: center;
@@ -251,23 +444,23 @@
             min-height: var(--touch-target-size);
             padding: 0.25rem 0;
         }
-        
+
         .logo i {
             font-size: 1.5rem;
             color: var(--primary);
         }
-        
+
         .logo-text {
             white-space: nowrap;
         }
-        
+
         .logo-image {
             height: 40px;
             width: auto;
             max-width: 150px;
             object-fit: contain;
         }
-        
+
         .mobile-menu-btn {
             display: none;
             background: none;
@@ -281,16 +474,16 @@
             transition: background 0.2s ease;
             touch-action: manipulation;
         }
-        
+
         .mobile-menu-btn:active {
             background: var(--bg-secondary);
         }
-        
+
         nav {
             display: flex;
             align-items: center;
         }
-        
+
         nav ul {
             display: flex;
             align-items: center;
@@ -298,12 +491,12 @@
             list-style: none;
             flex-wrap: wrap;
         }
-        
+
         nav ul li {
             display: flex;
             align-items: center;
         }
-        
+
         nav ul li a {
             display: inline-flex;
             align-items: center;
@@ -318,16 +511,16 @@
             min-height: var(--touch-target-size);
             touch-action: manipulation;
         }
-        
+
         nav ul li a:hover {
             background: var(--bg-secondary);
             color: var(--primary);
         }
-        
+
         nav ul li a:active {
             transform: scale(0.96);
         }
-        
+
         .login-btn {
             background: linear-gradient(135deg, var(--primary), var(--secondary));
             color: white !important;
@@ -336,16 +529,16 @@
             font-weight: 600 !important;
             min-height: var(--touch-target-size);
         }
-        
+
         .login-btn:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(var(--primary-rgb), 0.3);
         }
-        
+
         .login-btn:active {
             transform: scale(0.96);
         }
-        
+
         .theme-toggle {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
@@ -361,23 +554,23 @@
             justify-content: center;
             touch-action: manipulation;
         }
-        
+
         .theme-toggle:active {
             transform: scale(0.95);
         }
-        
+
         .theme-toggle i {
             font-size: 1rem;
         }
-        
+
         .theme-toggle .fa-sun { color: #f39c12; }
         .theme-toggle .fa-moon { color: #8b5cf6; }
-        
+
         [data-theme="light"] .theme-toggle .fa-moon { display: inline-block; }
         [data-theme="light"] .theme-toggle .fa-sun { display: none; }
         [data-theme="dark"] .theme-toggle .fa-sun { display: inline-block; }
         [data-theme="dark"] .theme-toggle .fa-moon { display: none; }
-        
+
         .mobile-menu-overlay {
             display: none;
             position: fixed;
@@ -389,11 +582,27 @@
             z-index: 998;
             touch-action: none;
         }
-        
+
         .mobile-menu-overlay.active {
             display: block;
         }
-        
+
+        /* ============================================
+           PREVIEW MODE BANNER (shown only when ?preview=1)
+           ============================================ */
+        .preview-mode-banner {
+            background: linear-gradient(135deg, #f59e0b, #f97316);
+            color: #fff;
+            text-align: center;
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 101;
+        }
+        .preview-mode-banner i { margin-right: 0.4rem; }
+
         /* ============================================
            HERO SECTION - RESPONSIVE
            ============================================ */
@@ -407,7 +616,7 @@
             text-align: center;
             padding: 3rem 1rem;
         }
-        
+
         .hero::before {
             content: '';
             position: absolute;
@@ -415,25 +624,25 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background-image: url('https://images.unsplash.com/photo-1560518883-ce09059eeffa?ixlib=rb-4.0.3&auto=format&fit=crop&w=1773&q=80');
+            background-image: url('{{ $heroBgUrl }}');
             background-size: cover;
             background-position: center;
             background-repeat: no-repeat;
             opacity: 0.35;
             z-index: 0;
         }
-        
+
         [data-theme="dark"] .hero::before {
             opacity: 0.25;
         }
-        
+
         .hero-content {
             position: relative;
             z-index: 1;
             max-width: 800px;
             width: 100%;
         }
-        
+
         .hero-content h1 {
             font-size: clamp(2rem, 6vw, 3.8rem);
             font-weight: 700;
@@ -444,7 +653,7 @@
             margin-bottom: 1rem;
             line-height: 1.2;
         }
-        
+
         .hero-content p {
             font-size: clamp(1rem, 2vw, 1.3rem);
             color: rgba(255, 255, 255, 0.9);
@@ -452,7 +661,7 @@
             margin: 0 auto 2rem;
             padding: 0 1rem;
         }
-        
+
         .hero-buttons {
             display: flex;
             flex-wrap: wrap;
@@ -460,14 +669,14 @@
             justify-content: center;
             padding: 0 0.5rem;
         }
-        
+
         .hero-buttons .btn {
             min-height: var(--touch-target-size);
             min-width: 200px;
             padding: 0.75rem 1.5rem;
             font-size: clamp(0.9rem, 1.5vw, 1.1rem);
         }
-        
+
         /* ============================================
            BUTTONS - LARGE TOUCH TARGETS
            ============================================ */
@@ -490,53 +699,53 @@
             -webkit-touch-callout: none;
             user-select: none;
         }
-        
+
         .btn:active {
             transform: scale(0.96) !important;
         }
-        
+
         .btn-primary {
             background: linear-gradient(135deg, var(--primary), var(--secondary));
             color: white;
         }
-        
+
         .btn-primary:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(var(--primary-rgb), 0.3);
         }
-        
+
         .btn-primary:disabled {
             opacity: 0.6;
             cursor: not-allowed;
             transform: none !important;
         }
-        
+
         .btn-secondary {
             background: var(--bg-secondary);
             color: var(--text-primary);
             border: 1px solid var(--border-color);
         }
-        
+
         .btn-secondary:hover {
             background: var(--border-color);
         }
-        
+
         .btn-outline {
             background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-primary);
         }
-        
+
         .btn-outline:hover {
             background: var(--bg-secondary);
         }
-        
+
         .btn-sm {
             padding: 0.4rem 0.8rem;
             font-size: 0.85rem;
             min-height: 36px;
         }
-        
+
         .register-btn-large {
             padding: 0.75rem 2rem;
             font-size: 1.1rem;
@@ -547,12 +756,12 @@
             min-height: var(--touch-target-size);
             min-width: 220px;
         }
-        
+
         .register-btn-large:hover {
             transform: translateY(-3px);
             box-shadow: 0 8px 25px rgba(var(--primary-rgb), 0.4);
         }
-        
+
         .btn-modern {
             background: linear-gradient(135deg, var(--primary), var(--secondary));
             color: white;
@@ -562,7 +771,7 @@
             min-height: var(--touch-target-size);
             min-width: 200px;
         }
-        
+
         .testimonial-form-btn {
             background: rgba(255, 255, 255, 0.15);
             backdrop-filter: blur(10px);
@@ -571,43 +780,43 @@
             min-height: var(--touch-target-size);
             min-width: 200px;
         }
-        
+
         .testimonial-form-btn:hover {
             background: rgba(255, 255, 255, 0.25);
         }
-        
+
         /* ============================================
            SECTIONS - RESPONSIVE
            ============================================ */
         section {
             padding: 4rem 0;
         }
-        
+
         .section-title {
             text-align: center;
             margin-bottom: 3rem;
         }
-        
+
         .section-title h2 {
             font-size: clamp(1.8rem, 4vw, 2.8rem);
             font-weight: 700;
             color: var(--text-primary);
             margin-bottom: 0.5rem;
         }
-        
+
         .section-title p {
             font-size: clamp(0.95rem, 1.5vw, 1.2rem);
             color: var(--text-secondary);
             max-width: 600px;
             margin: 0 auto;
         }
-        
+
         .features-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 2rem;
         }
-        
+
         .feature-card {
             background: var(--card-bg);
             border-radius: var(--radius-lg);
@@ -617,38 +826,38 @@
             transition: all 0.3s ease;
             min-height: 220px;
         }
-        
+
         .feature-card:hover {
             transform: translateY(-8px);
             box-shadow: var(--shadow-lg);
         }
-        
+
         .feature-card:active {
             transform: scale(0.98);
         }
-        
+
         .feature-card i {
             font-size: 2.5rem;
             color: var(--primary);
             margin-bottom: 1rem;
         }
-        
+
         .feature-card h3 {
             font-size: 1.2rem;
             margin-bottom: 0.5rem;
         }
-        
+
         .feature-card p {
             color: var(--text-secondary);
             font-size: 0.9rem;
         }
-        
+
         .benefits-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 2rem;
         }
-        
+
         .benefit-item {
             text-align: center;
             padding: 2rem 1.5rem;
@@ -658,32 +867,32 @@
             transition: all 0.3s ease;
             min-height: 200px;
         }
-        
+
         .benefit-item:hover {
             transform: translateY(-5px);
             border-color: var(--primary);
         }
-        
+
         .benefit-item:active {
             transform: scale(0.98);
         }
-        
+
         .benefit-item i {
             font-size: 2.5rem;
             color: var(--primary);
             margin-bottom: 1rem;
         }
-        
+
         .benefit-item h3 {
             font-size: 1.2rem;
             margin-bottom: 0.5rem;
         }
-        
+
         .benefit-item p {
             color: var(--text-secondary);
             font-size: 0.9rem;
         }
-        
+
         .step-circle {
             width: 60px;
             height: 60px;
@@ -699,7 +908,7 @@
             min-width: 60px;
             min-height: 60px;
         }
-        
+
         /* ============================================
            STATS SECTION - RESPONSIVE
            ============================================ */
@@ -708,7 +917,7 @@
             background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
             padding: 4rem 0;
         }
-        
+
         .stats::before {
             content: '';
             position: absolute;
@@ -716,7 +925,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background-image: url('https://images.unsplash.com/photo-1560518883-ce09059eeffa?ixlib=rb-4.0.3&auto=format&fit=crop&w=1773&q=80');
+            background-image: url('{{ $heroBgUrl }}');
             background-size: cover;
             background-position: center;
             background-repeat: no-repeat;
@@ -724,22 +933,22 @@
             opacity: 0.08;
             z-index: 0;
         }
-        
+
         [data-theme="dark"] .stats::before {
             opacity: 0.05;
         }
-        
+
         .stats .container {
             position: relative;
             z-index: 1;
         }
-        
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 1.5rem;
         }
-        
+
         .stat-item {
             text-align: center;
             padding: 2rem 1rem;
@@ -749,28 +958,28 @@
             transition: all 0.3s ease;
             min-height: 160px;
         }
-        
+
         .stat-item:active {
             transform: scale(0.98);
         }
-        
+
         .stat-item i {
             font-size: 2.5rem;
             color: var(--primary);
             margin-bottom: 0.5rem;
         }
-        
+
         .stat-number {
             font-size: clamp(2rem, 4vw, 3rem);
             font-weight: 700;
             color: var(--primary);
         }
-        
+
         .stat-item p {
             color: var(--text-secondary);
             font-size: 0.9rem;
         }
-        
+
         /* ============================================
            TESTIMONIALS - RESPONSIVE
            ============================================ */
@@ -780,7 +989,7 @@
             padding: 1rem 0;
             margin: 0 -0.5rem;
         }
-        
+
         .testimonials-track {
             display: flex;
             gap: 1.5rem;
@@ -788,12 +997,12 @@
             will-change: transform;
             padding: 0.5rem 0;
         }
-        
+
         .testimonial-slide {
             flex: 0 0 calc(33.333% - 1rem);
             min-width: calc(33.333% - 1rem);
         }
-        
+
         .testimonial-card {
             background: var(--card-bg);
             padding: 1.5rem;
@@ -804,24 +1013,24 @@
             display: flex;
             flex-direction: column;
         }
-        
+
         .testimonial-card:hover {
             transform: translateY(-5px);
             box-shadow: var(--shadow-lg);
             border-color: var(--primary);
         }
-        
+
         .testimonial-card:active {
             transform: scale(0.98);
         }
-        
+
         .testimonial-rating {
             color: #f39c12;
             margin-bottom: 0.75rem;
             font-size: 0.9rem;
             letter-spacing: 2px;
         }
-        
+
         .testimonial-content {
             font-style: italic;
             margin-bottom: 1rem;
@@ -829,7 +1038,7 @@
             flex-grow: 1;
             font-size: 0.95rem;
         }
-        
+
         .testimonial-author {
             display: flex;
             align-items: center;
@@ -838,7 +1047,7 @@
             padding-top: 1rem;
             border-top: 1px solid var(--border-color);
         }
-        
+
         .author-avatar {
             width: 48px;
             height: 48px;
@@ -853,22 +1062,22 @@
             font-size: 1.1rem;
             flex-shrink: 0;
         }
-        
+
         .author-info {
             flex: 1;
             min-width: 0;
         }
-        
+
         .author-name {
             font-weight: 600;
             font-size: 0.95rem;
         }
-        
+
         .author-role {
             font-size: 0.8rem;
             color: var(--text-secondary);
         }
-        
+
         .carousel-btn {
             position: absolute;
             top: 50%;
@@ -888,19 +1097,19 @@
             min-width: 44px;
             min-height: 44px;
         }
-        
+
         .carousel-btn:active {
             transform: translateY(-50%) scale(0.92);
         }
-        
+
         .carousel-btn.prev {
             left: -8px;
         }
-        
+
         .carousel-btn.next {
             right: -8px;
         }
-        
+
         .carousel-dots {
             display: flex;
             justify-content: center;
@@ -908,7 +1117,7 @@
             margin-top: 2rem;
             flex-wrap: wrap;
         }
-        
+
         .carousel-dot {
             width: 12px;
             height: 12px;
@@ -920,29 +1129,286 @@
             min-width: 12px;
             min-height: 12px;
         }
-        
+
         .carousel-dot:active {
             transform: scale(0.8);
         }
-        
+
         .carousel-dot.active {
             background: var(--primary);
             width: 32px;
             border-radius: 6px;
         }
-        
+
         .carousel-status {
             text-align: center;
             margin-top: 1rem;
             font-size: 0.85rem;
             color: var(--text-secondary);
         }
-        
+
         .share-btn-container {
             text-align: center;
             margin-top: 2rem;
         }
-        
+
+        /* ============================================
+           📢 SPONSORED / FEATURED PROPERTIES
+           ============================================ */
+        .featured-ads-section {
+            background: var(--bg-secondary);
+            position: relative;
+        }
+
+        .featured-ads-header {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 2.5rem;
+        }
+
+        .featured-ads-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.35rem 0.9rem;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: rgba(var(--warning-rgb), 0.15);
+            color: var(--warning);
+            border: 1px solid rgba(var(--warning-rgb), 0.3);
+            margin-bottom: 0.75rem;
+        }
+
+        .featured-ads-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.75rem;
+        }
+
+        .ad-card {
+            background: var(--card-bg);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .ad-card:hover {
+            transform: translateY(-6px);
+            box-shadow: var(--shadow-lg);
+            border-color: var(--primary);
+        }
+
+        .ad-card__media {
+            position: relative;
+            aspect-ratio: 16 / 10;
+            width: 100%;
+            overflow: hidden;
+            background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.08), rgba(var(--secondary-rgb), 0.08));
+        }
+
+        .ad-card__image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.4s ease;
+        }
+
+        .ad-card:hover .ad-card__image {
+            transform: scale(1.05);
+        }
+
+        .ad-card__placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            font-size: 2.75rem;
+            opacity: 0.9;
+        }
+
+        .ad-card__badge {
+            position: absolute;
+            top: 0.75rem;
+            left: 0.75rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.3rem 0.7rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            background: rgba(var(--warning-rgb), 0.95);
+            color: #1a1a2e;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(4px);
+        }
+
+        .ad-card__photo-count {
+            position: absolute;
+            top: 0.75rem;
+            right: 0.75rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.3rem 0.65rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            backdrop-filter: blur(4px);
+        }
+
+        .ad-card__body {
+            padding: 1.15rem 1.25rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+
+        .ad-card__title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 0.35rem;
+            line-height: 1.3;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        .ad-card__location {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin-bottom: 0.9rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ad-card__location i {
+            flex-shrink: 0;
+        }
+
+        .ad-card__meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+            padding-top: 0.9rem;
+            border-top: 1px solid var(--border-color);
+            margin-bottom: 1rem;
+        }
+
+        .ad-card__price {
+            display: flex;
+            align-items: baseline;
+            gap: 0.25rem;
+        }
+
+        .ad-card__price-amount {
+            font-size: 1.35rem;
+            font-weight: 800;
+            color: var(--primary);
+            line-height: 1;
+        }
+
+        .ad-card__price-suffix {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .ad-card__specs {
+            display: flex;
+            gap: 0.75rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .ad-card__specs span {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .ad-card__cta {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.7rem 1rem;
+            border-radius: var(--radius-md);
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            font-weight: 600;
+            font-size: 0.9rem;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            min-height: var(--touch-target-size);
+            margin-top: auto;
+        }
+
+        .ad-card__cta:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(var(--primary-rgb), 0.35);
+        }
+
+        .ad-card__cta:active {
+            transform: scale(0.97);
+        }
+
+        .ad-card--preview {
+            border-style: dashed;
+            border-width: 2px;
+            opacity: 0.95;
+        }
+
+        .ad-card--preview::after {
+            content: "PREVIEW";
+            position: absolute;
+            top: 0.75rem;
+            right: 0.75rem;
+            padding: 0.2rem 0.55rem;
+            border-radius: 4px;
+            background: rgba(var(--info-rgb), 0.9);
+            color: white;
+            font-size: 0.65rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            z-index: 2;
+        }
+
+        .featured-ads-footer {
+            text-align: center;
+            margin-top: 2.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px dashed var(--border-color);
+        }
+
+        .featured-ads-footer p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+        }
+
         /* ============================================
            PAYMENT METHODS - RESPONSIVE
            ============================================ */
@@ -951,7 +1417,7 @@
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 1.5rem;
         }
-        
+
         .payment-method {
             text-align: center;
             padding: 2rem 1rem;
@@ -961,27 +1427,27 @@
             transition: all 0.3s ease;
             min-height: 140px;
         }
-        
+
         .payment-method:active {
             transform: scale(0.98);
         }
-        
+
         .payment-method i {
             font-size: 2.5rem;
             color: var(--primary);
             margin-bottom: 0.5rem;
         }
-        
+
         .payment-method h3 {
             font-size: 1.1rem;
             margin-bottom: 0.25rem;
         }
-        
+
         .payment-method p {
             color: var(--text-secondary);
             font-size: 0.85rem;
         }
-        
+
         /* ============================================
            CTA SECTION
            ============================================ */
@@ -991,30 +1457,30 @@
             text-align: center;
             padding: 4rem 1.5rem;
         }
-        
+
         .cta .section-title h2 {
             color: white;
         }
-        
+
         .cta .section-title p {
             color: rgba(255, 255, 255, 0.9);
         }
-        
+
         .cta .btn {
             background: white;
             color: var(--primary);
             border: none;
         }
-        
+
         .cta .btn:hover {
             transform: translateY(-3px);
             box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
         }
-        
+
         .cta .btn:active {
             transform: scale(0.96);
         }
-        
+
         /* ============================================
            FOOTER - RESPONSIVE
            ============================================ */
@@ -1023,21 +1489,21 @@
             padding: 3rem 0 2rem;
             border-top: 1px solid var(--border-color);
         }
-        
+
         .footer .container {
             display: flex;
             flex-direction: column;
             align-items: center;
             gap: 1.5rem;
         }
-        
+
         .social-icons-footer {
             display: flex;
             gap: 1rem;
             flex-wrap: wrap;
             justify-content: center;
         }
-        
+
         .social-icons-footer a {
             display: inline-flex;
             align-items: center;
@@ -1054,24 +1520,24 @@
             min-width: 44px;
             min-height: 44px;
         }
-        
+
         .social-icons-footer a:active {
             transform: scale(0.9);
         }
-        
+
         .social-icons-footer a:hover {
             background: var(--primary);
             color: white;
             border-color: var(--primary);
         }
-        
+
         .footer-links {
             display: flex;
             flex-wrap: wrap;
             gap: 0.75rem 1.5rem;
             justify-content: center;
         }
-        
+
         .footer-links a {
             color: var(--text-secondary);
             text-decoration: none;
@@ -1083,21 +1549,21 @@
             align-items: center;
             gap: 0.4rem;
         }
-        
+
         .footer-links a:active {
             color: var(--primary);
         }
-        
+
         .footer-links a:hover {
             color: var(--primary);
         }
-        
+
         .footer-copyright {
             color: var(--text-secondary);
             font-size: 0.85rem;
             text-align: center;
         }
-        
+
         /* ============================================
            MODALS - RESPONSIVE
            ============================================ */
@@ -1114,11 +1580,11 @@
             justify-content: center;
             padding: 1rem;
         }
-        
+
         .modal.active {
             display: flex;
         }
-        
+
         .modal-content {
             background: var(--card-bg);
             border-radius: var(--radius-lg);
@@ -1129,7 +1595,7 @@
             position: relative;
             margin: 0 auto;
         }
-        
+
         .modal-header {
             padding: 1.25rem;
             border-bottom: 1px solid var(--border-color);
@@ -1142,12 +1608,12 @@
             z-index: 10;
             gap: 0.5rem;
         }
-        
+
         .modal-header h3 {
             margin: 0;
             font-size: clamp(1.1rem, 2.5vw, 1.4rem);
         }
-        
+
         .modal-close {
             background: none;
             border: none;
@@ -1160,15 +1626,15 @@
             border-radius: var(--radius-md);
             transition: background 0.2s ease;
         }
-        
+
         .modal-close:active {
             background: var(--bg-secondary);
         }
-        
+
         .modal-body {
             padding: 1.5rem;
         }
-        
+
         /* ============================================
            FORMS - RESPONSIVE
            ============================================ */
@@ -1178,7 +1644,7 @@
             padding: 1.25rem;
             margin-bottom: 1.25rem;
         }
-        
+
         .form-section-title {
             font-size: 1rem;
             font-weight: 600;
@@ -1187,30 +1653,30 @@
             border-bottom: 2px solid var(--primary);
             display: inline-block;
         }
-        
+
         .form-row {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 0.75rem;
         }
-        
+
         .form-group {
             margin-bottom: 0.75rem;
         }
-        
+
         .form-group label {
             display: block;
             margin-bottom: 0.25rem;
             font-weight: 500;
             font-size: 0.85rem;
         }
-        
+
         .form-group label.required::after {
             content: '*';
             color: var(--danger);
             margin-left: 0.25rem;
         }
-        
+
         .form-control {
             width: 100%;
             padding: 0.75rem;
@@ -1223,42 +1689,42 @@
             -webkit-appearance: none;
             appearance: none;
         }
-        
+
         .form-control:focus {
             outline: none;
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);
         }
-        
+
         .form-control.error {
             border-color: var(--danger);
         }
-        
+
         .error-message {
             color: var(--danger);
             font-size: 0.75rem;
             margin-top: 0.25rem;
             display: block;
         }
-        
+
         textarea.form-control {
             resize: vertical;
             min-height: 80px;
         }
-        
+
         select.form-control {
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236c757d' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
             background-repeat: no-repeat;
             background-position: right 0.75rem center;
             padding-right: 2.5rem;
         }
-        
+
         .registration-type-cards {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 1rem;
         }
-        
+
         .reg-type-card {
             background: var(--bg-primary);
             border: 2px solid var(--border-color);
@@ -1270,37 +1736,37 @@
             touch-action: manipulation;
             min-height: 140px;
         }
-        
+
         .reg-type-card:active {
             transform: scale(0.97);
         }
-        
+
         .reg-type-card:hover {
             border-color: var(--primary);
             transform: translateY(-3px);
         }
-        
+
         .reg-type-card.selected {
             border-color: var(--primary);
             background: linear-gradient(135deg, rgba(var(--primary-rgb), 0.1), rgba(var(--secondary-rgb), 0.05));
         }
-        
+
         .reg-type-card i {
             font-size: 2.5rem;
             color: var(--primary);
             margin-bottom: 0.5rem;
         }
-        
+
         .reg-type-card h4 {
             font-size: 1rem;
             margin-bottom: 0.25rem;
         }
-        
+
         .reg-type-card p {
             font-size: 0.8rem;
             color: var(--text-secondary);
         }
-        
+
         .file-upload-area {
             border: 2px dashed var(--border-color);
             border-radius: var(--radius-md);
@@ -1315,44 +1781,44 @@
             align-items: center;
             justify-content: center;
         }
-        
+
         .file-upload-area:active {
             transform: scale(0.98);
         }
-        
+
         .file-upload-area:hover {
             border-color: var(--primary);
             background: rgba(var(--primary-rgb), 0.05);
         }
-        
+
         .file-upload-area i {
             font-size: 2rem;
             color: var(--primary);
             margin-bottom: 0.5rem;
         }
-        
+
         .file-upload-area p {
             margin: 0;
             font-size: 0.9rem;
         }
-        
+
         .file-hint {
             font-size: 0.7rem;
             color: var(--text-secondary);
             margin-top: 0.25rem;
         }
-        
+
         .file-input {
             display: none;
         }
-        
+
         .file-preview {
             margin-top: 0.75rem;
             display: flex;
             flex-wrap: wrap;
             gap: 0.5rem;
         }
-        
+
         .file-preview-item {
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
@@ -1364,7 +1830,7 @@
             font-size: 0.85rem;
             min-height: 40px;
         }
-        
+
         .file-preview-item button {
             background: none;
             border: none;
@@ -1375,18 +1841,18 @@
             min-height: 30px;
             touch-action: manipulation;
         }
-        
+
         .file-preview-item button:active {
             transform: scale(0.9);
         }
-        
+
         .checkbox-group {
             display: flex;
             align-items: flex-start;
             gap: 0.75rem;
             margin-top: 0.5rem;
         }
-        
+
         .checkbox-group input[type="checkbox"] {
             width: 20px;
             height: 20px;
@@ -1396,13 +1862,13 @@
             min-width: 20px;
             min-height: 20px;
         }
-        
+
         .checkbox-group label {
             margin-bottom: 0;
             cursor: pointer;
             font-size: 0.9rem;
         }
-        
+
         .tenant-entry {
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
@@ -1410,7 +1876,7 @@
             padding: 1rem;
             margin-bottom: 1rem;
         }
-        
+
         .tenant-header {
             display: flex;
             justify-content: space-between;
@@ -1419,13 +1885,13 @@
             padding-bottom: 0.5rem;
             border-bottom: 1px solid var(--border-color);
         }
-        
+
         .tenant-header h5 {
             margin: 0;
             color: var(--primary);
             font-size: 0.95rem;
         }
-        
+
         .remove-tenant-btn {
             background: none;
             border: none;
@@ -1436,11 +1902,11 @@
             min-height: var(--touch-target-size);
             touch-action: manipulation;
         }
-        
+
         .remove-tenant-btn:active {
             transform: scale(0.9);
         }
-        
+
         .add-tenant-btn {
             background: none;
             border: 1px dashed var(--border-color);
@@ -1453,11 +1919,11 @@
             min-height: var(--touch-target-size);
             touch-action: manipulation;
         }
-        
+
         .add-tenant-btn:active {
             transform: scale(0.98);
         }
-        
+
         .form-actions {
             display: flex;
             justify-content: flex-end;
@@ -1470,7 +1936,7 @@
             background: var(--card-bg);
             flex-wrap: wrap;
         }
-        
+
         .form-actions .btn {
             min-height: var(--touch-target-size);
             padding: 0.75rem 1.5rem;
@@ -1482,7 +1948,7 @@
             padding: 1.25rem;
             margin-bottom: 1.25rem;
         }
-        
+
         .preview-section h4 {
             font-size: 1rem;
             font-weight: 600;
@@ -1491,17 +1957,17 @@
             border-bottom: 2px solid var(--primary);
             display: inline-block;
         }
-        
+
         .preview-item {
             display: flex;
             padding: 0.5rem 0;
             border-bottom: 1px solid var(--border-color);
         }
-        
+
         .preview-item:last-child {
             border-bottom: none;
         }
-        
+
         .preview-label {
             font-weight: 500;
             color: var(--text-secondary);
@@ -1509,14 +1975,14 @@
             flex-shrink: 0;
             font-size: 0.85rem;
         }
-        
+
         .preview-value {
             color: var(--text-primary);
             width: 65%;
             font-size: 0.9rem;
             word-break: break-word;
         }
-        
+
         .preview-value .file-preview-item {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -1528,11 +1994,11 @@
             gap: 0.25rem;
             margin: 0.15rem;
         }
-        
+
         .preview-value .file-preview-item i {
             font-size: 0.8rem;
         }
-        
+
         .preview-value .badge {
             display: inline-block;
             padding: 0.15rem 0.5rem;
@@ -1540,33 +2006,33 @@
             font-size: 0.7rem;
             font-weight: 600;
         }
-        
+
         .preview-value .badge-success {
             background: rgba(var(--success-rgb), 0.15);
             color: var(--success);
         }
-        
+
         .preview-value .badge-warning {
             background: rgba(var(--warning-rgb), 0.15);
             color: var(--warning);
         }
-        
+
         .preview-value .badge-info {
             background: rgba(var(--info-rgb), 0.15);
             color: var(--info);
         }
-        
+
         .preview-value .badge-primary {
             background: rgba(var(--primary-rgb), 0.15);
             color: var(--primary);
         }
-        
+
         .preview-empty {
             color: var(--text-secondary);
             font-style: italic;
             font-size: 0.85rem;
         }
-        
+
         .preview-actions {
             display: flex;
             justify-content: flex-end;
@@ -1575,15 +2041,15 @@
             padding-top: 1rem;
             border-top: 1px solid var(--border-color);
         }
-        
+
         .preview-actions .btn {
             min-height: var(--touch-target-size);
         }
-        
+
         #previewModal .modal-content {
             max-width: 700px;
         }
-        
+
         .toast-container {
             position: fixed;
             top: 80px;
@@ -1593,7 +2059,7 @@
             width: 400px;
             pointer-events: none;
         }
-        
+
         .toast {
             background: var(--card-bg);
             border-left: 4px solid;
@@ -1608,60 +2074,60 @@
             pointer-events: auto;
             font-size: 0.9rem;
         }
-        
+
         .toast.success { border-left-color: var(--success); }
         .toast.error { border-left-color: var(--danger); }
         .toast.warning { border-left-color: var(--warning); }
         .toast.info { border-left-color: var(--info); }
-        
+
         .toast i {
             font-size: 1.2rem;
             flex-shrink: 0;
         }
-        
+
         .toast.success i { color: var(--success); }
         .toast.error i { color: var(--danger); }
         .toast.warning i { color: var(--warning); }
         .toast.info i { color: var(--info); }
-        
+
         .alert {
             padding: 1rem;
             border-radius: var(--radius-md);
             margin-bottom: 1rem;
             font-size: 0.9rem;
         }
-        
+
         .alert-info {
             background: rgba(var(--info-rgb), 0.1);
             border: 1px solid rgba(var(--info-rgb), 0.3);
             color: var(--info);
         }
-        
+
         .alert-success {
             background: rgba(var(--success-rgb), 0.1);
             border: 1px solid rgba(var(--success-rgb), 0.3);
             color: var(--success);
         }
-        
+
         .alert-warning {
             background: rgba(var(--warning-rgb), 0.1);
             border: 1px solid rgba(var(--warning-rgb), 0.3);
             color: var(--warning);
         }
-        
+
         .alert-danger {
             background: rgba(var(--danger-rgb), 0.1);
             border: 1px solid rgba(var(--danger-rgb), 0.3);
             color: var(--danger);
         }
-        
+
         .rating-input {
             display: flex;
             gap: 0.5rem;
             cursor: pointer;
             flex-wrap: wrap;
         }
-        
+
         .rating-input i {
             font-size: 1.75rem;
             transition: all 0.2s ease;
@@ -1673,32 +2139,32 @@
             align-items: center;
             justify-content: center;
         }
-        
+
         .rating-input i:active {
             transform: scale(0.85);
         }
-        
+
         .rating-input i:hover,
         .rating-input i.active {
             color: #f39c12;
             transform: scale(1.1);
         }
-        
+
         .character-counter {
             text-align: right;
             font-size: 0.75rem;
             color: var(--text-secondary);
             margin-top: 0.25rem;
         }
-        
+
         .character-counter.warning {
             color: var(--warning);
         }
-        
+
         .character-counter.danger {
             color: var(--danger);
         }
-        
+
         .spinner {
             width: 20px;
             height: 20px;
@@ -1708,18 +2174,18 @@
             animation: spin 0.8s linear infinite;
             display: inline-block;
         }
-        
+
         .loading-spinner {
             text-align: center;
             padding: 3rem;
         }
-        
+
         .loading-spinner .spinner {
             width: 40px;
             height: 40px;
             border-width: 3px;
         }
-        
+
         .rate-limit-info {
             font-size: 0.75rem;
             color: var(--text-secondary);
@@ -1729,17 +2195,17 @@
             background: rgba(var(--warning-rgb), 0.1);
             border-radius: var(--radius-md);
         }
-        
+
         .additional-phone-entry {
             display: flex;
             gap: 0.5rem;
             margin-bottom: 0.5rem;
         }
-        
+
         .additional-phone-entry .form-control {
             flex: 1;
         }
-        
+
         .remove-phone-btn {
             background: none;
             border: none;
@@ -1750,7 +2216,7 @@
             min-width: var(--touch-target-size);
             touch-action: manipulation;
         }
-        
+
         .remove-phone-btn:active {
             transform: scale(0.9);
         }
@@ -1771,7 +2237,7 @@
             font-size: 1.4rem;
             cursor: pointer;
             box-shadow: 0 8px 24px rgba(var(--primary-rgb), 0.4);
-            z-index: 999;               /* below modals (z-index 1000) */
+            z-index: 999;
             transition: transform .2s ease, box-shadow .2s ease;
             touch-action: manipulation;
             border: none;
@@ -1794,7 +2260,7 @@
             border: 1px solid var(--border-color);
             border-radius: 1rem;
             box-shadow: 0 20px 50px rgba(0, 0, 0, .25);
-            z-index: 999;               /* below modals (z-index 1000) */
+            z-index: 999;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -1833,7 +2299,6 @@
             overflow: hidden;
             padding: 0;
         }
-        /* Override the widget's own sizing inside the floating panel */
         .floating-chat-panel__body .chat-widget {
             margin: 0;
             height: 100%;
@@ -1862,7 +2327,7 @@
                 right: 16px;
             }
         }
-        
+
         @keyframes slideIn {
             from {
                 transform: translateX(100%);
@@ -1873,7 +2338,7 @@
                 opacity: 1;
             }
         }
-        
+
         @keyframes slideOut {
             from {
                 transform: translateX(0);
@@ -1884,33 +2349,38 @@
                 opacity: 0;
             }
         }
-        
+
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
-        
+
         @media (max-width: 1024px) {
             .testimonial-slide {
                 flex: 0 0 calc(50% - 0.75rem);
                 min-width: calc(50% - 0.75rem);
             }
-            
+
             .stats-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
+
+            .featured-ads-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 1.5rem;
+            }
         }
-        
+
         @media (max-width: 768px) {
             header {
                 padding: 0.5rem 0;
             }
-            
+
             .mobile-menu-btn {
                 display: flex;
                 align-items: center;
                 justify-content: center;
             }
-            
+
             nav {
                 position: fixed;
                 top: 0;
@@ -1926,22 +2396,22 @@
                 overflow-y: auto;
                 align-items: flex-start;
             }
-            
+
             nav.active {
                 right: 0;
             }
-            
+
             nav ul {
                 flex-direction: column;
                 gap: 0.5rem;
                 width: 100%;
                 align-items: stretch;
             }
-            
+
             nav ul li {
                 width: 100%;
             }
-            
+
             nav ul li a {
                 width: 100%;
                 padding: 0.75rem 1rem;
@@ -1949,117 +2419,117 @@
                 font-size: 1rem;
                 min-height: 48px;
             }
-            
+
             .login-btn {
                 justify-content: center !important;
                 margin-top: 0.5rem;
             }
-            
+
             .theme-toggle {
                 width: 100%;
                 justify-content: center;
                 margin-top: 0.5rem;
                 min-height: 48px;
             }
-            
+
             .hero {
                 min-height: 60vh;
                 padding: 2rem 0.75rem;
             }
-            
+
             .hero-content h1 {
                 font-size: clamp(1.8rem, 5vw, 2.5rem);
             }
-            
+
             .hero-buttons .btn {
                 min-width: 160px;
                 width: 100%;
                 max-width: 300px;
             }
-            
+
             .hero-buttons {
                 flex-direction: column;
                 align-items: center;
             }
-            
+
             section {
                 padding: 2.5rem 0;
             }
-            
+
             .section-title {
                 margin-bottom: 2rem;
             }
-            
+
             .features-grid {
                 grid-template-columns: 1fr 1fr;
                 gap: 1rem;
             }
-            
+
             .benefits-grid {
                 grid-template-columns: 1fr 1fr;
                 gap: 1rem;
             }
-            
+
             .stats-grid {
                 grid-template-columns: 1fr 1fr;
                 gap: 1rem;
             }
-            
+
             .payment-grid {
                 grid-template-columns: 1fr 1fr;
                 gap: 1rem;
             }
-            
+
             .registration-type-cards {
                 grid-template-columns: 1fr;
             }
-            
+
             .form-row {
                 grid-template-columns: 1fr;
                 gap: 0.5rem;
             }
-            
+
             .testimonial-slide {
                 flex: 0 0 100%;
                 min-width: 100%;
             }
-            
+
             .carousel-btn {
                 width: 36px;
                 height: 36px;
                 min-width: 36px;
                 min-height: 36px;
             }
-            
+
             .carousel-btn.prev {
                 left: -4px;
             }
-            
+
             .carousel-btn.next {
                 right: -4px;
             }
-            
+
             .modal-content {
                 max-height: 95vh;
                 border-radius: var(--radius-md);
             }
-            
+
             .modal-body {
                 padding: 1rem;
             }
-            
+
             .form-section {
                 padding: 1rem;
             }
-            
+
             .footer-links {
                 gap: 0.5rem 1rem;
             }
-            
+
             .footer-links a {
                 font-size: 0.8rem;
             }
-            
+
             .toast-container {
                 right: 8px;
                 left: 8px;
@@ -2067,40 +2537,40 @@
                 max-width: 100%;
                 top: 70px;
             }
-            
+
             .stat-item {
                 padding: 1.25rem 0.75rem;
                 min-height: 120px;
             }
-            
+
             .feature-card {
                 padding: 1.25rem 0.75rem;
                 min-height: 160px;
             }
-            
+
             .benefit-item {
                 padding: 1.25rem 0.75rem;
                 min-height: 150px;
             }
-            
+
             .payment-method {
                 padding: 1.25rem 0.75rem;
                 min-height: 110px;
             }
-            
+
             .cta {
                 padding: 3rem 1rem;
             }
-            
+
             .cta .btn {
                 width: 100%;
                 max-width: 300px;
             }
-            
+
             .form-actions {
                 flex-direction: column-reverse;
             }
-            
+
             .form-actions .btn {
                 width: 100%;
                 justify-content: center;
@@ -2109,24 +2579,33 @@
             #previewModal .modal-content {
                 max-width: 100%;
             }
-            
+
             .preview-item {
                 flex-direction: column;
                 padding: 0.4rem 0;
             }
-            
+
             .preview-label {
                 width: 100%;
                 margin-bottom: 0.15rem;
                 font-size: 0.8rem;
             }
-            
+
             .preview-value {
                 width: 100%;
                 font-size: 0.85rem;
             }
+
+            .featured-ads-grid {
+                grid-template-columns: 1fr;
+                gap: 1.25rem;
+            }
+
+            .ad-card__price-amount {
+                font-size: 1.2rem;
+            }
         }
-        
+
         @media (max-width: 480px) {
             .logo-text {
                 font-size: 0.9rem;
@@ -2135,120 +2614,120 @@
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
-            
+
             .logo-image {
                 height: 32px;
                 max-width: 100px;
             }
-            
+
             .hero {
                 min-height: 50vh;
                 padding: 1.5rem 0.5rem;
             }
-            
+
             .hero-content h1 {
                 font-size: 1.8rem;
             }
-            
+
             .hero-content p {
                 font-size: 0.95rem;
                 padding: 0 0.5rem;
             }
-            
+
             .hero-buttons .btn {
                 min-width: 140px;
                 font-size: 0.9rem;
                 padding: 0.6rem 1rem;
             }
-            
+
             .features-grid {
                 grid-template-columns: 1fr;
                 gap: 0.75rem;
             }
-            
+
             .benefits-grid {
                 grid-template-columns: 1fr;
                 gap: 0.75rem;
             }
-            
+
             .stats-grid {
                 grid-template-columns: 1fr 1fr;
                 gap: 0.75rem;
             }
-            
+
             .payment-grid {
                 grid-template-columns: 1fr 1fr;
                 gap: 0.75rem;
             }
-            
+
             .stat-number {
                 font-size: 1.8rem;
             }
-            
+
             .modal-content {
                 max-width: 100%;
                 border-radius: var(--radius-md);
             }
-            
+
             .modal-header {
                 padding: 0.75rem 1rem;
             }
-            
+
             .modal-header h3 {
                 font-size: 1rem;
             }
-            
+
             .modal-body {
                 padding: 0.75rem;
             }
-            
+
             .form-section {
                 padding: 0.75rem;
             }
-            
+
             .file-upload-area {
                 padding: 1rem;
                 min-height: 80px;
             }
-            
+
             .btn {
                 font-size: 0.9rem;
                 padding: 0.6rem 1rem;
                 min-height: 40px;
             }
-            
+
             .register-btn-large {
                 min-width: 160px;
                 font-size: 0.95rem;
                 padding: 0.6rem 1.2rem;
             }
-            
+
             .testimonial-form-btn {
                 min-width: 160px;
                 font-size: 0.9rem;
             }
-            
+
             nav {
                 width: 85%;
                 max-width: 280px;
                 padding: 1.5rem 1rem;
             }
-            
+
             nav ul li a {
                 font-size: 0.95rem;
                 padding: 0.6rem 0.8rem;
             }
-            
+
             .footer-links {
                 flex-direction: column;
                 align-items: center;
                 gap: 0.25rem;
             }
-            
+
             .footer-links a {
                 padding: 0.4rem 0;
             }
-            
+
             .social-icons-footer a {
                 width: 40px;
                 height: 40px;
@@ -2256,15 +2735,15 @@
                 min-height: 40px;
                 font-size: 1rem;
             }
-            
+
             .section-title h2 {
                 font-size: 1.5rem;
             }
-            
+
             .section-title p {
                 font-size: 0.9rem;
             }
-            
+
             .carousel-btn {
                 width: 32px;
                 height: 32px;
@@ -2272,24 +2751,24 @@
                 min-height: 32px;
                 font-size: 0.8rem;
             }
-            
+
             .rating-input i {
                 font-size: 1.5rem;
             }
-            
+
             .tenant-entry {
                 padding: 0.75rem;
             }
-            
+
             .reg-type-card {
                 padding: 1rem;
                 min-height: 100px;
             }
-            
+
             .reg-type-card i {
                 font-size: 2rem;
             }
-            
+
             .step-circle {
                 width: 48px;
                 height: 48px;
@@ -2298,77 +2777,223 @@
                 font-size: 1.2rem;
             }
         }
-        
+
         @media (max-width: 360px) {
             .logo-text {
                 font-size: 0.8rem;
                 max-width: 80px;
             }
-            
+
             .hero-content h1 {
                 font-size: 1.5rem;
             }
-            
+
             .stats-grid {
                 grid-template-columns: 1fr;
             }
-            
+
             .payment-grid {
                 grid-template-columns: 1fr;
             }
-            
+
             .stat-number {
                 font-size: 1.5rem;
             }
-            
+
             .btn {
                 font-size: 0.8rem;
                 padding: 0.5rem 0.8rem;
                 min-height: 36px;
             }
-            
+
             .register-btn-large {
                 min-width: 140px;
                 font-size: 0.85rem;
             }
         }
-        
+
         .hidden {
             display: none !important;
         }
-        
+
         .text-center {
             text-align: center;
         }
-        
+
         .mt-1 { margin-top: 0.5rem; }
         .mt-2 { margin-top: 1rem; }
         .mt-3 { margin-top: 1.5rem; }
         .mb-1 { margin-bottom: 0.5rem; }
         .mb-2 { margin-bottom: 1rem; }
         .mb-3 { margin-bottom: 1.5rem; }
-        
+
         .w-full { width: 100%; }
         .max-w-full { max-width: 100%; }
     </style>
-    
+
+    {{-- ⭐ THEME OVERRIDES — driven by Homepage Content settings --}}
+    @if($googleFont)
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family={{ $googleFont }}&display=swap" rel="stylesheet">
+    @endif
+
+    <style id="homepage-theme-overrides">
+        /* Base typography */
+        body {
+            font-family: {{ $fontStack }} !important;
+            font-size: {{ $baseFontSize }}px !important;
+        }
+
+        h1, h2, h3, h4, h5, h6,
+        .section-title h2,
+        .hero-content h1,
+        .feature-card h3,
+        .benefit-item h3,
+        .stat-item h3,
+        .payment-method h3,
+        .ad-card__title,
+        .ad-card__price-amount {
+            font-weight: {{ $headingWeight }} !important;
+        }
+
+        /* Container width */
+        .container {
+            max-width: {{ $containerWidth }}px !important;
+        }
+
+        /* Section spacing */
+        section {
+            padding-top: {{ $sectionPadding }} !important;
+            padding-bottom: {{ $sectionPadding }} !important;
+        }
+
+        /* Radius style */
+        .card,
+        .feature-card,
+        .benefit-item,
+        .payment-method,
+        .testimonial-card,
+        .stat-item,
+        .modal-content,
+        .form-section,
+        .file-upload-area,
+        .reg-type-card,
+        .tenant-entry,
+        .ad-card,
+        .ad-card__media,
+        .ad-card__cta {
+            border-radius: {{ $radius }} !important;
+        }
+
+        /* Button shape */
+        .btn,
+        .ad-card__cta {
+            border-radius: {{ $btnRadius }} !important;
+        }
+
+        @if(!$buttonShadow)
+            .btn,
+            .btn-primary,
+            .register-btn-large,
+            .login-btn,
+            .btn-modern {
+                box-shadow: none !important;
+            }
+        @endif
+
+        /* Hero overlay opacity */
+        .hero::before {
+            opacity: {{ $heroOverlayOpacity }} !important;
+        }
+
+        /* Hero height */
+        .hero {
+            min-height: {{ $heroHeight }} !important;
+        }
+
+        /* Hero text alignment */
+        .hero-content {
+            text-align: {{ $heroTextAlign }} !important;
+        }
+        .hero-content p {
+            @if($heroTextAlign === 'left')
+                margin-left: 0 !important;
+                margin-right: auto !important;
+            @elseif($heroTextAlign === 'right')
+                margin-left: auto !important;
+                margin-right: 0 !important;
+            @endif
+        }
+        .hero-buttons {
+            @if($heroTextAlign === 'left')
+                justify-content: flex-start !important;
+            @elseif($heroTextAlign === 'right')
+                justify-content: flex-end !important;
+            @endif
+        }
+
+        /* ⭐ COLORS — apply to both themes */
+        @if($cPrimary)
+            [data-theme="light"] { --primary: {{ $cPrimary }} !important; }
+            [data-theme="dark"]  { --primary: {{ $cPrimary }} !important; }
+        @endif
+        @if($cSecondary)
+            [data-theme="light"] { --secondary: {{ $cSecondary }} !important; }
+            [data-theme="dark"]  { --secondary: {{ $cSecondary }} !important; }
+        @endif
+        @if($cAccent)
+            [data-theme="light"] { --info: {{ $cAccent }} !important; }
+            [data-theme="dark"]  { --info: {{ $cAccent }} !important; }
+        @endif
+
+        /* Hero text color */
+        .hero-content h1 {
+            background: linear-gradient(135deg, {{ $cHeroText }} 0%, {{ $cHeroText }}cc 100%) !important;
+            -webkit-background-clip: text !important;
+            -webkit-text-fill-color: transparent !important;
+            background-clip: text !important;
+        }
+        .hero-content p {
+            color: {{ $cHeroText }}e6 !important;
+        }
+
+        /* Keep gradient buttons in sync with new palette */
+        .btn-primary,
+        .register-btn-large,
+        .login-btn,
+        .btn-modern,
+        .ad-card__cta {
+            background: linear-gradient(135deg, var(--primary), var(--secondary)) !important;
+        }
+    </style>
+
     {{-- Stack for pushed styles (chat widget CSS) --}}
     @stack('styles')
 </head>
 <body>
+
+    {{-- ⭐ Preview mode banner (only shown when ?preview=1) --}}
+    @if($isPreviewMode)
+        <div class="preview-mode-banner">
+            <i class="fas fa-eye"></i>
+            PREVIEW MODE — This is how your homepage will look. Changes are not yet published.
+        </div>
+    @endif
+
     <!-- Toast Messages Container -->
     <div class="toast-container" id="toastContainer"></div>
 
     <!-- Mobile Menu Overlay -->
     <div class="mobile-menu-overlay" id="mobileMenuOverlay"></div>
-    
+
     <!-- ============ HEADER ============ -->
     <header>
         <div class="container header-container">
             <a href="/" class="logo">
                 @if($logoUrl)
-                    <img src="{{ $logoUrl }}" 
-                         alt="{{ $systemSettings->system_name ?? 'System Logo' }}" 
+                    <img src="{{ $logoUrl }}"
+                         alt="{{ $systemSettings->system_name ?? 'System Logo' }}"
                          class="logo-image"
                          onerror="this.style.display='none'; this.parentElement.querySelector('.logo-fallback-icon')?.style.setProperty('display','inline-block');">
                     <i class="fas fa-building logo-fallback-icon" style="display:none;"></i>
@@ -2377,19 +3002,32 @@
                 @endif
                 <span class="logo-text">{{ $systemSettings->system_name ?? 'Community Portal' }}</span>
             </a>
-            
+
             <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Toggle menu">
                 <i class="fas fa-bars"></i>
             </button>
-            
+
             <nav id="mainNav">
                 <ul>
                     <li><a href="/">Home</a></li>
-                    <li><a href="#services">Services</a></li>
-                    <li><a href="#how-it-works">How It Works</a></li>
-                    <li><a href="#benefits">Benefits</a></li>
-                    <li><a href="#testimonials">Testimonials</a></li>
-                    <li><a href="#contact">Contact</a></li>
+                    @if($sectionsOn['services'] ?? true)
+                        <li><a href="#services">Services</a></li>
+                    @endif
+                    @if($hasFeaturedAds)
+                        <li><a href="#featured-properties"><i class="fas fa-star" style="color: #f59e0b; font-size: 0.7em;"></i> Featured</a></li>
+                    @endif
+                    @if($sectionsOn['how_it_works'] ?? true)
+                        <li><a href="#how-it-works">How It Works</a></li>
+                    @endif
+                    @if($sectionsOn['benefits'] ?? true)
+                        <li><a href="#benefits">Benefits</a></li>
+                    @endif
+                    @if($sectionsOn['testimonials'] ?? true)
+                        <li><a href="#testimonials">Testimonials</a></li>
+                    @endif
+                    @if($sectionsOn['contact'] ?? true)
+                        <li><a href="#contact">Contact</a></li>
+                    @endif
                     <li><a href="{{ route('login') }}" class="login-btn">
                         <i class="fas fa-sign-in-alt"></i> Login
                     </a></li>
@@ -2408,28 +3046,25 @@
     <!-- ============ HERO SECTION ============ -->
     <section class="hero">
         <div class="container hero-content">
-            <h1>{{ $systemSettings->system_name ?? 'Community Portal' }}</h1>
-            <p>
-                Your trusted platform for property registration and estate management. 
-                Register your land or property today and join our growing community.
-            </p>
+            <h1>{{ $heroTitle }}</h1>
+            <p>{{ $heroSubtitle }}</p>
             <div class="hero-buttons">
                 @if($systemSettings->isRegistrationAllowed())
                     <button class="btn btn-primary register-btn-large" id="landlordRegistrationBtn">
-                        <i class="fas fa-user-plus"></i> Register Your Land/Property
+                        <i class="fas fa-user-plus"></i> {{ $heroPrimaryCta }}
                     </button>
                 @else
-                    <button class="btn btn-secondary register-btn-large" id="registrationDisabledBtn" disabled style="opacity: 0.7; cursor: not-allowed;" 
+                    <button class="btn btn-secondary register-btn-large" id="registrationDisabledBtn" disabled style="opacity: 0.7; cursor: not-allowed;"
                             title="{{ $systemSettings->getRegistrationDisabledMessage() }}">
                         <i class="fas fa-ban"></i> Registration Currently Disabled
                     </button>
                 @endif
-                
+
                 <button class="btn testimonial-form-btn" id="shareExperienceBtn">
-                    <i class="fas fa-star"></i> Share Your Experience
+                    <i class="fas fa-star"></i> {{ $heroSecondaryCta }}
                 </button>
             </div>
-            
+
             @if(!$systemSettings->isRegistrationAllowed())
                 <div class="alert alert-info" style="margin-top: 2rem; display: inline-block;">
                     <i class="fas fa-info-circle"></i>
@@ -2439,7 +3074,162 @@
         </div>
     </section>
 
+    <!-- ============ 📢 FEATURED PROPERTIES (SPONSORED ADS) ============ -->
+    @if($hasFeaturedAds)
+    <section id="featured-properties" class="featured-ads-section">
+        <div class="container">
+            <div class="featured-ads-header">
+                <div class="section-title" style="margin-bottom: 0;">
+                    <span class="featured-ads-badge">
+                        <i class="fas fa-star"></i> Sponsored Listings
+                    </span>
+                    <h2>Featured Properties</h2>
+                    <p>Hand-picked listings from our landlords — available for rent now.</p>
+                </div>
+            </div>
+
+            <div class="featured-ads-grid">
+                @foreach($featuredAds as $ad)
+                    @php
+                        $unit = $ad->unit ?? null;
+
+                        // Resolve cover photo safely
+                        $cover = null;
+                        if ($unit && !empty($unit->photos)) {
+                            $photos = $unit->photos;
+                            $cover  = $photos->firstWhere('is_cover', true) ?? $photos->first();
+                        }
+
+                        $coverUrl = null;
+                        if ($cover) {
+                            try {
+                                $disk = $cover->disk ?? 'public';
+                                $path = $cover->thumbnail_path ?? $cover->path ?? null;
+                                if ($path) {
+                                    $coverUrl = \Illuminate\Support\Facades\Storage::disk($disk)->url($path);
+                                }
+                            } catch (\Throwable $e) {
+                                $coverUrl = null;
+                            }
+                        }
+
+                        // Resolve unit price
+                        $rent = null;
+                        if ($unit) {
+                            $rent = $unit->rent_formatted
+                                ?? (isset($unit->monthly_rent) && $unit->monthly_rent
+                                    ? $systemSettings->formatAmount($unit->monthly_rent)
+                                    : null);
+                        }
+
+                        $unitTitle = $unit->unit_name
+                            ?? $unit->unit_number
+                            ?? 'Unit';
+
+                        $location = $unit->property->address
+                            ?? $unit->property->property_name
+                            ?? 'Location not specified';
+
+                        $isPreviewCard = !empty($ad->is_preview);
+                        $clickUrl = $isPreviewCard
+                            ? '#'
+                            : route('ads.click', $ad->uuid);
+                    @endphp
+
+                    <article class="ad-card {{ $isPreviewCard ? 'ad-card--preview' : '' }}">
+                        <a href="{{ $clickUrl }}"
+                           class="ad-card__media"
+                           @if(!$isPreviewCard) target="_self" @else onclick="return false;" @endif
+                           aria-label="View {{ $unitTitle }}">
+                            @if($coverUrl)
+                                <img src="{{ $coverUrl }}"
+                                     alt="{{ $unitTitle }}"
+                                     class="ad-card__image"
+                                     loading="lazy">
+                            @else
+                                <div class="ad-card__placeholder">
+                                    <i class="fas fa-building"></i>
+                                </div>
+                            @endif
+
+                            <span class="ad-card__badge">
+                                <i class="fas fa-star"></i> Sponsored
+                            </span>
+
+                            @if($unit && !empty($unit->photos) && $unit->photos->count() > 1)
+                                <span class="ad-card__photo-count">
+                                    <i class="fas fa-camera"></i> {{ $unit->photos->count() }}
+                                </span>
+                            @endif
+                        </a>
+
+                        <div class="ad-card__body">
+                            <h3 class="ad-card__title">{{ $unitTitle }}</h3>
+
+                            <p class="ad-card__location">
+                                <i class="fas fa-map-marker-alt"></i>
+                                <span>{{ $location }}</span>
+                            </p>
+
+                            <div class="ad-card__meta">
+                                <div class="ad-card__price">
+                                    @if($rent)
+                                        <span class="ad-card__price-amount">{{ $rent }}</span>
+                                        <span class="ad-card__price-suffix">/month</span>
+                                    @else
+                                        <span class="ad-card__price-amount" style="font-size: 1rem;">Contact for price</span>
+                                    @endif
+                                </div>
+
+                                <div class="ad-card__specs">
+                                    @if($unit && isset($unit->bedrooms))
+                                        <span title="Bedrooms">
+                                            <i class="fas fa-bed"></i>{{ $unit->bedrooms }}
+                                        </span>
+                                    @endif
+                                    @if($unit && isset($unit->bathrooms))
+                                        <span title="Bathrooms">
+                                            <i class="fas fa-bath"></i>{{ $unit->bathrooms }}
+                                        </span>
+                                    @endif
+                                </div>
+                            </div>
+
+                            <a href="{{ $clickUrl }}"
+                               class="ad-card__cta"
+                               @if(!$isPreviewCard) target="_self" @else onclick="return false;" @endif>
+                                <i class="fas fa-eye"></i> View Details
+                            </a>
+                        </div>
+                    </article>
+                @endforeach
+            </div>
+
+            {{-- Landlord-facing CTA — only shown when AD space is on --}}
+            @unless($isPreviewMode)
+                @php
+                    $adSpaceEnabled = method_exists($systemSettings, 'isAdSpaceEnabled')
+                        && $systemSettings->isAdSpaceEnabled();
+                @endphp
+                @if($adSpaceEnabled)
+                    <div class="featured-ads-footer">
+                        <p>
+                            <i class="fas fa-bullhorn" style="color: var(--warning);"></i>
+                            Are you a landlord? Get your property featured here and across our social channels.
+                        </p>
+                        <a href="{{ route('login') }}?redirect={{ urlencode(route('landlord.ads.create')) }}"
+                           class="btn btn-outline">
+                            <i class="fas fa-plus"></i> Advertise Your Property
+                        </a>
+                    </div>
+                @endif
+            @endunless
+        </div>
+    </section>
+    @endif
+
     <!-- ============ HOW IT WORKS ============ -->
+    @if($sectionsOn['how_it_works'] ?? true)
     <section id="how-it-works" class="features">
         <div class="container">
             <div class="section-title">
@@ -2468,8 +3258,10 @@
             </div>
         </div>
     </section>
+    @endif
 
     <!-- ============ SERVICES ============ -->
+    @if($sectionsOn['services'] ?? true)
     <section id="services" class="features" style="background: var(--bg-secondary);">
         <div class="container">
             <div class="section-title">
@@ -2482,31 +3274,31 @@
                     <h3>Property Registration</h3>
                     <p>Register vacant land or existing properties with proper documentation</p>
                 </div>
-                
+
                 <div class="feature-card">
                     <i class="fas fa-hard-hat"></i>
                     <h3>Construction Approval</h3>
                     <p>Get approval for new construction projects on your land</p>
                 </div>
-                
+
                 <div class="feature-card">
                     <i class="fas fa-users"></i>
                     <h3>Tenant Management</h3>
                     <p>Register and manage tenants for your rented properties</p>
                 </div>
-                
+
                 <div class="feature-card">
                     <i class="fas fa-credit-card"></i>
                     <h3>Secure Payments</h3>
                     <p>Multiple payment options including mobile money and bank transfers</p>
                 </div>
-                
+
                 <div class="feature-card">
                     <i class="fas fa-chart-line"></i>
                     <h3>Property Analytics</h3>
                     <p>Track property value trends and get insights about your investment</p>
                 </div>
-                
+
                 <div class="feature-card">
                     <i class="fas fa-headset"></i>
                     <h3>24/7 Support</h3>
@@ -2515,8 +3307,10 @@
             </div>
         </div>
     </section>
+    @endif
 
     <!-- ============ BENEFITS ============ -->
+    @if($sectionsOn['benefits'] ?? true)
     <section id="benefits">
         <div class="container">
             <div class="section-title">
@@ -2557,8 +3351,10 @@
             </div>
         </div>
     </section>
+    @endif
 
     <!-- ============ STATS ============ -->
+    @if($sectionsOn['stats'] ?? true)
     <section class="stats">
         <div class="container">
             <div class="section-title">
@@ -2589,35 +3385,37 @@
             </div>
         </div>
     </section>
+    @endif
 
     <!-- ============ TESTIMONIALS ============ -->
+    @if($sectionsOn['testimonials'] ?? true)
     <section id="testimonials" class="features">
         <div class="container">
             <div class="section-title">
                 <h2>What Our Clients Say</h2>
                 <p>Trusted by property owners across the community</p>
             </div>
-            
+
             <div class="testimonials-carousel" id="testimonialsCarousel">
                 <button class="carousel-btn prev" id="carouselPrevBtn" aria-label="Previous testimonials">
                     <i class="fas fa-chevron-left"></i>
                 </button>
-                
+
                 <div class="testimonials-track" id="testimonialsTrack">
                     <div class="loading-spinner">
                         <div class="spinner"></div>
                         <p>Loading testimonials...</p>
                     </div>
                 </div>
-                
+
                 <button class="carousel-btn next" id="carouselNextBtn" aria-label="Next testimonials">
                     <i class="fas fa-chevron-right"></i>
                 </button>
             </div>
-            
+
             <div class="carousel-dots" id="carouselDots"></div>
             <div class="carousel-status" id="carouselStatus"></div>
-            
+
             <div class="share-btn-container">
                 <button class="btn btn-outline" id="shareExperienceBtnFooter">
                     <i class="fas fa-pen"></i> Share Your Experience
@@ -2625,8 +3423,10 @@
             </div>
         </div>
     </section>
+    @endif
 
     <!-- ============ PAYMENT METHODS ============ -->
+    @if($sectionsOn['payment_methods'] ?? true)
     <section class="payment-methods" style="background: var(--bg-secondary);">
         <div class="container">
             <div class="section-title">
@@ -2657,8 +3457,10 @@
             </div>
         </div>
     </section>
+    @endif
 
     <!-- ============ FAQ ============ -->
+    @if($sectionsOn['faq'] ?? true)
     <section class="features">
         <div class="container">
             <div class="section-title">
@@ -2689,8 +3491,10 @@
             </div>
         </div>
     </section>
+    @endif
 
     <!-- ============ CTA ============ -->
+    @if($sectionsOn['cta'] ?? true)
     <section class="cta">
         <div class="container">
             <div class="section-title">
@@ -2708,8 +3512,10 @@
             @endif
         </div>
     </section>
+    @endif
 
     <!-- ============ CONTACT ============ -->
+    @if($sectionsOn['contact'] ?? true)
     <section id="contact" class="features" style="background: var(--bg-secondary);">
         <div class="container">
             <div class="section-title">
@@ -2720,68 +3526,93 @@
                 <div class="benefit-item">
                     <i class="fas fa-envelope"></i>
                     <h3>Email</h3>
-                    <p>{{ $systemSettings->system_email ?? 'support@hilltop.com' }}</p>
+                    <p>{{ $contactEmail }}</p>
                 </div>
                 <div class="benefit-item">
                     <i class="fas fa-phone-alt"></i>
                     <h3>Phone</h3>
-                    <p>{{ $systemSettings->system_phone ?? '+233 123 456 789' }}</p>
+                    <p>{{ $contactPhone }}</p>
                 </div>
                 <div class="benefit-item">
                     <i class="fas fa-map-marker-alt"></i>
                     <h3>Address</h3>
-                    <p>Estate Office, {{ $systemSettings->system_name ?? 'Community Portal' }}</p>
+                    <p>{{ $contactAddress }}</p>
                 </div>
                 <div class="benefit-item">
                     <i class="fas fa-clock"></i>
                     <h3>Office Hours</h3>
-                    <p>Mon-Fri: 8:00 AM - 5:00 PM<br>Sat: 9:00 AM - 1:00 PM</p>
+                    <p>{!! nl2br(e($contactHours)) !!}</p>
                 </div>
             </div>
         </div>
     </section>
+    @endif
 
     <!-- ============ FOOTER ============ -->
     <footer class="footer">
         <div class="container">
             <div class="social-icons-footer">
-                <a href="#" aria-label="Facebook">
-                    <i class="fab fa-facebook-f"></i>
-                </a>
-                <a href="#" aria-label="Twitter">
-                    <i class="fab fa-twitter"></i>
-                </a>
-                <a href="#" aria-label="Instagram">
-                    <i class="fab fa-instagram"></i>
-                </a>
-                <a href="#" aria-label="WhatsApp">
-                    <i class="fab fa-whatsapp"></i>
-                </a>
+                @forelse($socialLinks as $key => $url)
+                    @if(isset($socialMeta[$key]))
+                        <a href="{{ $url }}" target="_blank" rel="noopener noreferrer"
+                           aria-label="{{ $socialMeta[$key][1] }}"
+                           title="{{ $socialMeta[$key][1] }}">
+                            <i class="{{ $socialMeta[$key][0] }}"></i>
+                        </a>
+                    @endif
+                @empty
+                    {{-- Fallback placeholders when no social links are configured --}}
+                    <a href="#" aria-label="Facebook">
+                        <i class="fab fa-facebook-f"></i>
+                    </a>
+                    <a href="#" aria-label="Twitter">
+                        <i class="fab fa-twitter"></i>
+                    </a>
+                    <a href="#" aria-label="Instagram">
+                        <i class="fab fa-instagram"></i>
+                    </a>
+                    <a href="#" aria-label="WhatsApp">
+                        <i class="fab fa-whatsapp"></i>
+                    </a>
+                @endforelse
             </div>
-            
+
             <div class="footer-links">
                 <a href="/">
                     <i class="fas fa-home"></i> Home
                 </a>
-                <a href="#how-it-works">
-                    <i class="fas fa-info-circle"></i> How It Works
-                </a>
-                <a href="#services">
-                    <i class="fas fa-cogs"></i> Services
-                </a>
-                <a href="#testimonials">
-                    <i class="fas fa-star"></i> Testimonials
-                </a>
+                @if($hasFeaturedAds)
+                    <a href="#featured-properties">
+                        <i class="fas fa-star"></i> Featured
+                    </a>
+                @endif
+                @if($sectionsOn['how_it_works'] ?? true)
+                    <a href="#how-it-works">
+                        <i class="fas fa-info-circle"></i> How It Works
+                    </a>
+                @endif
+                @if($sectionsOn['services'] ?? true)
+                    <a href="#services">
+                        <i class="fas fa-cogs"></i> Services
+                    </a>
+                @endif
+                @if($sectionsOn['testimonials'] ?? true)
+                    <a href="#testimonials">
+                        <i class="fas fa-star"></i> Testimonials
+                    </a>
+                @endif
                 <a href="{{ route('login') }}">
                     <i class="fas fa-sign-in-alt"></i> Login
                 </a>
-                <a href="#contact">
-                    <i class="fas fa-headset"></i> Contact
-                </a>
+                @if($sectionsOn['contact'] ?? true)
+                    <a href="#contact">
+                        <i class="fas fa-headset"></i> Contact
+                    </a>
+                @endif
             </div>
-            
+
             <p class="footer-copyright">
-                &copy; {{ date('Y') }} {{ $systemSettings->system_name ?? 'Community Portal' }}. All rights reserved.
+                {{ $footerCopyright }}
             </p>
         </div>
     </footer>
@@ -2796,7 +3627,7 @@
             <div class="modal-body">
                 <form id="registrationForm" action="{{ route('landlord.construction.register') }}" method="POST" enctype="multipart/form-data">
                     @csrf
-                    
+
                     <!-- Registration Type Selection -->
                     <div class="form-section">
                         <h4 class="form-section-title">What would you like to register?</h4>
@@ -2816,7 +3647,7 @@
                         <input type="hidden" name="purpose" id="purpose" value="">
                         <input type="hidden" name="include_construction" id="include_construction" value="0">
                     </div>
-                    
+
                     <!-- Landlord Information -->
                     <div class="form-section" id="landlordSection">
                         <h4 class="form-section-title">Landlord Information</h4>
@@ -2854,7 +3685,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <!-- Property/Land Information -->
                     <div class="form-section" id="propertySection">
                         <h4 class="form-section-title">Property/Land Details</h4>
@@ -2893,7 +3724,7 @@
                             <div id="docPreview" class="file-preview hidden"></div>
                         </div>
                     </div>
-                    
+
                     <!-- Construction Details (Vacant Land) -->
                     <div class="form-section hidden" id="constructionSection">
                         <h4 class="form-section-title">Construction Details</h4>
@@ -2905,7 +3736,7 @@
                             <input type="checkbox" id="provide_construction_details" name="provide_construction_details">
                             <label for="provide_construction_details">I want to provide construction details now</label>
                         </div>
-                        
+
                         <div id="constructionDetailsForm" class="hidden">
                             <div class="form-row">
                                 <div class="form-group">
@@ -2959,7 +3790,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <!-- Existing Property Details -->
                     <div class="form-section hidden" id="existingPropertySection">
                         <h4 class="form-section-title">Existing Property Details</h4>
@@ -3026,7 +3857,7 @@
                             <div id="propertyDocPreview" class="file-preview hidden"></div>
                         </div>
                     </div>
-                    
+
                     <!-- Tenants Section -->
                     <div class="form-section hidden" id="tenantsSection">
                         <h4 class="form-section-title">Tenant Information</h4>
@@ -3034,7 +3865,7 @@
                             <input type="checkbox" id="has_tenants" name="has_tenants" value="yes">
                             <label for="has_tenants">This property has existing tenants</label>
                         </div>
-                        
+
                         <div id="tenantsList" class="hidden">
                             <div id="tenantEntries"></div>
                             <button type="button" class="add-tenant-btn" id="addTenantBtn">
@@ -3042,7 +3873,7 @@
                             </button>
                         </div>
                     </div>
-                    
+
                     <!-- Declaration -->
                     <div class="form-section">
                         <div class="checkbox-group">
@@ -3050,7 +3881,7 @@
                             <label for="declaration" class="required">I hereby declare that the information provided is true and correct to the best of my knowledge.</label>
                         </div>
                     </div>
-                    
+
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" id="previewBtn">
                             <i class="fas fa-eye"></i> Preview
@@ -3099,7 +3930,7 @@
                 <div id="testimonialRateLimitInfo" class="rate-limit-info" style="display: none;">
                     <i class="fas fa-clock"></i> Please wait before submitting another testimonial.
                 </div>
-                
+
                 <form id="testimonialForm">
                     @csrf
                     <div class="form-group">
@@ -3107,7 +3938,7 @@
                         <input type="text" id="testimonial_name" name="name" class="form-control" required>
                         <span class="error-message" id="testimonialNameError"></span>
                     </div>
-                    
+
                     <div class="form-row">
                         <div class="form-group">
                             <label for="testimonial_email">Email (Optional)</label>
@@ -3125,7 +3956,7 @@
                             </select>
                         </div>
                     </div>
-                    
+
                     <div class="form-group">
                         <label class="required">Rating</label>
                         <div class="rating-input" id="ratingInput">
@@ -3138,7 +3969,7 @@
                         </div>
                         <span class="error-message" id="testimonialRatingError"></span>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="testimonial_content" class="required">Your Feedback</label>
                         <textarea id="testimonial_content" name="content" rows="5" class="form-control" required maxlength="1000"></textarea>
@@ -3147,7 +3978,7 @@
                         </div>
                         <span class="error-message" id="testimonialContentError"></span>
                     </div>
-                    
+
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" id="cancelTestimonialBtn">Cancel</button>
                         <button type="submit" class="btn btn-primary" id="submitTestimonialBtn">
@@ -3159,52 +3990,54 @@
         </div>
     </div>
 
-    {{-- ⭐ FLOATING CHAT WIDGET — now visible to guests AND authenticated users --}}
-    @php
-        $chatUser     = auth()->user();
-        $chatProvider = app(\App\Services\ChatHelpTopicProvider::class);
-        $chatRoleName = $chatUser?->type_name ?? 'Guest';
-    @endphp
+    {{-- ⭐ FLOATING CHAT WIDGET — hidden in preview mode for cleaner preview --}}
+    @unless($isPreviewMode)
+        @php
+            $chatUser     = auth()->user();
+            $chatProvider = app(\App\Services\ChatHelpTopicProvider::class);
+            $chatRoleName = $chatUser?->type_name ?? 'Guest';
+        @endphp
 
-    <button type="button"
-            id="floatingChatLauncher"
-            class="floating-chat-launcher"
-            title="Chat with us"
-            aria-label="Open chat">
-        <i class="fas fa-comments"></i>
-    </button>
+        <button type="button"
+                id="floatingChatLauncher"
+                class="floating-chat-launcher"
+                title="Chat with us"
+                aria-label="Open chat">
+            <i class="fas fa-comments"></i>
+        </button>
 
-    <div id="floatingChatPanel"
-         class="floating-chat-panel"
-         role="dialog"
-         aria-label="Chat assistant">
-        <div class="floating-chat-panel__header">
-            <div>
-                <strong>Assistant</strong>
-                <div class="floating-chat-panel__sub">
-                    @if($chatUser)
-                        Helping you as <strong>{{ $chatRoleName }}</strong>
-                    @else
-                        Ask anything before you register
-                    @endif
+        <div id="floatingChatPanel"
+             class="floating-chat-panel"
+             role="dialog"
+             aria-label="Chat assistant">
+            <div class="floating-chat-panel__header">
+                <div>
+                    <strong>Assistant</strong>
+                    <div class="floating-chat-panel__sub">
+                        @if($chatUser)
+                            Helping you as <strong>{{ $chatRoleName }}</strong>
+                        @else
+                            Ask anything before you register
+                        @endif
+                    </div>
                 </div>
+                <button type="button"
+                        id="floatingChatClose"
+                        class="floating-chat-panel__close"
+                        aria-label="Close chat">
+                    <i class="fas fa-times"></i>
+                </button>
             </div>
-            <button type="button"
-                    id="floatingChatClose"
-                    class="floating-chat-panel__close"
-                    aria-label="Close chat">
-                <i class="fas fa-times"></i>
-            </button>
+            <div class="floating-chat-panel__body">
+                @include('chat._widget', [
+                    'userRoleName'    => $chatRoleName,
+                    'userRoleId'      => $chatUser?->type,
+                    'recentMessages'  => collect(),
+                    'quickHelpTopics' => $chatProvider->forUser($chatUser),
+                ])
+            </div>
         </div>
-        <div class="floating-chat-panel__body">
-            @include('chat._widget', [
-                'userRoleName'    => $chatRoleName,
-                'userRoleId'      => $chatUser?->type,
-                'recentMessages'  => collect(),
-                'quickHelpTopics' => $chatProvider->forUser($chatUser),
-            ])
-        </div>
-    </div>
+    @endunless
 
     <script>
     // ============================================
@@ -3212,23 +4045,23 @@
     // ============================================
     const themeToggleBtn = document.getElementById('themeToggleBtn');
     const themeText = document.getElementById('themeText');
-    
+
     function setTheme(theme) {
         const html = document.documentElement;
         html.setAttribute('data-theme', theme);
         localStorage.setItem('theme', theme);
-        
+
         if (themeText) {
             themeText.textContent = theme === 'dark' ? 'Dark' : 'Light';
         }
     }
-    
+
     function toggleTheme() {
         const currentTheme = document.documentElement.getAttribute('data-theme');
         const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
         setTheme(newTheme);
     }
-    
+
     if (themeToggleBtn) {
         themeToggleBtn.addEventListener('click', toggleTheme);
         themeToggleBtn.addEventListener('touchend', function(e) {
@@ -3236,8 +4069,8 @@
             toggleTheme();
         });
     }
-    
-    const savedTheme = localStorage.getItem('theme') || 
+
+    const savedTheme = localStorage.getItem('theme') ||
                       (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     setTheme(savedTheme);
     document.documentElement.classList.remove('theme-loading');
@@ -3247,13 +4080,13 @@
     // ============================================
     const Toast = {
         container: document.getElementById('toastContainer'),
-        
+
         show(message, type = 'info', duration = 5000) {
             if (!this.container) {
                 console.warn('Toast container not found');
                 return;
             }
-            
+
             const toast = document.createElement('div');
             const iconMap = {
                 success: 'fa-check-circle',
@@ -3267,7 +4100,7 @@
                 <span>${message}</span>
             `;
             this.container.appendChild(toast);
-            
+
             toast.addEventListener('click', () => {
                 toast.style.animation = 'slideOut 0.3s ease';
                 setTimeout(() => {
@@ -3276,7 +4109,7 @@
                     }
                 }, 300);
             });
-            
+
             setTimeout(() => {
                 if (toast.parentNode) {
                     toast.style.animation = 'slideOut 0.3s ease';
@@ -3288,7 +4121,7 @@
                 }
             }, duration);
         },
-        
+
         success(msg, duration = 5000) { this.show(msg, 'success', duration); },
         error(msg, duration = 5000) { this.show(msg, 'error', duration); },
         info(msg, duration = 5000) { this.show(msg, 'info', duration); },
@@ -3389,7 +4222,7 @@
     function createTestimonialCard(testimonial) {
         const ratingStars = '★'.repeat(testimonial.rating) + '☆'.repeat(5 - testimonial.rating);
         const initials = testimonial.name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
-        
+
         return `
             <div class="testimonial-card">
                 <div class="testimonial-rating">
@@ -3413,13 +4246,13 @@
 
     function renderCarousel() {
         if (!testimonialsData.length) return;
-        
+
         updateSlidesToShow();
         totalSlides = testimonialsData.length;
-        
+
         const duplicatedItems = [...testimonialsData, ...testimonialsData, ...testimonialsData];
         const startIndex = testimonialsData.length;
-        
+
         let html = '';
         for (let i = 0; i < slidesToShow * 3; i++) {
             const item = duplicatedItems[startIndex + i];
@@ -3428,28 +4261,28 @@
             }
         }
         track.innerHTML = html;
-        
+
         const slideWidth = track.children[0]?.offsetWidth + 24;
         const initialOffset = -(testimonialsData.length * slideWidth);
         track.style.transform = `translateX(${initialOffset}px)`;
         currentIndex = testimonialsData.length;
-        
+
         updateDots();
         updateStatus();
     }
 
     function updateDots() {
         if (!dotsContainer) return;
-        
+
         const dotCount = Math.ceil(totalSlides / slidesToShow);
         let dotsHtml = '';
         const currentPage = Math.floor((currentIndex % totalSlides) / slidesToShow);
-        
+
         for (let i = 0; i < dotCount; i++) {
             dotsHtml += `<div class="carousel-dot ${i === currentPage ? 'active' : ''}" data-page="${i}"></div>`;
         }
         dotsContainer.innerHTML = dotsHtml;
-        
+
         document.querySelectorAll('.carousel-dot').forEach(dot => {
             dot.addEventListener('click', () => {
                 const page = parseInt(dot.dataset.page);
@@ -3484,14 +4317,14 @@
     function nextSlide() {
         const slideWidth = track.children[0]?.offsetWidth + 24;
         const newIndex = currentIndex + slidesToShow;
-        
+
         track.style.transition = 'transform 0.5s ease-in-out';
         track.style.transform = `translateX(${-(newIndex * slideWidth)}px)`;
         currentIndex = newIndex;
-        
+
         updateDots();
         updateStatus();
-        
+
         setTimeout(() => {
             if (currentIndex >= testimonialsData.length * 2) {
                 track.style.transition = 'none';
@@ -3509,14 +4342,14 @@
     function prevSlide() {
         const slideWidth = track.children[0]?.offsetWidth + 24;
         const newIndex = currentIndex - slidesToShow;
-        
+
         track.style.transition = 'transform 0.5s ease-in-out';
         track.style.transform = `translateX(${-(newIndex * slideWidth)}px)`;
         currentIndex = newIndex;
-        
+
         updateDots();
         updateStatus();
-        
+
         setTimeout(() => {
             if (currentIndex < testimonialsData.length) {
                 track.style.transition = 'none';
@@ -3558,16 +4391,16 @@
 
     async function loadTestimonials() {
         if (!track) return;
-        
+
         try {
             const response = await fetch('/api/testimonials?limit=20');
             const data = await response.json();
-            
+
             if (data.success && data.testimonials && data.testimonials.length > 0) {
                 testimonialsData = data.testimonials;
                 renderCarousel();
                 startAutoScroll();
-                
+
                 if (prevBtn) {
                     prevBtn.addEventListener('click', () => {
                         isUserInteracting = true;
@@ -3583,7 +4416,7 @@
                         setTimeout(() => { isUserInteracting = false; }, 10000);
                     });
                 }
-                
+
                 if (nextBtn) {
                     nextBtn.addEventListener('click', () => {
                         isUserInteracting = true;
@@ -3599,11 +4432,11 @@
                         setTimeout(() => { isUserInteracting = false; }, 10000);
                     });
                 }
-                
+
                 const carousel = document.getElementById('testimonialsCarousel');
                 carousel.addEventListener('mouseenter', stopAutoScroll);
                 carousel.addEventListener('mouseleave', startAutoScroll);
-                
+
                 let resizeTimeout;
                 window.addEventListener('resize', () => {
                     clearTimeout(resizeTimeout);
@@ -3652,7 +4485,7 @@
     function updateCharacterCounter() {
         const length = contentTextarea.value.length;
         charCountSpan.textContent = length;
-        
+
         if (charCounterDiv) {
             charCounterDiv.classList.remove('warning', 'danger');
             if (length > 900) {
@@ -3755,7 +4588,7 @@
             closeTestimonialModal();
         });
     }
-    
+
     if (cancelTestimonialBtn) {
         cancelTestimonialBtn.addEventListener('click', closeTestimonialModal);
         cancelTestimonialBtn.addEventListener('touchend', function(e) {
@@ -3808,7 +4641,7 @@
 
     testimonialForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        
+
         if (!validateTestimonialForm()) {
             Toast.warning('Please fix the errors above before submitting.');
             return;
@@ -3900,10 +4733,10 @@
             regTypeCards.forEach(c => c.classList.remove('selected'));
             card.classList.add('selected');
             selectedType = card.dataset.type;
-            
+
             if (selectedType === 'vacant_land') {
                 registrationTypeInput.value = 'construction';
-                
+
                 const provideConstruction = document.getElementById('provide_construction_details');
                 if (provideConstruction && provideConstruction.checked) {
                     purposeInput.value = 'both';
@@ -3912,7 +4745,7 @@
                     purposeInput.value = 'construction';
                     includeConstructionInput.value = '0';
                 }
-                
+
                 constructionSection.classList.remove('hidden');
                 existingPropertySection.classList.add('hidden');
                 tenantsSection.classList.add('hidden');
@@ -4045,9 +4878,9 @@
         const uploadArea = document.getElementById(uploadAreaId);
         const fileInput = document.getElementById(inputId);
         const preview = document.getElementById(previewId);
-        
+
         if (!uploadArea || !fileInput) return;
-        
+
         uploadArea.addEventListener('click', () => fileInput.click());
         uploadArea.addEventListener('touchend', function(e) {
             e.preventDefault();
@@ -4066,7 +4899,7 @@
             fileInput.files = files;
             updateFilePreview(fileInput, preview, isMultiple);
         });
-        
+
         fileInput.addEventListener('change', () => {
             updateFilePreview(fileInput, preview, isMultiple);
         });
@@ -4080,7 +4913,7 @@
             previewElement.innerHTML = '';
             return;
         }
-        
+
         previewElement.classList.remove('hidden');
         previewElement.innerHTML = files.map((file, index) => `
             <div class="file-preview-item">
@@ -4121,24 +4954,24 @@
     function closeRegistrationModal() {
         registrationModal.classList.remove('active');
         document.body.style.overflow = '';
-        
+
         const form = document.getElementById('registrationForm');
         if (form) form.reset();
-        
+
         regTypeCards.forEach(c => c.classList.remove('selected'));
         selectedType = null;
-        
+
         constructionSection.classList.add('hidden');
         existingPropertySection.classList.add('hidden');
         tenantsSection.classList.add('hidden');
         constructionDetailsForm.classList.add('hidden');
         tenantsList.classList.add('hidden');
-        
+
         if (tenantEntries) {
             tenantEntries.innerHTML = '';
         }
         tenantCount = 0;
-        
+
         if (additionalPhonesContainer) {
             const phoneEntries = additionalPhonesContainer.querySelectorAll('.additional-phone-entry');
             phoneEntries.forEach((entry, index) => {
@@ -4155,7 +4988,7 @@
                 }
             });
         }
-        
+
         document.querySelectorAll('.file-preview').forEach(preview => {
             preview.classList.add('hidden');
             preview.innerHTML = '';
@@ -4163,17 +4996,17 @@
         document.querySelectorAll('.file-input').forEach(input => {
             input.value = '';
         });
-        
+
         document.querySelectorAll('.error-message').forEach(el => {
             el.textContent = '';
         });
         document.querySelectorAll('.form-control').forEach(el => {
             el.classList.remove('error');
         });
-        
+
         const declaration = document.getElementById('declaration');
         if (declaration) declaration.checked = false;
-        
+
         closePreviewModal();
     }
 
@@ -4184,7 +5017,7 @@
             closeRegistrationModal();
         });
     }
-    
+
     if (cancelRegBtn) {
         cancelRegBtn.addEventListener('click', closeRegistrationModal);
         cancelRegBtn.addEventListener('touchend', function(e) {
@@ -4220,22 +5053,22 @@
         const primaryPhone = document.getElementById('primary_phone').value || 'Not provided';
         const additionalPhones = Array.from(document.querySelectorAll('input[name="additional_phones[]"]'))
             .map(input => input.value).filter(v => v);
-        
+
         const propertyName = document.getElementById('property_name').value || 'Not provided';
         const plotNumber = document.getElementById('plot_number').value || 'Not provided';
         const streetName = document.getElementById('street_name').value || 'Not provided';
         const digitalAddress = document.getElementById('digital_address').value || 'Not provided';
         const landDescription = document.getElementById('land_description').value || 'Not provided';
-        
+
         const hasLandDoc = document.getElementById('land_ownership_document').files.length > 0;
-        
+
         let registrationType = 'Not selected';
         if (selectedType === 'vacant_land') {
             registrationType = 'Vacant Land';
         } else if (selectedType === 'existing_property') {
             registrationType = 'Existing Property';
         }
-        
+
         let constructionDetails = {};
         if (selectedType === 'vacant_land') {
             const provideDetails = document.getElementById('provide_construction_details').checked;
@@ -4247,7 +5080,7 @@
                 const estimatedCompletion = document.getElementById('estimated_completion').value || 'Not provided';
                 const hasPlans = document.getElementById('has_plans').checked ? 'Yes' : 'No';
                 const hasConstructionDocs = document.getElementById('construction_documents').files.length > 0;
-                
+
                 constructionDetails = {
                     propertyType: propertyType === 'other' ? customType || 'Other (specified)' : propertyType,
                     propertyStatus: propertyStatus,
@@ -4260,7 +5093,7 @@
                 constructionDetails = { notProvided: true };
             }
         }
-        
+
         let existingPropertyDetails = {};
         if (selectedType === 'existing_property') {
             const existingType = document.getElementById('existing_property_type').value || 'Not selected';
@@ -4271,7 +5104,7 @@
             const bathrooms = document.getElementById('existing_bathrooms').value || 'Not provided';
             const hasPhotos = document.getElementById('property_photos').files.length > 0;
             const hasPropertyDocs = document.getElementById('property_documents').files.length > 0;
-            
+
             existingPropertyDetails = {
                 propertyType: existingType === 'other' ? customExistingType || 'Other (specified)' : existingType,
                 propertyStatus: existingStatus,
@@ -4282,7 +5115,7 @@
                 hasPropertyDocs: hasPropertyDocs
             };
         }
-        
+
         let tenantData = [];
         if (selectedType === 'existing_property' && document.getElementById('has_tenants').checked) {
             const tenantEntriesList = document.querySelectorAll('.tenant-entry');
@@ -4290,7 +5123,7 @@
                 const nameInputTenant = entry.querySelector(`[name="tenant_name_${index}"]`);
                 const phoneInputTenant = entry.querySelector(`[name="tenant_phone_${index}"]`);
                 const emailInputTenant = entry.querySelector(`[name="tenant_email_${index}"]`);
-                
+
                 if (nameInputTenant && nameInputTenant.value) {
                     tenantData.push({
                         name: nameInputTenant.value,
@@ -4300,7 +5133,7 @@
                 }
             });
         }
-        
+
         let html = `
             <div class="preview-section">
                 <h4>Registration Type</h4>
@@ -4309,7 +5142,7 @@
                     <span class="preview-value"><span class="badge badge-primary">${registrationType}</span></span>
                 </div>
             </div>
-            
+
             <div class="preview-section">
                 <h4>Landlord Information</h4>
                 <div class="preview-item">
@@ -4331,7 +5164,7 @@
                 </div>
                 ` : ''}
             </div>
-            
+
             <div class="preview-section">
                 <h4>Property/Land Details</h4>
                 <div class="preview-item">
@@ -4360,7 +5193,7 @@
                 </div>
             </div>
         `;
-        
+
         if (selectedType === 'vacant_land') {
             html += `
                 <div class="preview-section">
@@ -4399,7 +5232,7 @@
                 </div>
             `;
         }
-        
+
         if (selectedType === 'existing_property') {
             html += `
                 <div class="preview-section">
@@ -4435,7 +5268,7 @@
                 </div>
             `;
         }
-        
+
         if (selectedType === 'existing_property') {
             html += `
                 <div class="preview-section">
@@ -4471,7 +5304,7 @@
                 </div>
             `;
         }
-        
+
         const declarationChecked = document.getElementById('declaration').checked;
         html += `
             <div class="preview-section">
@@ -4482,7 +5315,7 @@
                 </div>
             </div>
         `;
-        
+
         return html;
     }
 
@@ -4496,34 +5329,34 @@
     if (previewBtn) {
         previewBtn.addEventListener('click', (e) => {
             e.preventDefault();
-            
+
             if (!selectedType) {
                 Toast.warning('Please select a registration type first.');
                 return;
             }
-            
+
             const name = document.getElementById('name').value.trim();
             const primaryPhone = document.getElementById('primary_phone').value.trim();
             const propertyName = document.getElementById('property_name').value.trim();
             const plotNumber = document.getElementById('plot_number').value.trim();
             const streetName = document.getElementById('street_name').value.trim();
-            
+
             if (!name || !primaryPhone || !propertyName || !plotNumber || !streetName) {
                 Toast.warning('Please fill in all required fields before previewing.');
                 return;
             }
-            
+
             if (!isValidPhoneNumber(primaryPhone)) {
                 Toast.warning('Please enter a valid phone number.');
                 return;
             }
-            
+
             const landDoc = document.getElementById('land_ownership_document');
             if (!landDoc.files || landDoc.files.length === 0) {
                 Toast.warning('Please upload the land ownership document.');
                 return;
             }
-            
+
             const previewHtml = generatePreview();
             previewContent.innerHTML = previewHtml;
             openPreviewModal();
@@ -4612,34 +5445,34 @@
 
     function cleanBOM(text) {
         if (!text) return text;
-        
+
         let cleaned = text;
-        
+
         if (cleaned.charCodeAt(0) === 0xFEFF) {
             cleaned = cleaned.substring(1);
         }
-        
+
         if (cleaned.startsWith('\uFEFF')) {
             cleaned = cleaned.substring(1);
         }
-        
+
         if (cleaned.startsWith('﻿')) {
             cleaned = cleaned.substring(1);
         }
-        
-        if (cleaned.length >= 3 && 
-            cleaned.charCodeAt(0) === 0xEF && 
-            cleaned.charCodeAt(1) === 0xBB && 
+
+        if (cleaned.length >= 3 &&
+            cleaned.charCodeAt(0) === 0xEF &&
+            cleaned.charCodeAt(1) === 0xBB &&
             cleaned.charCodeAt(2) === 0xBF) {
             cleaned = cleaned.substring(3);
         }
-        
+
         return cleaned;
     }
 
     registrationForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        
+
         if (!validateRegistrationForm()) {
             return;
         }
@@ -4653,9 +5486,9 @@
 
         const provideConstruction = document.getElementById('provide_construction_details');
         const isConstructionProvided = provideConstruction && provideConstruction.checked;
-        
+
         formData.set('include_construction', isConstructionProvided ? '1' : '0');
-        
+
         if (selectedType === 'vacant_land') {
             if (isConstructionProvided) {
                 formData.set('purpose', 'both');
@@ -4676,7 +5509,7 @@
                 const phoneInputTenant = entry.querySelector(`[name="tenant_phone_${index}"]`);
                 const emailInputTenant = entry.querySelector(`[name="tenant_email_${index}"]`);
                 const notesInput = entry.querySelector(`[name="tenant_notes_${index}"]`);
-                
+
                 if (nameInputTenant && nameInputTenant.value && phoneInputTenant && phoneInputTenant.value) {
                     tenants.push({
                         name: nameInputTenant.value,
@@ -4686,7 +5519,7 @@
                     });
                 }
             });
-            
+
             if (tenants.length > 0) {
                 formData.append('tenant_data_json', JSON.stringify(tenants));
                 formData.append('tenant_count', tenants.length);
@@ -4713,11 +5546,11 @@
 
             let data;
             const contentType = response.headers.get('content-type');
-            
+
             if (contentType && contentType.includes('application/json')) {
                 const text = await response.text();
                 const cleanText = cleanBOM(text);
-                
+
                 try {
                     data = JSON.parse(cleanText);
                 } catch (parseError) {
@@ -4736,7 +5569,7 @@
             } else {
                 const text = await response.text();
                 const cleanText = cleanBOM(text);
-                
+
                 try {
                     data = JSON.parse(cleanText);
                 } catch (e) {
@@ -4750,9 +5583,9 @@
 
             if (response.ok && data.success) {
                 Toast.success(data.message || 'Your registration has been submitted successfully!');
-                
+
                 closeRegistrationModal();
-                
+
                 if (data.access_token) {
                     setTimeout(() => {
                         Toast.info(`Your tracking token: ${data.access_token}. Please save this to check your registration status.`, 8000);
@@ -4773,7 +5606,7 @@
                 }
             } else {
                 let errorMessage = data?.message || data?.error || 'Server error occurred. Please try again.';
-                
+
                 if (response.status === 422) {
                     if (data.errors) {
                         for (let key in data.errors) {
@@ -4789,13 +5622,13 @@
                 } else if (response.status === 500) {
                     errorMessage = 'Server error. Our team has been notified. Please try again later.';
                 }
-                
+
                 Toast.error(errorMessage);
             }
 
         } catch (error) {
             console.error('Registration error:', error);
-            
+
             if (error.name === 'TypeError' && error.message.includes('fetch')) {
                 Toast.error('Network connection issue. Please check your internet and try again.');
             } else if (error.name === 'AbortError') {
@@ -4814,14 +5647,14 @@
     // ============================================
     // TOUCH EVENT HANDLING FOR ALL BUTTONS
     // ============================================
-    document.querySelectorAll('button, .btn, .reg-type-card, .carousel-btn, .carousel-dot, .social-icons-footer a, .footer-links a, .theme-toggle, .mobile-menu-btn, .modal-close, .file-upload-area, .add-tenant-btn, .add-phone-btn').forEach(el => {
+    document.querySelectorAll('button, .btn, .reg-type-card, .carousel-btn, .carousel-dot, .social-icons-footer a, .footer-links a, .theme-toggle, .mobile-menu-btn, .modal-close, .file-upload-area, .add-tenant-btn, .add-phone-btn, .ad-card__cta').forEach(el => {
         el.addEventListener('touchstart', function(e) {
             this.style.touchAction = 'manipulation';
         }, { passive: true });
     });
 
     // ============================================
-    // ⭐ FLOATING CHAT TOGGLE (visible to guests + auth)
+    // ⭐ FLOATING CHAT TOGGLE (visible to guests + auth, hidden in preview)
     // ============================================
     (function () {
         const launcher = document.getElementById('floatingChatLauncher');
@@ -4850,7 +5683,7 @@
             if (e.key === 'Escape' && panel.classList.contains('open')) close();
         });
 
-        // Auto-open after 20 seconds on first visit per session
+        // Auto-open after 20 seconds on first visit per session (skip in preview mode)
         if (!sessionStorage.getItem('chatAutoOpened')) {
             setTimeout(() => {
                 if (!panel.classList.contains('open')) {
@@ -4861,7 +5694,7 @@
         }
     })();
 
-    console.log('Homepage loaded with full responsiveness, touch support, preview functionality, and floating chat widget (guest-accessible)');
+    console.log('Homepage loaded with theme customization, dynamic content config, full responsiveness, touch support, preview mode, and floating chat widget');
 </script>
 
 {{-- Stack for pushed scripts (chat widget JS) --}}

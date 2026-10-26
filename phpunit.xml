@@ -3,6 +3,13 @@
          xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
          bootstrap="vendor/autoload.php"
          colors="true"
+         cacheDirectory=".phpunit.cache"
+         failOnDeprecation="false"
+         failOnWarning="false"
+         failOnNotice="false"
+         failOnRisky="false"
+         displayDetailsOnTestsThatTriggerDeprecations="false"
+         displayDetailsOnTestsThatTriggerWarnings="false"
 >
     <testsuites>
         <testsuite name="Unit">
@@ -22,13 +29,25 @@
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="CACHE_STORE" value="array"/>
-        <env name="DB_CONNECTION" value="sqlite"/>
-        <env name="DB_DATABASE" value=":memory:"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
-        <env name="SESSION_DRIVER" value="array"/>
+
+        <!-- ✅ FIXED: use `file` (not `array`) so session state persists
+             across test requests within a single test case. -->
+        <env name="SESSION_DRIVER" value="file"/>
+
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+
+        <env name="DB_CONNECTION" value="mysql"/>
+        <env name="DB_HOST" value="127.0.0.1"/>
+        <env name="DB_PORT" value="3306"/>
+        <env name="DB_DATABASE" value="hilltop_test"/>
+        <env name="DB_USERNAME" value="root"/>
+        <env name="DB_PASSWORD" value=""/>
+
+        <!-- Suppress PHP 8.5 PDO deprecation notices -->
+        <ini name="error_reporting" value="E_ALL &amp; ~E_DEPRECATED"/>
     </php>
 </phpunit>

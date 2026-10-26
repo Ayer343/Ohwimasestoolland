@@ -2,13 +2,13 @@
 
 @php
     $user = Auth::user();
-    
+
     // ==================== DASHBOARD AWARE LOGIC ====================
     $sourceDashboard = session('last_dashboard', 'tenant');
     $returnRoute = null;
     $returnLabel = 'Dashboard';
     $returnIcon = 'tachometer-alt';
-    
+
     $roleBasedRoles = $user->roles ?? collect();
     $legacyType = $user->type;
     $legacyTypeRoleMap = [
@@ -21,15 +21,15 @@
         6 => 'security-personnel',
     ];
     $legacyRoleSlug = $legacyTypeRoleMap[$legacyType] ?? null;
-    
+
     $allRoleSlugs = $roleBasedRoles->pluck('slug')->toArray();
     if ($legacyRoleSlug && !in_array($legacyRoleSlug, $allRoleSlugs)) {
         $allRoleSlugs[] = $legacyRoleSlug;
     }
     $hasMultipleRoles = count($allRoleSlugs) > 1;
-    
+
     $currentRole = session('selected_role', $legacyRoleSlug ?? 'tenant');
-    
+
     $roleIcons = [
         'super-admin' => 'crown',
         'admin' => 'shield-alt',
@@ -39,7 +39,7 @@
         'security-personnel' => 'shield-alt',
         'developer' => 'code',
     ];
-    
+
     $roleDescriptions = [
         'super-admin' => 'Full system control',
         'admin' => 'System management',
@@ -49,10 +49,10 @@
         'security-personnel' => 'Security operations',
         'developer' => 'System development',
     ];
-    
+
     $switcherRoles = [];
     $addedSlugs = [];
-    
+
     if ($legacyRoleSlug && !in_array($legacyRoleSlug, $addedSlugs)) {
         $switcherRoles[] = (object)[
             'slug' => $legacyRoleSlug,
@@ -62,7 +62,7 @@
         ];
         $addedSlugs[] = $legacyRoleSlug;
     }
-    
+
     foreach ($roleBasedRoles as $role) {
         if (!in_array($role->slug, $addedSlugs)) {
             $switcherRoles[] = (object)[
@@ -74,7 +74,7 @@
             $addedSlugs[] = $role->slug;
         }
     }
-    
+
     usort($switcherRoles, function($a, $b) {
         $order = ['super-admin' => 0, 'admin' => 1, 'landlord' => 2, 'tenant' => 3];
         $orderA = $order[$a->slug] ?? 99;
@@ -82,7 +82,7 @@
         if ($orderA === $orderB) return strcmp($a->slug, $b->slug);
         return $orderA - $orderB;
     });
-    
+
     switch($currentRole) {
         case 'super-admin':
             $returnRoute = route('super-admin.dashboard');
@@ -124,28 +124,28 @@
             $returnLabel = 'Tenant Dashboard';
             $returnIcon = 'user';
     }
-    
+
     $titlePrefix = ucfirst(str_replace('-', ' ', $currentRole));
-    
+
     // Rental stats
     use App\Models\Rental;
     $activeRentals = $user->rentals()
         ->where('status', Rental::STATUS_ACTIVE)
         ->count();
-    
+
     $pastRentals = $user->rentals()
         ->whereIn('status', [Rental::STATUS_COMPLETED, Rental::STATUS_CANCELLED])
         ->count();
-    
+
     $totalRent = $user->rentals()
         ->where('status', Rental::STATUS_ACTIVE)
         ->sum('monthly_rent');
-    
+
     $nextPayment = null;
     $activeRental = $user->rentals()
         ->where('status', Rental::STATUS_ACTIVE)
         ->first();
-    
+
     if ($activeRental) {
         $nextPayment = now()->addMonth()->startOfMonth();
     }
@@ -163,25 +163,24 @@
                     <h1 class="text-3xl font-bold" style="color: var(--text-primary);">{{ $titlePrefix }} Profile</h1>
                     <p class="text-sm mt-1" style="color: var(--text-secondary);">Manage your account and rental information</p>
                 </div>
-                
+
                 <div class="flex items-center space-x-4 flex-wrap gap-3">
-                    <!-- ✅ THEME: Profile completion percentage -->
                     <div class="text-center">
                         <div class="text-2xl font-bold" style="color: var(--warning);" data-profile-completion>{{ $profileCompletion ?? 0 }}%</div>
                         <div class="text-xs" style="color: var(--text-secondary);">Profile Complete</div>
                     </div>
-                    
+
                     @if($hasMultipleRoles)
                     <div class="dashboard-switcher relative">
-                        <button id="profileSwitcherBtn" 
+                        <button id="profileSwitcherBtn"
                                 class="flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm"
                                 style="background: linear-gradient(135deg, var(--warning) 0%, var(--orange) 100%); color: white;">
                             <i class="fas fa-{{ $roleIcons[$currentRole] ?? 'user' }} mr-1"></i>
                             <span>{{ ucfirst(str_replace('-', ' ', $currentRole)) }}</span>
                             <i class="fas fa-chevron-down text-xs ml-1"></i>
                         </button>
-                        
-                        <div id="profileSwitcherMenu" 
+
+                        <div id="profileSwitcherMenu"
                              class="absolute right-0 mt-2 w-72 rounded-xl shadow-lg overflow-hidden z-50 hidden"
                              style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
                             <div class="py-2">
@@ -193,7 +192,7 @@
                                         You have {{ count($switcherRoles) }} dashboard{{ count($switcherRoles) > 1 ? 's' : '' }} available
                                     </p>
                                 </div>
-                                
+
                                 @foreach($switcherRoles as $role)
                                     @php
                                         $isActive = ($currentRole === $role->slug);
@@ -204,7 +203,7 @@
                                             data-role="{{ $role->slug }}"
                                             data-current-role="{{ $currentRole }}"
                                             style="display: flex; color: var(--text-primary); {{ $isActive ? 'background-color: rgba(var(--warning-rgb), 0.1); border-left: 3px solid var(--warning);' : '' }}">
-                                        <div class="w-9 h-9 rounded-full flex items-center justify-center" 
+                                        <div class="w-9 h-9 rounded-full flex items-center justify-center"
                                              style="background: {{ $isActive ? 'linear-gradient(135deg, var(--warning) 0%, var(--orange) 100%)' : 'rgba(var(--warning-rgb), 0.1)' }}">
                                             <i class="fas fa-{{ $icon }} text-sm" style="color: {{ $isActive ? 'white' : 'var(--warning)' }}"></i>
                                         </div>
@@ -229,14 +228,14 @@
                         </div>
                     </div>
                     @endif
-                    
-                    <a href="{{ $returnRoute }}" 
+
+                    <a href="{{ $returnRoute }}"
                        class="btn-secondary flex items-center" id="returnDashboardBtn">
                         <i class="fas fa-{{ $returnIcon }} mr-2"></i> {{ $returnLabel }}
                     </a>
                 </div>
             </div>
-            
+
             <!-- Progress Breakdown -->
             <div class="card p-4 mb-6">
                 <h3 class="font-semibold mb-3" style="color: var(--text-primary);">Complete Your Profile</h3>
@@ -245,7 +244,6 @@
                         @foreach($profileStats['completion_details'] as $field => $detail)
                             @if($field !== 'total_weight' && $field !== 'completed_weight')
                                 <div class="flex items-center space-x-2" title="{{ $detail['completed'] ? 'Completed' : 'Incomplete' }}">
-                                    <!-- ✅ THEME: Completed = success var, Incomplete = muted -->
                                     <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs"
                                          style="background-color: {{ $detail['completed'] ? 'rgba(var(--success-rgb), 0.15)' : 'rgba(var(--text-secondary-rgb, 150 150 150), 0.1)' }};
                                                 color: {{ $detail['completed'] ? 'var(--success)' : 'var(--text-secondary)' }};">
@@ -296,10 +294,10 @@
                                 $initials = $user->getInitials();
                                 $hasPhoto = !empty($user->photo) && $photoUrl;
                             @endphp
-                            
+
                             @if($hasPhoto)
                                 <div class="relative">
-                                    <img src="{{ $photoUrl }}" 
+                                    <img src="{{ $photoUrl }}"
                                          alt="{{ $user->name }}"
                                          class="w-32 h-32 rounded-full object-cover border-4 mx-auto shadow-lg lazy"
                                          style="border-color: var(--warning);"
@@ -314,10 +312,9 @@
                                     {{ $initials }}
                                 </div>
                             @endif
-                            
+
                             <div id="uploadProgress" class="hidden mt-2">
                                 <div class="flex items-center justify-center space-x-2">
-                                    <!-- ✅ THEME: Spinner uses warning color -->
                                     <div class="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style="border-color: var(--warning); border-top-color: transparent;"></div>
                                     <span class="text-sm" style="color: var(--text-secondary);">Uploading...</span>
                                 </div>
@@ -326,12 +323,12 @@
 
                         <h3 class="font-semibold mb-1" style="color: var(--text-primary);">{{ $user->name ?? 'No Name' }}</h3>
                         <div class="mb-4">
-                            <span class="inline-block px-3 py-1 rounded-full text-xs font-medium mb-2" 
+                            <span class="inline-block px-3 py-1 rounded-full text-xs font-medium mb-2"
                                   style="background: linear-gradient(135deg, rgba(var(--warning-rgb), 0.1), rgba(var(--orange-rgb), 0.1)); color: var(--warning);">
                                 {{ $titlePrefix }}
                             </span>
                             @if($hasMultipleRoles)
-                            <span class="inline-block px-3 py-1 rounded-full text-xs font-medium ml-1" 
+                            <span class="inline-block px-3 py-1 rounded-full text-xs font-medium ml-1"
                                   style="background-color: rgba(var(--info-rgb), 0.1); color: var(--info);">
                                 <i class="fas fa-tags mr-1"></i> Multi-Role
                             </span>
@@ -343,22 +340,22 @@
                                 @csrf
                                 <input type="file" name="photo" id="photoInput" accept="image/*" class="hidden">
                             </form>
-                            
-                            <button onclick="document.getElementById('photoInput').click()" 
+
+                            <button onclick="document.getElementById('photoInput').click()"
                                     class="btn-warning btn-sm w-full" id="uploadBtn">
                                 <i class="fas fa-camera mr-2"></i>
                                 <span>{{ $hasPhoto ? 'Change Photo' : 'Upload Photo' }}</span>
                             </button>
-                            
+
                             @if($hasPhoto)
-                            <button onclick="removeProfilePhoto()" 
+                            <button onclick="removeProfilePhoto()"
                                     class="btn-danger btn-sm w-full" id="removeBtn">
                                 <i class="fas fa-trash mr-2"></i>Remove Photo
                             </button>
                             @endif
                         </div>
                     </div>
-                    
+
                     <div class="mt-4 text-xs" style="color: var(--text-secondary);">
                         <p class="flex items-center mb-1">
                             <i class="fas fa-info-circle mr-2" style="color: var(--warning);"></i>
@@ -379,7 +376,6 @@
                     </h3>
                     <div class="flex flex-wrap gap-2 mb-4">
                         @foreach($switcherRoles as $role)
-                            <!-- ✅ THEME: Role badges use theme variables -->
                             <span class="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium"
                                   style="background-color: rgba(var(--warning-rgb), 0.1);
                                          color: var(--warning);
@@ -412,8 +408,7 @@
                             </div>
                             <i class="fas fa-home text-2xl" style="color: var(--warning);"></i>
                         </div>
-                        
-                        <!-- ✅ THEME: Past rentals uses success var -->
+
                         <div class="flex justify-between items-center pb-3 border-b" style="border-color: var(--border-color);">
                             <div>
                                 <div class="text-xl font-bold" style="color: var(--success);">
@@ -423,8 +418,7 @@
                             </div>
                             <i class="fas fa-history text-xl" style="color: var(--success);"></i>
                         </div>
-                        
-                        <!-- ✅ THEME: Monthly rent uses info var -->
+
                         <div class="flex justify-between items-center pb-3 border-b" style="border-color: var(--border-color);">
                             <div>
                                 <div class="text-xl font-bold" style="color: var(--info);">
@@ -434,9 +428,8 @@
                             </div>
                             <i class="fas fa-money-bill-wave text-xl" style="color: var(--info);"></i>
                         </div>
-                        
+
                         @if($nextPayment)
-                        <!-- ✅ THEME: Next payment uses primary var -->
                         <div class="flex justify-between items-center">
                             <div>
                                 <div class="text-xl font-bold" style="color: var(--primary);">
@@ -448,9 +441,9 @@
                         </div>
                         @endif
                     </div>
-                    
+
                     @if(Route::has('tenant.rentals.index'))
-                        <a href="{{ route('tenant.rentals.index') }}" 
+                        <a href="{{ route('tenant.rentals.index') }}"
                            class="mt-4 btn-outline btn-sm w-full text-center">
                             <i class="fas fa-external-link-alt mr-2"></i>Manage Rentals
                         </a>
@@ -468,21 +461,19 @@
                                 <span class="text-sm" style="color: var(--text-secondary);">Email</span>
                             </div>
                             @if($user->email_verified_at)
-                                <!-- ✅ THEME: Verified pill -->
                                 <span class="px-2 py-1 text-xs rounded-full"
                                       style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
                                     <i class="fas fa-check mr-1"></i>Verified
                                 </span>
                             @else
-                                <!-- ✅ THEME: Pending pill -->
-                                <button onclick="sendEmailVerification()" 
+                                <button onclick="sendEmailVerification()"
                                         class="px-2 py-1 text-xs rounded-full transition"
                                         style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
                                     <i class="fas fa-envelope mr-1"></i>Verify
                                 </button>
                             @endif
                         </div>
-                        
+
                         <!-- Phone Verification -->
                         <div class="flex items-center justify-between">
                             <div class="flex items-center space-x-2">
@@ -497,12 +488,12 @@
                             @else
                                 <div class="flex space-x-2">
                                     @if($user->phone)
-                                        <button onclick="sendPhoneVerification()" 
+                                        <button onclick="sendPhoneVerification()"
                                                 class="px-2 py-1 text-xs rounded-full transition"
                                                 style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
                                             <i class="fas fa-sms mr-1"></i>Send Code
                                         </button>
-                                        <button onclick="showTab('contact'); showVerifyModal();" 
+                                        <button onclick="showTab('contact'); showVerifyModal();"
                                                 class="px-2 py-1 text-xs rounded-full transition"
                                                 style="background-color: rgba(var(--info-rgb), 0.15); color: var(--info);">
                                             <i class="fas fa-key mr-1"></i>Verify
@@ -531,6 +522,26 @@
                                 </span>
                             @endif
                         </div>
+
+                        {{-- ✅ NEW: 2FA status row --}}
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-2">
+                                <i class="fas fa-shield-alt" style="color: var(--text-secondary);"></i>
+                                <span class="text-sm" style="color: var(--text-secondary);">2FA</span>
+                            </div>
+                            @if($user->two_factor_enabled)
+                                <span class="px-2 py-1 text-xs rounded-full"
+                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                    <i class="fas fa-check mr-1"></i>Enabled
+                                </span>
+                            @else
+                                <a href="{{ route('2fa.setup') }}"
+                                   class="px-2 py-1 text-xs rounded-full transition"
+                                   style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                                    <i class="fas fa-shield-alt mr-1"></i>Enable
+                                </a>
+                            @endif
+                        </div>
                     </div>
                 </div>
 
@@ -547,7 +558,7 @@
                             </div>
                             <i class="fas fa-calendar text-xl" style="color: var(--warning);"></i>
                         </div>
-                        
+
                         <div class="flex justify-between items-center pb-3 border-b" style="border-color: var(--border-color);">
                             <div>
                                 <div class="text-sm" style="color: var(--text-secondary);">Current Role</div>
@@ -557,7 +568,7 @@
                             </div>
                             <i class="fas fa-{{ $roleIcons[$currentRole] ?? 'user' }} text-xl" style="color: var(--info);"></i>
                         </div>
-                        
+
                         <div class="flex justify-between items-center">
                             <div>
                                 <div class="text-sm" style="color: var(--text-secondary);">Account Age</div>
@@ -575,7 +586,7 @@
                     <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Quick Actions</h3>
                     <div class="space-y-2">
                         @if(Route::has('tenant.payments.index'))
-                        <a href="{{ route('tenant.payments.index') }}" 
+                        <a href="{{ route('tenant.payments.index') }}"
                            class="flex items-center justify-between p-3 rounded-lg transition quick-action-item"
                            style="color: var(--text-secondary);">
                             <div class="flex items-center space-x-2">
@@ -587,7 +598,7 @@
                         @endif
 
                         @if(Route::has('tenant.maintenance.create'))
-                        <a href="{{ route('tenant.maintenance.create') }}" 
+                        <a href="{{ route('tenant.maintenance.create') }}"
                            class="flex items-center justify-between p-3 rounded-lg transition quick-action-item"
                            style="color: var(--text-secondary);">
                             <div class="flex items-center space-x-2">
@@ -599,7 +610,7 @@
                         @endif
 
                         @if(Route::has('tenant.documents.index'))
-                        <a href="{{ route('tenant.documents.index') }}" 
+                        <a href="{{ route('tenant.documents.index') }}"
                            class="flex items-center justify-between p-3 rounded-lg transition quick-action-item"
                            style="color: var(--text-secondary);">
                             <div class="flex items-center space-x-2">
@@ -611,7 +622,7 @@
                         @endif
 
                         @if(Route::has('tenant.profile.data.download'))
-                        <button onclick="downloadTenantData()" 
+                        <button onclick="downloadTenantData()"
                                 class="flex items-center justify-between w-full p-3 rounded-lg transition text-left quick-action-item"
                                 style="color: var(--text-secondary);">
                             <div class="flex items-center space-x-2">
@@ -642,6 +653,10 @@
                         <button type="button" data-tab="emergency" class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-phone-alt mr-2"></i>Emergency Contacts
                         </button>
+                        {{-- ✅ NEW: Security tab --}}
+                        <button type="button" data-tab="security" class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
+                            <i class="fas fa-shield-alt mr-2"></i>Security
+                        </button>
                         <button type="button" data-tab="password" class="tab-button py-2 px-4 font-medium text-sm border-b-2 transition-colors whitespace-nowrap">
                             <i class="fas fa-key mr-2"></i>Password
                         </button>
@@ -654,11 +669,11 @@
                     <div class="tab-pane active" id="personalPane" data-tab-pane="personal">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Personal Information</h3>
-                            
+
                             <form action="{{ route('tenant.profile.personal.update') }}" method="POST" id="personalInfoForm">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div class="space-y-4">
                                         <div>
@@ -666,7 +681,7 @@
                                                 Full Name *
                                                 <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(As on official ID)</span>
                                             </label>
-                                            <input type="text" name="name" value="{{ old('name', $user->name) }}" 
+                                            <input type="text" name="name" value="{{ old('name', $user->name) }}"
                                                    class="form-input"
                                                    required>
                                             @error('name')
@@ -679,8 +694,8 @@
                                                 Date of Birth
                                                 <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Required for age verification)</span>
                                             </label>
-                                            <input type="date" name="dob" 
-                                                   value="{{ old('dob', $user->dob ? $user->dob->format('Y-m-d') : '') }}" 
+                                            <input type="date" name="dob"
+                                                   value="{{ old('dob', $user->dob ? $user->dob->format('Y-m-d') : '') }}"
                                                    class="form-input"
                                                    max="{{ date('Y-m-d') }}">
                                         </div>
@@ -702,8 +717,8 @@
                                                 National ID Number
                                                 <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Optional)</span>
                                             </label>
-                                            <input type="text" name="national_id" 
-                                                   value="{{ old('national_id', $user->metadata['national_id'] ?? '') }}" 
+                                            <input type="text" name="national_id"
+                                                   value="{{ old('national_id', $user->metadata['national_id'] ?? '') }}"
                                                    class="form-input"
                                                    placeholder="GHA-XXXXXXXX-X">
                                         </div>
@@ -713,8 +728,8 @@
                                                 Passport Number
                                                 <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Optional, for foreign nationals)</span>
                                             </label>
-                                            <input type="text" name="passport_number" 
-                                                   value="{{ old('passport_number', $user->metadata['passport_number'] ?? '') }}" 
+                                            <input type="text" name="passport_number"
+                                                   value="{{ old('passport_number', $user->metadata['passport_number'] ?? '') }}"
                                                    class="form-input"
                                                    placeholder="Passport number">
                                         </div>
@@ -736,8 +751,8 @@
                                 </div>
 
                                 <div class="flex justify-end space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                    <button type="button" 
-                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('contact');" 
+                                    <button type="button"
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('contact');"
                                             class="btn-outline">
                                         Next: Contact Info <i class="fas fa-arrow-right ml-1"></i>
                                     </button>
@@ -753,11 +768,11 @@
                     <div class="tab-pane hidden" id="contactPane" data-tab-pane="contact">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Contact Information</h3>
-                            
+
                             <form action="{{ route('tenant.profile.contact.update') }}" method="POST" id="contactInfoForm">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="space-y-6">
                                     <!-- Email -->
                                     <div>
@@ -771,12 +786,12 @@
                                             @endif
                                         </label>
                                         <div class="flex space-x-2">
-                                            <input type="email" name="email" 
-                                                   value="{{ old('email', $user->email) }}" 
+                                            <input type="email" name="email"
+                                                   value="{{ old('email', $user->email) }}"
                                                    class="form-input flex-1"
                                                    required>
                                             @if(!$user->email_verified_at)
-                                                <button type="button" onclick="sendEmailVerification()" 
+                                                <button type="button" onclick="sendEmailVerification()"
                                                         class="btn-warning">
                                                     Verify
                                                 </button>
@@ -804,31 +819,30 @@
                                         <div class="space-y-3">
                                             <div class="flex space-x-2">
                                                 <input type="text" name="phone" id="phoneNumber"
-                                                       value="{{ old('phone', $user->phone) }}" 
+                                                       value="{{ old('phone', $user->phone) }}"
                                                        class="form-input flex-1"
                                                        required>
                                                 @if(!$user->phone_verified_at && $user->phone)
-                                                    <button type="button" onclick="sendPhoneVerification()" 
+                                                    <button type="button" onclick="sendPhoneVerification()"
                                                             class="btn-warning">
                                                         Send Code
                                                     </button>
                                                 @endif
                                             </div>
-                                            
-                                            <!-- Inline Verification Section -->
+
                                             <div id="verificationCodeSection" class="hidden space-y-2">
                                                 <div class="flex space-x-2">
-                                                    <input type="text" id="verificationCode" 
+                                                    <input type="text" id="verificationCode"
                                                            placeholder="Enter 6-digit code"
                                                            class="form-input flex-1 text-center text-lg font-mono"
                                                            maxlength="6">
-                                                    <button type="button" onclick="verifyPhone()" 
+                                                    <button type="button" onclick="verifyPhone()"
                                                             class="btn-success">
                                                         <i class="fas fa-check-circle mr-1"></i>Verify
                                                     </button>
                                                 </div>
                                                 <div class="flex justify-between items-center">
-                                                    <button type="button" onclick="resendVerificationCode()" 
+                                                    <button type="button" onclick="resendVerificationCode()"
                                                             class="text-xs hover:underline" style="color: var(--warning);">
                                                         <i class="fas fa-redo mr-1"></i>Resend Code
                                                     </button>
@@ -852,8 +866,8 @@
                                             <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                                 Region
                                             </label>
-                                            <input type="text" name="region" 
-                                                   value="{{ old('region', $user->region) }}" 
+                                            <input type="text" name="region"
+                                                   value="{{ old('region', $user->region) }}"
                                                    class="form-input"
                                                    placeholder="Your current region">
                                         </div>
@@ -863,16 +877,16 @@
                                                 Digital Address
                                                 <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Ghana GPS)</span>
                                             </label>
-                                            <input type="text" name="digital_address" 
-                                                   value="{{ old('digital_address', $user->digital_address) }}" 
+                                            <input type="text" name="digital_address"
+                                                   value="{{ old('digital_address', $user->digital_address) }}"
                                                    class="form-input"
                                                    placeholder="e.g., GA-123-4567">
                                         </div>
 
                                         <div class="md:col-span-2">
                                             <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Current Address</label>
-                                            <input type="text" name="location" 
-                                                   value="{{ old('location', $user->location) }}" 
+                                            <input type="text" name="location"
+                                                   value="{{ old('location', $user->location) }}"
                                                    class="form-input"
                                                    placeholder="Current residential address">
                                         </div>
@@ -883,22 +897,22 @@
                                             Alternative Phone
                                             <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Optional)</span>
                                         </label>
-                                        <input type="text" name="alt_phone" 
-                                               value="{{ old('alt_phone', $user->metadata['alt_phone'] ?? '') }}" 
+                                        <input type="text" name="alt_phone"
+                                               value="{{ old('alt_phone', $user->metadata['alt_phone'] ?? '') }}"
                                                class="form-input"
                                                placeholder="Alternative contact number">
                                     </div>
                                 </div>
 
                                 <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                    <button type="button" 
-                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('personal');" 
+                                    <button type="button"
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('personal');"
                                             class="btn-secondary">
                                         <i class="fas fa-arrow-left mr-2"></i>Back
                                     </button>
                                     <div class="space-x-3">
-                                        <button type="button" 
-                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('tenant');" 
+                                        <button type="button"
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('tenant');"
                                                 class="btn-outline">
                                             Next: Tenant Details <i class="fas fa-arrow-right ml-1"></i>
                                         </button>
@@ -915,11 +929,11 @@
                     <div class="tab-pane hidden" id="tenantPane" data-tab-pane="tenant">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Tenant Details</h3>
-                            
+
                             <form action="{{ route('tenant.profile.tenant.update') }}" method="POST" id="tenantInfoForm">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="space-y-6">
                                     <!-- Tenant Information -->
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -928,8 +942,7 @@
                                                 Tenant ID
                                                 <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Auto-generated)</span>
                                             </label>
-                                            <!-- ✅ THEME: Read-only input -->
-                                            <input type="text" value="TN-{{ str_pad($user->id, 6, '0', STR_PAD_LEFT) }}" 
+                                            <input type="text" value="TN-{{ str_pad($user->id, 6, '0', STR_PAD_LEFT) }}"
                                                    class="form-input"
                                                    style="background-color: var(--bg-tertiary); color: var(--text-secondary); cursor: not-allowed;"
                                                    disabled readonly>
@@ -939,7 +952,7 @@
                                             <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                                 Date Registered
                                             </label>
-                                            <input type="text" value="{{ $user->created_at->format('M d, Y') }}" 
+                                            <input type="text" value="{{ $user->created_at->format('M d, Y') }}"
                                                    class="form-input"
                                                    style="background-color: var(--bg-tertiary); color: var(--text-secondary); cursor: not-allowed;"
                                                    disabled readonly>
@@ -954,24 +967,24 @@
                                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                                             <div>
                                                 <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Current Occupation</label>
-                                                <input type="text" name="occupation" 
-                                                       value="{{ old('occupation', $user->metadata['occupation'] ?? '') }}" 
+                                                <input type="text" name="occupation"
+                                                       value="{{ old('occupation', $user->metadata['occupation'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="e.g., Software Developer, Teacher, Business Owner">
                                             </div>
 
                                             <div>
                                                 <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Employer/Company</label>
-                                                <input type="text" name="employer" 
-                                                       value="{{ old('employer', $user->metadata['employer'] ?? '') }}" 
+                                                <input type="text" name="employer"
+                                                       value="{{ old('employer', $user->metadata['employer'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="Name of employer or company">
                                             </div>
 
                                             <div class="md:col-span-2">
                                                 <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Work Address</label>
-                                                <input type="text" name="work_address" 
-                                                       value="{{ old('work_address', $user->metadata['work_address'] ?? '') }}" 
+                                                <input type="text" name="work_address"
+                                                       value="{{ old('work_address', $user->metadata['work_address'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="Your work address (optional)">
                                             </div>
@@ -1025,14 +1038,14 @@
                                 </div>
 
                                 <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                    <button type="button" 
-                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('contact');" 
+                                    <button type="button"
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('contact');"
                                             class="btn-secondary">
                                         <i class="fas fa-arrow-left mr-2"></i>Back
                                     </button>
                                     <div class="space-x-3">
-                                        <button type="button" 
-                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('emergency');" 
+                                        <button type="button"
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('emergency');"
                                                 class="btn-outline">
                                             Next: Emergency Contacts <i class="fas fa-arrow-right ml-1"></i>
                                         </button>
@@ -1049,14 +1062,14 @@
                     <div class="tab-pane hidden" id="emergencyPane" data-tab-pane="emergency">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Emergency Contacts</h3>
-                            
+
                             <form action="{{ route('tenant.profile.emergency.update') }}" method="POST" id="emergencyInfoForm">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="space-y-6">
                                     <!-- Primary Emergency Contact -->
-                                    <div class="p-4 rounded-lg border" 
+                                    <div class="p-4 rounded-lg border"
                                          style="border-color: var(--border-color); background-color: var(--bg-tertiary);">
                                         <h4 class="font-medium mb-3" style="color: var(--text-primary);">
                                             <i class="fas fa-user-shield mr-2" style="color: var(--warning);"></i>
@@ -1065,8 +1078,8 @@
                                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <div>
                                                 <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Full Name *</label>
-                                                <input type="text" name="emergency_contact_name" 
-                                                       value="{{ old('emergency_contact_name', $user->metadata['emergency_contact_name'] ?? '') }}" 
+                                                <input type="text" name="emergency_contact_name"
+                                                       value="{{ old('emergency_contact_name', $user->metadata['emergency_contact_name'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="Full name of contact person"
                                                        required>
@@ -1074,8 +1087,8 @@
 
                                             <div>
                                                 <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Phone Number *</label>
-                                                <input type="text" name="emergency_contact_phone" 
-                                                       value="{{ old('emergency_contact_phone', $user->metadata['emergency_contact_phone'] ?? '') }}" 
+                                                <input type="text" name="emergency_contact_phone"
+                                                       value="{{ old('emergency_contact_phone', $user->metadata['emergency_contact_phone'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="Phone number"
                                                        required>
@@ -1097,8 +1110,8 @@
 
                                             <div class="md:col-span-2">
                                                 <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Address</label>
-                                                <input type="text" name="emergency_contact_address" 
-                                                       value="{{ old('emergency_contact_address', $user->metadata['emergency_contact_address'] ?? '') }}" 
+                                                <input type="text" name="emergency_contact_address"
+                                                       value="{{ old('emergency_contact_address', $user->metadata['emergency_contact_address'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="Contact person's address (optional)">
                                             </div>
@@ -1106,7 +1119,7 @@
                                     </div>
 
                                     <!-- Secondary Emergency Contact -->
-                                    <div class="p-4 rounded-lg border" 
+                                    <div class="p-4 rounded-lg border"
                                          style="border-color: var(--border-color); background-color: var(--bg-tertiary);">
                                         <h4 class="font-medium mb-3" style="color: var(--text-primary);">
                                             <i class="fas fa-user-friends mr-2" style="color: var(--info);"></i>
@@ -1115,16 +1128,16 @@
                                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <div>
                                                 <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Full Name</label>
-                                                <input type="text" name="secondary_emergency_name" 
-                                                       value="{{ old('secondary_emergency_name', $user->metadata['secondary_emergency_name'] ?? '') }}" 
+                                                <input type="text" name="secondary_emergency_name"
+                                                       value="{{ old('secondary_emergency_name', $user->metadata['secondary_emergency_name'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="Full name">
                                             </div>
 
                                             <div>
                                                 <label class="block text-xs font-medium mb-1" style="color: var(--text-secondary);">Phone Number</label>
-                                                <input type="text" name="secondary_emergency_phone" 
-                                                       value="{{ old('secondary_emergency_phone', $user->metadata['secondary_emergency_phone'] ?? '') }}" 
+                                                <input type="text" name="secondary_emergency_phone"
+                                                       value="{{ old('secondary_emergency_phone', $user->metadata['secondary_emergency_phone'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="Phone number">
                                             </div>
@@ -1167,8 +1180,8 @@
                                                     Insurance Information
                                                     <span class="text-xs" style="color: var(--text-secondary); opacity: 0.7;">(Health insurance details)</span>
                                                 </label>
-                                                <input type="text" name="insurance_info" 
-                                                       value="{{ old('insurance_info', $user->metadata['insurance_info'] ?? '') }}" 
+                                                <input type="text" name="insurance_info"
+                                                       value="{{ old('insurance_info', $user->metadata['insurance_info'] ?? '') }}"
                                                        class="form-input"
                                                        placeholder="Insurance provider and policy number (optional)">
                                             </div>
@@ -1177,14 +1190,14 @@
                                 </div>
 
                                 <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                    <button type="button" 
-                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('tenant');" 
+                                    <button type="button"
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('tenant');"
                                             class="btn-secondary">
                                         <i class="fas fa-arrow-left mr-2"></i>Back
                                     </button>
                                     <div class="space-x-3">
-                                        <button type="button" 
-                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('password');" 
+                                        <button type="button"
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('security');"
                                                 class="btn-outline">
                                             Next: Security <i class="fas fa-arrow-right ml-1"></i>
                                         </button>
@@ -1197,11 +1210,281 @@
                         </div>
                     </div>
 
+                    <!-- ================================================================
+                         ✅ NEW: Security Tab
+                         ----------------------------------------------------------------
+                         Self-service 2FA card + advisory metadata toggles + active
+                         sessions. The 2FA card is read-only for state; it uses
+                         anchors and a password-confirmed disable modal for state
+                         changes.
+                    ================================================================ -->
+                    <div class="tab-pane hidden" id="securityPane" data-tab-pane="security">
+                        <div class="card p-6 mb-6">
+                            <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Security Settings</h3>
+
+                            <!-- ============================================================
+                                 ✅ Self-service 2FA status card
+                                 ------------------------------------------------------------
+                                 Any authenticated user (including tenants) can enable
+                                 2FA from here. Links to the existing TwoFactorController
+                                 endpoints:
+                                   GET  /2fa/setup           (enrollment wizard)
+                                   GET  /2fa/recovery-codes  (view backup codes)
+                                   POST /2fa/disable         (password-confirmed disable)
+                            ============================================================ -->
+                            <div class="p-4 rounded-lg border mb-6"
+                                 style="border-color: {{ $user->two_factor_enabled ? 'rgba(var(--success-rgb), 0.3)' : 'var(--border-color)' }};
+                                        background-color: {{ $user->two_factor_enabled ? 'rgba(var(--success-rgb), 0.05)' : 'var(--bg-secondary)' }};">
+                                <div class="flex justify-between items-start flex-wrap gap-3">
+                                    <div class="flex-1 min-w-[200px]">
+                                        <div class="flex items-center mb-2 flex-wrap gap-2">
+                                            <i class="fas fa-shield-alt text-lg"
+                                               style="color: {{ $user->two_factor_enabled ? 'var(--success)' : 'var(--text-secondary)' }};"></i>
+                                            <h4 class="font-medium" style="color: var(--text-primary);">Two-Factor Authentication</h4>
+                                            @if($user->two_factor_enabled)
+                                                <span class="px-2 py-0.5 text-xs rounded-full"
+                                                      style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                                    <i class="fas fa-check mr-1"></i>Enabled
+                                                </span>
+                                            @else
+                                                <span class="px-2 py-0.5 text-xs rounded-full"
+                                                      style="background-color: rgba(var(--warning-rgb), 0.15); color: var(--warning);">
+                                                    Not enabled
+                                                </span>
+                                            @endif
+                                        </div>
+
+                                        @if($user->two_factor_enabled)
+                                            <p class="text-sm" style="color: var(--text-secondary);">
+                                                Your account is protected with
+                                                <strong>{{ ucfirst($user->two_factor_method ?? 'email') }}</strong>-based 2FA.
+                                                @if($user->two_factor_enabled_at)
+                                                    Enabled {{ \Carbon\Carbon::parse($user->two_factor_enabled_at)->diffForHumans() }}.
+                                                @endif
+                                            </p>
+                                        @else
+                                            <p class="text-sm" style="color: var(--text-secondary);">
+                                                Add an extra layer of security. We strongly recommend enabling 2FA
+                                                to protect your rental records, payment history, and personal data.
+                                            </p>
+                                        @endif
+                                    </div>
+
+                                    <div class="flex gap-2 flex-wrap">
+                                        @if($user->two_factor_enabled)
+                                            <a href="{{ route('2fa.recovery-codes') }}"
+                                               class="btn-outline btn-sm flex items-center">
+                                                <i class="fas fa-key mr-2"></i>Recovery Codes
+                                            </a>
+                                            <button type="button"
+                                                    onclick="openDisableTwoFactor()"
+                                                    class="btn-danger btn-sm flex items-center">
+                                                <i class="fas fa-times-circle mr-2"></i>Disable 2FA
+                                            </button>
+                                        @else
+                                            <a href="{{ route('2fa.setup') }}"
+                                               class="btn-warning btn-sm flex items-center">
+                                                <i class="fas fa-shield-alt mr-2"></i>Enable 2FA
+                                            </a>
+                                        @endif
+                                    </div>
+                                </div>
+
+                                @if(!$user->two_factor_enabled)
+                                    <div class="mt-3 p-3 rounded-lg"
+                                         style="background-color: rgba(var(--info-rgb), 0.08); border: 1px solid rgba(var(--info-rgb), 0.2);">
+                                        <p class="text-xs" style="color: var(--text-secondary);">
+                                            <i class="fas fa-info-circle mr-1" style="color: var(--info);"></i>
+                                            You'll need an authenticator app (Google Authenticator, Authy, Microsoft
+                                            Authenticator). Setup takes about 60 seconds.
+                                        </p>
+                                    </div>
+                                @endif
+                            </div>
+
+                            <form action="{{ route('tenant.profile.security.update') }}" method="POST" id="securityInfoForm">
+                                @csrf
+                                @method('PUT')
+
+                                <div class="space-y-6">
+                                    <!-- Login Alerts -->
+                                    <div class="p-4 rounded-lg border" style="border-color: var(--border-color); background-color: var(--bg-secondary);">
+                                        <div class="flex justify-between items-center mb-3">
+                                            <div>
+                                                <h4 class="font-medium" style="color: var(--text-primary);">Login Alerts</h4>
+                                                <p class="text-xs" style="color: var(--text-secondary);">Get notified of new logins to your account</p>
+                                            </div>
+                                            <label class="toggle-switch info">
+                                                <input type="checkbox" name="login_alerts" value="1"
+                                                       {{ ($user->metadata['login_alerts'] ?? true) ? 'checked' : '' }}>
+                                                <span class="toggle-slider"></span>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <!-- Additional Security Notifications -->
+                                    <div>
+                                        <h4 class="font-medium mb-3" style="color: var(--text-primary);">Security Notifications</h4>
+                                        <div class="toggle-group">
+                                            <div class="toggle-item">
+                                                <div class="toggle-content">
+                                                    <div class="toggle-title">Suspicious Activity</div>
+                                                    <div class="toggle-description">Alert for suspicious login attempts</div>
+                                                </div>
+                                                <label class="toggle-switch warning">
+                                                    <input type="checkbox" name="suspicious_activity_alerts" value="1"
+                                                           {{ ($user->metadata['suspicious_activity_alerts'] ?? true) ? 'checked' : '' }}>
+                                                    <span class="toggle-slider"></span>
+                                                </label>
+                                            </div>
+
+                                            <div class="toggle-item">
+                                                <div class="toggle-content">
+                                                    <div class="toggle-title">Password Changes</div>
+                                                    <div class="toggle-description">Notify when password is changed</div>
+                                                </div>
+                                                <label class="toggle-switch info">
+                                                    <input type="checkbox" name="password_change_alerts" value="1"
+                                                           {{ ($user->metadata['password_change_alerts'] ?? true) ? 'checked' : '' }}>
+                                                    <span class="toggle-slider"></span>
+                                                </label>
+                                            </div>
+
+                                            <div class="toggle-item">
+                                                <div class="toggle-content">
+                                                    <div class="toggle-title">New Device Logins</div>
+                                                    <div class="toggle-description">Alert for logins from new devices</div>
+                                                </div>
+                                                <label class="toggle-switch warning">
+                                                    <input type="checkbox" name="new_device_alerts" value="1"
+                                                           {{ ($user->metadata['new_device_alerts'] ?? true) ? 'checked' : '' }}>
+                                                    <span class="toggle-slider"></span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Active Sessions -->
+                                    <div>
+                                        <h4 class="font-medium mb-3" style="color: var(--text-primary);">Active Sessions</h4>
+                                        <div class="space-y-3">
+                                            @forelse($activeSessions ?? [] as $session)
+                                            <div class="flex justify-between items-center p-3 border rounded-lg"
+                                                 style="border-color: var(--border-color);">
+                                                <div>
+                                                    <div class="flex items-center space-x-2">
+                                                        <i class="fas {{ $session['current'] ? 'fa-desktop' : 'fa-mobile-alt' }}"
+                                                           style="color: {{ $session['current'] ? 'var(--success)' : 'var(--info)' }};"></i>
+                                                        <span class="text-sm font-medium" style="color: var(--text-primary);">
+                                                            {{ $session['device'] }}
+                                                            @if($session['current'])
+                                                            <span class="ml-2 px-2 py-1 text-xs rounded-full"
+                                                                  style="background-color: rgba(var(--success-rgb), 0.15); color: var(--success);">
+                                                                Current
+                                                            </span>
+                                                            @endif
+                                                        </span>
+                                                    </div>
+                                                    <div class="text-xs mt-1" style="color: var(--text-secondary);">
+                                                        {{ $session['location'] }} • {{ $session['last_active'] }}
+                                                    </div>
+                                                </div>
+                                                @if(!$session['current'])
+                                                <button type="button" onclick="revokeSession('{{ $session['id'] }}')"
+                                                        style="color: var(--danger);">
+                                                    <i class="fas fa-sign-out-alt"></i>
+                                                </button>
+                                                @endif
+                                            </div>
+                                            @empty
+                                            <p class="text-sm text-center py-4" style="color: var(--text-secondary);">
+                                                <i class="fas fa-info-circle mr-1"></i>
+                                                Session tracking is not enabled on this system.
+                                            </p>
+                                            @endforelse
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
+                                    <button type="button"
+                                            onclick="event.preventDefault(); event.stopPropagation(); showTab('emergency');"
+                                            class="btn-secondary">
+                                        <i class="fas fa-arrow-left mr-2"></i>Back
+                                    </button>
+                                    <div class="space-x-3">
+                                        <button type="button"
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('password');"
+                                                class="btn-outline">
+                                            Next: Password <i class="fas fa-arrow-right ml-1"></i>
+                                        </button>
+                                        <button type="submit" class="btn-warning" id="securitySubmitBtn">
+                                            <i class="fas fa-save mr-2"></i>Save Security Settings
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+
+                            {{-- ✅ 2FA disable modal + hidden form (outside securityInfoForm) --}}
+                            <form id="disableTwoFactorForm"
+                                  action="{{ route('2fa.disable') }}"
+                                  method="POST"
+                                  class="hidden">
+                                @csrf
+                                <input type="password" name="password" id="disableTwoFactorPassword" required>
+                            </form>
+
+                            <div id="disableTwoFactorModal"
+                                 class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 p-4">
+                                <div class="rounded-lg shadow-xl max-w-md w-full p-6"
+                                     style="background-color: var(--card-bg); border: 1px solid var(--border-color);">
+                                    <div class="flex justify-between items-center mb-4">
+                                        <h3 class="text-lg font-semibold" style="color: var(--text-primary);">
+                                            <i class="fas fa-exclamation-triangle mr-2" style="color: var(--warning);"></i>
+                                            Disable Two-Factor Authentication?
+                                        </h3>
+                                        <button type="button" onclick="closeDisableTwoFactor()"
+                                                class="hover:opacity-70" style="color: var(--text-secondary);">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+
+                                    <div class="p-3 rounded-lg mb-4"
+                                         style="background-color: rgba(var(--warning-rgb), 0.1); border: 1px solid rgba(var(--warning-rgb), 0.3);">
+                                        <p class="text-sm" style="color: var(--text-primary);">
+                                            Disabling 2FA will make your account significantly less secure.
+                                            Anyone with your password will be able to log in.
+                                        </p>
+                                    </div>
+
+                                    <div class="mb-4">
+                                        <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
+                                            Confirm your password to continue
+                                        </label>
+                                        <input type="password"
+                                               id="disableTwoFactorPasswordConfirm"
+                                               class="form-input"
+                                               placeholder="Enter your current password">
+                                    </div>
+
+                                    <div class="flex justify-end gap-3">
+                                        <button type="button" onclick="closeDisableTwoFactor()" class="btn-secondary">
+                                            Cancel
+                                        </button>
+                                        <button type="button" onclick="submitDisableTwoFactor()" class="btn-danger">
+                                            <i class="fas fa-times-circle mr-2"></i>Disable 2FA
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Password Tab -->
                     <div class="tab-pane hidden" id="passwordPane" data-tab-pane="password">
                         <div class="card p-6 mb-6">
                             <h3 class="font-semibold mb-4" style="color: var(--text-primary);">Change Password</h3>
-                            
+
                             <div class="mb-6 p-4 rounded-lg" style="background-color: var(--bg-tertiary); border: 1px solid var(--border-color);">
                                 <h4 class="font-medium mb-2" style="color: var(--text-primary);">
                                     <i class="fas fa-shield-alt mr-2" style="color: var(--warning);"></i>
@@ -1226,21 +1509,21 @@
                                     </li>
                                 </ul>
                             </div>
-                            
+
                             <form action="{{ route('tenant.profile.password.update') }}" method="POST" id="passwordFormElement">
                                 @csrf
                                 @method('PUT')
-                                
+
                                 <div class="space-y-4">
                                     <div>
                                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                             Current Password *
-                                            <button type="button" onclick="togglePassword('currentPassword')" 
+                                            <button type="button" onclick="togglePassword('currentPassword')"
                                                     class="ml-2 text-xs" style="color: var(--warning);">
                                                 <i class="fas fa-eye"></i> Show
                                             </button>
                                         </label>
-                                        <input type="password" name="current_password" 
+                                        <input type="password" name="current_password"
                                                class="form-input"
                                                required id="currentPassword">
                                         @error('current_password')
@@ -1251,12 +1534,12 @@
                                     <div>
                                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                             New Password *
-                                            <button type="button" onclick="togglePassword('newPassword')" 
+                                            <button type="button" onclick="togglePassword('newPassword')"
                                                     class="ml-2 text-xs" style="color: var(--warning);">
                                                 <i class="fas fa-eye"></i> Show
                                             </button>
                                         </label>
-                                        <input type="password" name="password" 
+                                        <input type="password" name="password"
                                                class="form-input"
                                                required id="newPassword"
                                                onkeyup="checkPasswordStrength(this.value)">
@@ -1276,19 +1559,19 @@
                                     <div>
                                         <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">
                                             Confirm New Password *
-                                            <button type="button" onclick="togglePassword('confirmPassword')" 
+                                            <button type="button" onclick="togglePassword('confirmPassword')"
                                                     class="ml-2 text-xs" style="color: var(--warning);">
                                                 <i class="fas fa-eye"></i> Show
                                             </button>
                                         </label>
-                                        <input type="password" name="password_confirmation" 
+                                        <input type="password" name="password_confirmation"
                                                class="form-input"
                                                required id="confirmPassword">
                                     </div>
 
                                     <div class="flex justify-between space-x-3 mt-8 pt-6 border-t" style="border-color: var(--border-color);">
-                                        <button type="button" 
-                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('emergency');" 
+                                        <button type="button"
+                                                onclick="event.preventDefault(); event.stopPropagation(); showTab('security');"
                                                 class="btn-secondary">
                                             <i class="fas fa-arrow-left mr-2"></i>Back
                                         </button>
@@ -1315,25 +1598,25 @@
                 <i class="fas fa-shield-alt mr-2" style="color: var(--warning);"></i>
                 Verify Phone Number
             </h3>
-            <button onclick="closeVerifyModal()" 
-                    class="hover:opacity-70 transition" 
+            <button onclick="closeVerifyModal()"
+                    class="hover:opacity-70 transition"
                     style="color: var(--text-secondary);">
                 <i class="fas fa-times"></i>
             </button>
         </div>
-        
+
         <p class="mb-4 text-sm" style="color: var(--text-secondary);">
             Enter the 6-digit verification code sent to your phone.
         </p>
-        
+
         <div class="space-y-4">
             <div>
                 <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Verification Code</label>
-                <input type="text" id="modalVerificationCode" 
+                <input type="text" id="modalVerificationCode"
                        class="form-input text-center text-lg font-mono"
                        placeholder="123456" maxlength="6">
             </div>
-            
+
             <div class="flex justify-between items-center">
                 <button onclick="resendVerificationCode()" class="text-sm hover:underline" style="color: var(--warning);">
                     <i class="fas fa-redo mr-1"></i>Resend Code
@@ -1343,7 +1626,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="flex justify-end space-x-3 mt-6">
             <button onclick="closeVerifyModal()" class="btn-secondary">Cancel</button>
             <button onclick="submitVerificationCode()" class="btn-warning">Verify</button>
@@ -1394,7 +1677,6 @@
     box-shadow: 0 0 0 3px rgba(var(--danger-rgb), 0.15);
 }
 
-/* Checkbox theming */
 .form-checkbox {
     width: 1rem;
     height: 1rem;
@@ -1436,7 +1718,6 @@
     color: var(--warning) !important;
 }
 
-/* Tab Content */
 .tab-pane {
     display: none;
 }
@@ -1585,6 +1866,100 @@
 }
 
 /* ============================================================
+   ✅ NEW: TOGGLE SWITCHES (used in Security tab)
+   ============================================================ */
+.toggle-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.toggle-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    border: 1px solid;
+    border-radius: 0.5rem;
+    border-color: var(--border-color);
+    background-color: var(--bg-secondary);
+}
+
+.toggle-content {
+    flex: 1;
+}
+
+.toggle-title {
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.toggle-description {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 34px;
+    margin-left: 1rem;
+    flex-shrink: 0;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .4s;
+    border-radius: 34px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 26px;
+    width: 26px;
+    left: 4px;
+    bottom: 4px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+    background-color: var(--warning);
+}
+
+input:checked + .toggle-slider:before {
+    transform: translateX(26px);
+}
+
+.toggle-switch.success input:checked + .toggle-slider {
+    background-color: var(--success);
+}
+
+.toggle-switch.info input:checked + .toggle-slider {
+    background-color: var(--info);
+}
+
+.toggle-switch.warning input:checked + .toggle-slider {
+    background-color: var(--warning);
+}
+
+/* ============================================================
    TOAST
    ============================================================ */
 .toast {
@@ -1610,13 +1985,22 @@
         font-size: 0.75rem;
         padding: 0.5rem 0.75rem;
     }
-    
+
     .card {
         padding: 1rem !important;
     }
+
+    .toggle-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .toggle-switch {
+        align-self: flex-end;
+    }
 }
 
-/* Password strength meter */
 #passwordStrength {
     transition: all 0.3s ease;
 }
@@ -1634,45 +2018,45 @@ document.addEventListener('DOMContentLoaded', function() {
     const switcherBtn = document.getElementById('profileSwitcherBtn');
     const switcherMenu = document.getElementById('profileSwitcherMenu');
     const currentRole = '{{ $currentRole }}';
-    
+
     if (switcherBtn && switcherMenu) {
         switcherBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             switcherMenu.classList.toggle('show');
         });
-        
+
         document.addEventListener('click', function(e) {
             if (!switcherBtn.contains(e.target) && !switcherMenu.contains(e.target)) {
                 switcherMenu.classList.remove('show');
             }
         });
-        
+
         const switchOptions = document.querySelectorAll('#profileSwitcherMenu .dashboard-switch-option');
         switchOptions.forEach(option => {
             option.addEventListener('click', async function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                
+
                 const roleSlug = this.dataset.role;
-                
+
                 if (roleSlug === currentRole) {
                     showToast('info', `Already on ${roleSlug.replace('-', ' ')} dashboard`);
                     switcherMenu.classList.remove('show');
                     return;
                 }
-                
+
                 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
                 if (!csrfToken) {
                     showToast('error', 'Security error. Please refresh the page.');
                     return;
                 }
-                
+
                 const originalHTML = switcherBtn.innerHTML;
                 switcherBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Switching...';
                 switcherBtn.disabled = true;
                 switcherBtn.style.opacity = '0.7';
                 switcherMenu.classList.remove('show');
-                
+
                 try {
                     const response = await fetch('/dashboard/switch', {
                         method: 'POST',
@@ -1684,9 +2068,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         },
                         body: JSON.stringify({ role: roleSlug })
                     });
-                    
+
                     const data = await response.json();
-                    
+
                     if (data.success && data.redirect_url) {
                         showToast('success', data.message || `Switching to ${roleSlug.replace('-', ' ')} dashboard...`);
                         setTimeout(() => {
@@ -1711,7 +2095,8 @@ let countdownInterval = null;
 let timerSeconds = 600;
 
 // ==================== TAB FUNCTIONS ====================
-const TAB_NAMES = ['personal', 'contact', 'tenant', 'emergency', 'password'];
+// ✅ CHANGED: added 'security'
+const TAB_NAMES = ['personal', 'contact', 'tenant', 'emergency', 'security', 'password'];
 
 function initTabs() {
     const tabButtons = document.querySelectorAll('#tabNav .tab-button');
@@ -1782,8 +2167,9 @@ function showTab(tabName, updateHash = true) {
 
 // ==================== FORM SUBMISSION ====================
 function setupForms() {
-    const forms = ['personalInfoForm', 'contactInfoForm', 'tenantInfoForm', 'emergencyInfoForm', 'passwordFormElement'];
-    
+    // ✅ CHANGED: added 'securityInfoForm'
+    const forms = ['personalInfoForm', 'contactInfoForm', 'tenantInfoForm', 'emergencyInfoForm', 'securityInfoForm', 'passwordFormElement'];
+
     forms.forEach(formId => {
         const form = document.getElementById(formId);
         if (form) {
@@ -1798,11 +2184,11 @@ function setupForms() {
 function submitForm(form) {
     const submitBtn = form.querySelector('button[type="submit"]');
     if (!submitBtn) return;
-    
+
     const originalText = submitBtn.innerHTML;
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Processing...';
-    
+
     fetch(form.action, {
         method: form.method,
         body: new FormData(form),
@@ -1844,18 +2230,18 @@ function submitForm(form) {
 function uploadPhoto(file) {
     const uploadBtn = document.getElementById('uploadBtn');
     if (!uploadBtn) return;
-    
+
     const originalText = uploadBtn.innerHTML;
     uploadBtn.disabled = true;
     uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Uploading...';
-    
+
     const uploadProgress = document.getElementById('uploadProgress');
     if (uploadProgress) uploadProgress.classList.remove('hidden');
-    
+
     const formData = new FormData();
     formData.append('photo', file);
     formData.append('_token', '{{ csrf_token() }}');
-    
+
     fetch('{{ route("tenant.profile.photo.update") }}', {
         method: 'POST',
         body: formData
@@ -1882,14 +2268,14 @@ function uploadPhoto(file) {
 
 function removeProfilePhoto() {
     if (!confirm('Are you sure you want to remove your profile photo?')) return;
-    
+
     const removeBtn = document.getElementById('removeBtn');
     if (!removeBtn) return;
-    
+
     const originalText = removeBtn.innerHTML;
     removeBtn.disabled = true;
     removeBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Removing...';
-    
+
     fetch('{{ route("tenant.profile.photo.remove") }}', {
         method: 'POST',
         headers: {
@@ -1919,20 +2305,20 @@ function removeProfilePhoto() {
 // ==================== PHONE VERIFICATION ====================
 function sendPhoneVerification() {
     const phoneNumber = document.getElementById('phoneNumber')?.value;
-    
+
     if (!phoneNumber) {
         showToast('error', 'Please enter your phone number first.');
         document.getElementById('phoneNumber')?.focus();
         return;
     }
-    
+
     if (!phoneNumber.match(/^\+?[0-9]{10,15}$/)) {
         showToast('error', 'Please enter a valid phone number with country code (e.g., +233XXXXXXXXX)');
         return;
     }
-    
+
     showToast('info', 'Sending verification code...');
-    
+
     fetch('{{ route("tenant.profile.phone.verify.send") }}', {
         method: 'POST',
         headers: {
@@ -1946,10 +2332,10 @@ function sendPhoneVerification() {
             showToast('success', 'Verification code sent to your phone!');
             localStorage.setItem('verificationSentAt', Date.now().toString());
             startTimer(timerSeconds);
-            
+
             const verificationSection = document.getElementById('verificationCodeSection');
             if (verificationSection) verificationSection.classList.remove('hidden');
-            
+
             const codeInput = document.getElementById('verificationCode');
             if (codeInput) codeInput.focus();
         } else {
@@ -1965,21 +2351,21 @@ function sendPhoneVerification() {
 function verifyPhone() {
     const codeInput = document.getElementById('verificationCode');
     const verificationCode = codeInput?.value;
-    
+
     if (!verificationCode || verificationCode.length !== 6) {
         showToast('error', 'Please enter the 6-digit verification code.');
         codeInput?.focus();
         return;
     }
-    
+
     if (!/^\d{6}$/.test(verificationCode)) {
         showToast('error', 'Please enter a valid 6-digit numeric code.');
         codeInput?.focus();
         return;
     }
-    
+
     showToast('info', 'Verifying code...');
-    
+
     fetch('{{ route("tenant.profile.phone.verify") }}', {
         method: 'POST',
         headers: {
@@ -1992,16 +2378,16 @@ function verifyPhone() {
     .then(data => {
         if (data.success) {
             showToast('success', 'Phone number verified successfully!');
-            
+
             if (countdownInterval) {
                 clearInterval(countdownInterval);
                 countdownInterval = null;
             }
-            
+
             const verificationSection = document.getElementById('verificationCodeSection');
             if (verificationSection) {
                 verificationSection.innerHTML = `
-                    <div class="rounded-lg p-3" 
+                    <div class="rounded-lg p-3"
                          style="background-color: rgba(var(--success-rgb), 0.1); border: 1px solid rgba(var(--success-rgb), 0.3);">
                         <div class="flex items-center">
                             <i class="fas fa-check-circle mr-2" style="color: var(--success);"></i>
@@ -2010,7 +2396,7 @@ function verifyPhone() {
                     </div>
                 `;
             }
-            
+
             setTimeout(() => window.location.reload(), 2000);
         } else {
             showToast('error', data.message || 'Invalid verification code. Please try again.');
@@ -2032,9 +2418,9 @@ function resendVerificationCode() {
         resendBtn.disabled = true;
         resendBtn.style.opacity = '0.5';
     }
-    
+
     sendPhoneVerification();
-    
+
     setTimeout(() => {
         if (resendBtn) {
             resendBtn.disabled = false;
@@ -2046,23 +2432,23 @@ function resendVerificationCode() {
 function startTimer(seconds) {
     const timerDisplay = document.getElementById('countdownTimer');
     if (!timerDisplay) return;
-    
+
     if (countdownInterval) clearInterval(countdownInterval);
-    
+
     let remaining = seconds;
-    
+
     function updateTimerDisplay() {
         const minutes = Math.floor(remaining / 60);
         const secs = remaining % 60;
         timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        
+
         if (remaining <= 0) {
             clearInterval(countdownInterval);
             countdownInterval = null;
             timerDisplay.textContent = 'Expired';
         }
     }
-    
+
     updateTimerDisplay();
     countdownInterval = setInterval(() => {
         remaining--;
@@ -2073,7 +2459,7 @@ function startTimer(seconds) {
 // ==================== EMAIL VERIFICATION ====================
 function sendEmailVerification() {
     showToast('info', 'Sending verification email...');
-    
+
     fetch('{{ route("tenant.profile.email.verify.send") }}', {
         method: 'POST',
         headers: {
@@ -2107,16 +2493,16 @@ function checkPasswordStrength(password) {
     const strengthDiv = document.getElementById('passwordStrength');
     const strengthBar = document.getElementById('strengthBar');
     const strengthText = document.getElementById('strengthText');
-    
+
     if (!strengthDiv || !strengthBar || !strengthText) return;
-    
+
     if (password.length === 0) {
         strengthDiv.classList.add('hidden');
         return;
     }
-    
+
     strengthDiv.classList.remove('hidden');
-    
+
     let strength = 0;
     const criteria = [
         password.length >= 8,
@@ -2126,9 +2512,9 @@ function checkPasswordStrength(password) {
         password.match(/[0-9]/),
         password.match(/[@$!%*?&]/)
     ];
-    
+
     strength = criteria.filter(Boolean).length;
-    
+
     let color, width, text;
     if (strength <= 2) {
         color = 'var(--danger)';
@@ -2143,7 +2529,7 @@ function checkPasswordStrength(password) {
         width = '100%';
         text = 'Strong';
     }
-    
+
     strengthBar.style.width = width;
     strengthBar.style.backgroundColor = color;
     strengthText.textContent = text;
@@ -2153,7 +2539,7 @@ function checkPasswordStrength(password) {
 // ==================== DOWNLOAD DATA ====================
 function downloadTenantData() {
     showToast('info', 'Preparing your data for download...');
-    
+
     fetch('{{ route("tenant.profile.data.download") }}', {
         method: 'GET',
         headers: { 'Accept': 'application/json' }
@@ -2193,44 +2579,122 @@ function closeVerifyModal() {
 function submitVerificationCode() {
     const modalCodeInput = document.getElementById('modalVerificationCode');
     const code = modalCodeInput ? modalCodeInput.value : '';
-    
+
     if (!code || code.length !== 6) {
         showToast('error', 'Please enter a valid 6-digit code.');
         return;
     }
-    
+
     const codeField = document.getElementById('verificationCode');
     if (codeField) codeField.value = code;
-    
+
     verifyPhone();
     closeVerifyModal();
 }
+
+// ==================== SESSION MANAGEMENT ====================
+// ✅ NEW: revokeSession is used by the Active Sessions list in the Security tab
+function revokeSession(sessionId) {
+    if (confirm('Are you sure you want to revoke this session?')) {
+        fetch('{{ route("tenant.profile.session.revoke") }}', {
+            method: 'POST',
+            headers: {
+                'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ session_id: sessionId })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('success', 'Session revoked successfully!');
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showToast('error', data.message || 'Failed to revoke session.');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showToast('error', 'An error occurred. Please try again.');
+        });
+    }
+}
+
+// =====================================================
+// ✅ NEW: 2FA disable flow
+// =====================================================
+function openDisableTwoFactor() {
+    const modal = document.getElementById('disableTwoFactorModal');
+    const input = document.getElementById('disableTwoFactorPasswordConfirm');
+    if (input) input.value = '';
+    if (modal) {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        setTimeout(() => input?.focus(), 50);
+    }
+}
+
+function closeDisableTwoFactor() {
+    const modal = document.getElementById('disableTwoFactorModal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+function submitDisableTwoFactor() {
+    const password = document.getElementById('disableTwoFactorPasswordConfirm')?.value;
+    const hidden   = document.getElementById('disableTwoFactorPassword');
+    const form     = document.getElementById('disableTwoFactorForm');
+
+    if (!password) {
+        showToast('error', 'Please enter your current password.');
+        return;
+    }
+    if (!hidden || !form) return;
+
+    hidden.value = password;
+    form.submit();
+}
+
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+        const modal = document.getElementById('disableTwoFactorModal');
+        if (modal && !modal.classList.contains('hidden')) {
+            closeDisableTwoFactor();
+        }
+    }
+});
+
+document.getElementById('disableTwoFactorModal')?.addEventListener('click', function (e) {
+    if (e.target === this) closeDisableTwoFactor();
+});
 
 // ==================== TOAST ====================
 function showToast(type, message) {
     const container = document.getElementById('toastContainer');
     if (!container) return;
-    
+
     const toast = document.createElement('div');
     const colors = {
         success: 'var(--success)',
         error: 'var(--danger)',
         info: 'var(--info)'
     };
-    
+
     const icons = {
         success: 'fa-check-circle',
         error: 'fa-exclamation-circle',
         info: 'fa-info-circle'
     };
-    
+
     toast.style.backgroundColor = colors[type] || 'var(--text-secondary)';
     toast.style.color = 'white';
     toast.className = 'px-4 py-3 rounded-lg shadow-lg flex items-center transform transition-all duration-300 mb-2';
     toast.innerHTML = `<i class="fas ${icons[type] || 'fa-bell'} mr-2"></i><span>${message}</span>`;
-    
+
     container.appendChild(toast);
-    
+
     setTimeout(() => {
         toast.style.opacity = '0';
         toast.style.transform = 'translateX(100%)';
@@ -2247,10 +2711,10 @@ function updateProfileCompletion(percentage) {
 // ==================== INIT ====================
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Tenant Profile page loaded - Theme consistent');
-    
+
     initTabs();
     setupForms();
-    
+
     const photoInput = document.getElementById('photoInput');
     if (photoInput) {
         photoInput.addEventListener('change', function() {
@@ -2259,7 +2723,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     @if(!$user->phone_verified_at && $user->phone)
     if (localStorage.getItem('verificationSentAt')) {
         const sentAt = parseInt(localStorage.getItem('verificationSentAt'));

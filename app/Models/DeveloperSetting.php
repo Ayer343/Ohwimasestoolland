@@ -17,8 +17,7 @@ class DeveloperSetting extends Model
     protected $table = 'developer_settings';
 
     /* ============================================================
-     | FILLABLE — every column that DeveloperSettingsController,
-     | DeveloperBillingController, and the settings UI actually write.
+     | FILLABLE
      * ============================================================ */
     protected $fillable = [
         // ---------- Developer Information ----------
@@ -34,6 +33,8 @@ class DeveloperSetting extends Model
         'allowed_ips',
         'allowed_features',
         'developer_secret_key',
+        'developer_api_key',            // ✅ NEW — matches migration 091742
+        'api_key_last_generated',       // ✅ NEW — matches migration 091742
 
         // ---------- Billing Core ----------
         'monthly_billing_amount',
@@ -89,7 +90,9 @@ class DeveloperSetting extends Model
         'maintenance_end',
 
         // ---------- Security ----------
-        'enable_two_factor',
+        'enable_two_factor',             // ✅ KEPT — legacy boolean alias
+        'two_factor_policy',             // ✅ NEW — optional | encouraged | required
+        'two_factor_required_roles',     // ✅ NEW — JSON array of user type ints
         'session_timeout',
         'max_login_attempts',
         'password_expiry_days',
@@ -123,7 +126,7 @@ class DeveloperSetting extends Model
     ];
 
     /* ============================================================
-     | CASTS — canonical types returned by the model
+     | CASTS
      * ============================================================ */
     protected $casts = [
         // Booleans
@@ -132,7 +135,7 @@ class DeveloperSetting extends Model
         'enable_system_monitoring'       => 'boolean',
         'enable_error_tracking'          => 'boolean',
         'enable_performance_monitoring'  => 'boolean',
-        'enable_two_factor'              => 'boolean',
+        'enable_two_factor'              => 'boolean',   // ✅ legacy alias
         'enable_query_cache'             => 'boolean',
         'enable_analytics'               => 'boolean',
         'enable_daily_reports'           => 'boolean',
@@ -152,12 +155,14 @@ class DeveloperSetting extends Model
         'environment_variables'          => 'array',
         'metadata'                       => 'array',
         'billing_rules'                  => 'array',
+        'two_factor_required_roles'      => 'array',     // ✅ NEW
 
         // Dates
         'billing_start_date'             => 'date',
         'next_billing_date'              => 'date',
         'maintenance_start'              => 'datetime',
         'maintenance_end'                => 'datetime',
+        'api_key_last_generated'         => 'datetime',  // ✅ NEW
 
         // Numbers
         'monthly_billing_amount'         => 'decimal:2',
@@ -183,16 +188,17 @@ class DeveloperSetting extends Model
     const CACHE_KEY_BY_EMAIL = 'developer_settings_email_';
 
     /** ✅ BILLING: dedicated cache keys */
-    const BILLING_STATE_CACHE_KEY = 'developer_setting_billing_state';
-    const BILLING_STATE_TTL       = 300;
-    const PRIMARY_AGREEMENT_CACHE_KEY = 'developer_primary_billing_agreement';
+    const BILLING_STATE_CACHE_KEY       = 'developer_setting_billing_state';
+    const BILLING_STATE_TTL             = 300;
+    const PRIMARY_AGREEMENT_CACHE_KEY   = 'developer_primary_billing_agreement';
+    const TWO_FACTOR_POLICY_CACHE_KEY   = 'developer_setting_2fa_policy';   // ✅ NEW
 
     // Developer account statuses
     const STATUS_ACTIVE    = 'active';
     const STATUS_INACTIVE  = 'inactive';
     const STATUS_SUSPENDED = 'suspended';
 
-    // Billing statuses (mirrors billing_status column)
+    // Billing statuses
     const BILLING_STATUS_PENDING   = 'pending';
     const BILLING_STATUS_ACTIVE    = 'active';
     const BILLING_STATUS_INACTIVE  = 'inactive';
@@ -210,7 +216,7 @@ class DeveloperSetting extends Model
     const PAYMENT_METHOD_CASH   = 'cash';
     const PAYMENT_METHOD_CHECK  = 'check';
 
-    // ✅ BILLING: agreement statuses (mirrors AdminBillingRecord)
+    // ✅ BILLING: agreement statuses
     const AGREEMENT_STATUS_PENDING    = 'pending';
     const AGREEMENT_STATUS_ACTIVE     = 'active';
     const AGREEMENT_STATUS_COMPLETED  = 'completed';
@@ -225,14 +231,30 @@ class DeveloperSetting extends Model
     const STATE_ACTIVE_OVERDUE    = 'active_overdue';
     const STATE_ACTIVE_SUSPENDED  = 'active_suspended';
 
+    // ✅ 2FA: three-state policy enum
+    const TWO_FACTOR_OPTIONAL   = 'optional';
+    const TWO_FACTOR_ENCOURAGED = 'encouraged';
+    const TWO_FACTOR_REQUIRED   = 'required';
+
+    /**
+     * ✅ 2FA: default role set that must use 2FA when policy = required.
+     *
+     * Kept as integers matching User::TYPE_* — the model deliberately
+     * doesn't import User to avoid a circular dependency between
+     * DeveloperSetting and the User model's relationships.
+     *
+     * 5 = Developer, 0 = Super Admin. Admins (1) are opt-in by default.
+     */
+    const DEFAULT_TWO_FACTOR_REQUIRED_ROLES = [5, 0];
+
+    /**
+     * Allowed role integers for the `two_factor_required_roles` payload.
+     * Used by DeveloperSettingsController for validation.
+     */
+    const ALLOWED_TWO_FACTOR_ROLES = [0, 1, 5];
+
     /**
      * Canonical billing_rules keys and their defaults.
-     * Single source of truth for the model, the settings controller, the
-     * billing service, and the SendPaymentReminderJob.
-     *
-     * When a key is missing from the stored JSON, the value here is used.
-     * Individual getters override the default if the semantics differ from
-     * a straight fallback (see isAutoInvoiceGenerationEnabled()).
      */
     const DEFAULT_BILLING_RULES = [
         'auto_generate_invoices'         => false,
@@ -254,16 +276,19 @@ class DeveloperSetting extends Model
         static::saved(function ($model) {
             $model->clearCache();
             $model->clearBillingStateCache();
+            $model->clearTwoFactorPolicyCache();   // ✅ NEW
         });
 
         static::deleted(function ($model) {
             $model->clearCache();
             $model->clearBillingStateCache();
+            $model->clearTwoFactorPolicyCache();   // ✅ NEW
         });
 
         static::restored(function ($model) {
             $model->clearCache();
             $model->clearBillingStateCache();
+            $model->clearTwoFactorPolicyCache();   // ✅ NEW
         });
     }
 
@@ -280,10 +305,6 @@ class DeveloperSetting extends Model
 
     /**
      * ✅ BILLING: canonical "current row" accessor.
-     *
-     * Same idea as getSettings() but with a dedicated cache key so
-     * middleware and the billing banner don't collide with anything
-     * else that happens to use getSettings().
      */
     public static function current(): ?self
     {
@@ -300,6 +321,7 @@ class DeveloperSetting extends Model
         Cache::forget('developer_setting_current');
         Cache::forget(self::BILLING_STATE_CACHE_KEY);
         Cache::forget(self::PRIMARY_AGREEMENT_CACHE_KEY);
+        Cache::forget(self::TWO_FACTOR_POLICY_CACHE_KEY);   // ✅ NEW
     }
 
     public static function getByEmail($email)
@@ -351,24 +373,163 @@ class DeveloperSetting extends Model
     }
 
     /* ============================================================
-     | ✅ BILLING STATE MACHINE
+     | ✅ 2FA POLICY
      | ------------------------------------------------------------
-     | Single source of truth for "what is the current billing
-     | situation?" Used by:
-     |   - BillingAccessService
-     |   - EnsureSuperAdminBillingAccess middleware
-     |   - EnsureLandlordTenantBillingPassthrough middleware
-     |   - ChecksBillingAccess trait
-     |   - Every view composer that renders a banner
+     | Three-state policy + role list. The legacy `enable_two_factor`
+     | boolean is kept as a mirror so old code paths keep working.
+     |
+     | Contract:
+     |   - `twoFactorPolicy()` always returns one of the three strings.
+     |   - `isTwoFactorRequiredFor($user)` is the ONLY method callers
+     |     should use for enforcement — never read `two_factor_policy`
+     |     directly in the login flow.
+     |   - Availability is universal: 2FA can always be enabled by any
+     |     user, regardless of policy.
      * ============================================================ */
 
     /**
-     * Cached billing state.
+     * Current policy: 'optional' | 'encouraged' | 'required'.
      *
-     * Returns one of:
-     *   not_configured, pending_signature, active_current,
-     *   active_due_soon, active_overdue, active_suspended
+     * Falls back to the legacy boolean when the new column is null or
+     * missing (e.g. a row that hasn't been touched since the migration).
      */
+    public function twoFactorPolicy(): string
+    {
+        // Preferred: the explicit enum column.
+        $policy = $this->two_factor_policy;
+
+        if (is_string($policy) && in_array($policy, [
+            self::TWO_FACTOR_OPTIONAL,
+            self::TWO_FACTOR_ENCOURAGED,
+            self::TWO_FACTOR_REQUIRED,
+        ], true)) {
+            return $policy;
+        }
+
+        // Fallback: legacy boolean. true → encouraged, false → optional.
+        // We deliberately do NOT map true → required, because the old
+        // boolean never enforced setup — it only enabled 2FA globally.
+        return $this->enable_two_factor
+            ? self::TWO_FACTOR_ENCOURAGED
+            : self::TWO_FACTOR_OPTIONAL;
+    }
+
+    /**
+     * Roles that MUST use 2FA when policy = required.
+     *
+     * Returns an array of integers (User::TYPE_*). Falls back to the
+     * default role set (Developer + Super Admin) when the column is
+     * null, empty, or malformed.
+     */
+    public function twoFactorRequiredRoles(): array
+    {
+        $roles = $this->two_factor_required_roles;
+
+        if (is_string($roles)) {
+            $decoded = json_decode($roles, true);
+            $roles   = is_array($decoded) ? $decoded : [];
+        }
+
+        if (!is_array($roles)) {
+            $roles = [];
+        }
+
+        // Keep only allowed role integers.
+        $clean = array_values(array_intersect(
+            array_map('intval', $roles),
+            self::ALLOWED_TWO_FACTOR_ROLES
+        ));
+
+        return !empty($clean)
+            ? $clean
+            : self::DEFAULT_TWO_FACTOR_REQUIRED_ROLES;
+    }
+
+    /**
+     * Is 2FA required for this specific user?
+     *
+     * This is the method `LoginController@login` should call.
+     * Returns FALSE whenever the policy is not 'required', regardless
+     * of the role list — so a stale role list can't accidentally
+     * enforce 2FA on a system that's set to 'optional'.
+     */
+    public function isTwoFactorRequiredFor(User $user): bool
+    {
+        if ($this->twoFactorPolicy() !== self::TWO_FACTOR_REQUIRED) {
+            return false;
+        }
+
+        return in_array(
+            (int) $user->getRawOriginal('type'),
+            $this->twoFactorRequiredRoles(),
+            true
+        );
+    }
+
+    /**
+     * Should the UI nudge this user to enable 2FA?
+     *
+     * True when policy is 'encouraged' (banner) OR 'required' and the
+     * user is in the target role set but hasn't enabled it yet.
+     */
+    public function shouldEncourageTwoFactorFor(User $user): bool
+    {
+        $policy = $this->twoFactorPolicy();
+
+        if ($policy === self::TWO_FACTOR_OPTIONAL) {
+            return false;
+        }
+
+        if ($policy === self::TWO_FACTOR_REQUIRED
+            && !$this->isTwoFactorRequiredFor($user)) {
+            return false;
+        }
+
+        return !(bool) $user->two_factor_enabled;
+    }
+
+    /**
+     * Write a new policy + role list atomically.
+     *
+     * Also keeps `enable_two_factor` in sync so that legacy code that
+     * still reads the boolean doesn't fall out of step. Mirrors:
+     *   optional    → false
+     *   encouraged  → true
+     *   required    → true
+     */
+    public function setTwoFactorPolicy(string $policy, array $roles = []): self
+    {
+        if (!in_array($policy, [
+            self::TWO_FACTOR_OPTIONAL,
+            self::TWO_FACTOR_ENCOURAGED,
+            self::TWO_FACTOR_REQUIRED,
+        ], true)) {
+            $policy = self::TWO_FACTOR_OPTIONAL;
+        }
+
+        $roles = array_values(array_intersect(
+            array_map('intval', $roles),
+            self::ALLOWED_TWO_FACTOR_ROLES
+        ));
+
+        $this->update([
+            'two_factor_policy'         => $policy,
+            'two_factor_required_roles' => $policy === self::TWO_FACTOR_REQUIRED && !empty($roles)
+                ? $roles
+                : null,
+            // Legacy mirror
+            'enable_two_factor'         => $policy !== self::TWO_FACTOR_OPTIONAL,
+        ]);
+
+        $this->clearTwoFactorPolicyCache();
+
+        return $this;
+    }
+
+    /* ============================================================
+     | ✅ BILLING STATE MACHINE
+     * ============================================================ */
+
     public function getBillingStateAttribute(): string
     {
         return Cache::remember(
@@ -378,9 +539,6 @@ class DeveloperSetting extends Model
         );
     }
 
-    /**
-     * Uncached billing-state computation.
-     */
     public function computeBillingState(): string
     {
         if (!$this->primary_super_admin_id || !$this->billing_status) {
@@ -457,13 +615,6 @@ class DeveloperSetting extends Model
 
     /* ---------------- policy decisions ---------------- */
 
-    /**
-     * Should we restrict the super admin to read + pay only?
-     *
-     * Yes when:
-     *   - there's no signed agreement yet (pending_signature)
-     *   - the primary agreement is overdue or suspended
-     */
     public function isBillingRestrictingSuperAdmin(): bool
     {
         return in_array($this->billing_state, [
@@ -473,12 +624,6 @@ class DeveloperSetting extends Model
         ], true);
     }
 
-    /**
-     * Should admin staff be put into read-only mode?
-     *
-     * Yes only when the agreement is actually overdue or suspended.
-     * Pending signature does not yet restrict admins.
-     */
     public function isBillingRestrictingAdmins(): bool
     {
         return in_array($this->billing_state, [
@@ -487,13 +632,6 @@ class DeveloperSetting extends Model
         ], true);
     }
 
-    /**
-     * Should landlords and tenants be hard-locked?
-     *
-     * Default: NO. Their payments fund the resolution of the debt.
-     * Only true when the developer explicitly opted in AND the
-     * agreement has been overdue past `hard_lock_landlords_after_days`.
-     */
     public function isBillingBlockingLandlordsAndTenants(): bool
     {
         $rules = $this->getBillingRulesArray();
@@ -519,9 +657,6 @@ class DeveloperSetting extends Model
 
     /* ---------------- cached derived values ---------------- */
 
-    /**
-     * The primary billing agreement for this developer, cached.
-     */
     public function getPrimaryBillingAgreementAttribute(): ?AdminBillingRecord
     {
         return Cache::remember(
@@ -536,10 +671,6 @@ class DeveloperSetting extends Model
         );
     }
 
-    /**
-     * Days until the primary billing agreement is due.
-     * Negative = overdue. Null = no agreement / no due date.
-     */
     public function daysUntilBillingDue(): ?int
     {
         $agreement = $this->primary_billing_agreement;
@@ -553,10 +684,6 @@ class DeveloperSetting extends Model
         );
     }
 
-    /**
-     * Days overdue on the primary billing agreement.
-     * 0 or negative = not overdue. Null = no agreement / no due date.
-     */
     public function daysOverdueOnBilling(): ?int
     {
         $days = $this->daysUntilBillingDue();
@@ -570,25 +697,12 @@ class DeveloperSetting extends Model
      | BILLING ACCESSORS / HELPERS
      * ============================================================ */
 
-    /**
-     * True when the developer profile is eligible for recurring billing.
-     * Requires BOTH billing_active = true AND billing_status = 'active'.
-     */
     public function isBillingActive(): bool
     {
         return (bool) $this->billing_active
             && $this->billing_status === self::BILLING_STATUS_ACTIVE;
     }
 
-    /**
-     * Safe accessor for billing_rules — always returns an array.
-     *
-     * Works whether the column is cast to array (default), returns a raw
-     * JSON string (pre-migration), or comes back null/empty.
-     *
-     * Missing keys are filled from DEFAULT_BILLING_RULES so downstream code
-     * never has to guess what "missing" means.
-     */
     public function getBillingRulesArray(): array
     {
         $rules = $this->billing_rules;
@@ -602,18 +716,9 @@ class DeveloperSetting extends Model
             $rules = [];
         }
 
-        // Fill missing keys with defaults — but do NOT overwrite keys
-        // that exist with falsy values (false is a legitimate value).
         return array_replace(self::DEFAULT_BILLING_RULES, $rules);
     }
 
-    /**
-     * True when the developer has turned auto-invoice generation ON.
-     *
-     * Default is FALSE when the key is missing. The settings controller
-     * writes false unless the toggle is checked, so absence of the key
-     * means "not enabled" is the correct semantic.
-     */
     public function isAutoInvoiceGenerationEnabled(): bool
     {
         $rules = $this->billing_rules;
@@ -634,10 +739,6 @@ class DeveloperSetting extends Model
         return (bool) $rules['auto_generate_invoices'];
     }
 
-    /**
-     * True when the developer has turned payment reminders ON.
-     * Same "missing = false" semantic as auto-invoice.
-     */
     public function shouldSendPaymentReminders(): bool
     {
         $rules = $this->billing_rules;
@@ -682,9 +783,6 @@ class DeveloperSetting extends Model
         return !empty($clean) ? $clean : [7, 3, 1];
     }
 
-    /**
-     * Human-readable payment method details (mirrors BillingHelperTrait).
-     */
     public function getPaymentMethodDetails(): array
     {
         $method = $this->payment_method ?? self::PAYMENT_METHOD_BANK;
@@ -801,6 +899,8 @@ class DeveloperSetting extends Model
             'version'        => $this->api_version,
             'enabled'        => $this->api_enabled,
             'has_secret_key' => !empty($this->developer_secret_key),
+            'has_api_key'    => !empty($this->developer_api_key),          // ✅ NEW
+            'last_generated' => $this->api_key_last_generated,             // ✅ NEW
         ];
     }
 
@@ -812,6 +912,8 @@ class DeveloperSetting extends Model
     {
         return [
             'two_factor_enabled'      => $this->enable_two_factor,
+            'two_factor_policy'       => $this->twoFactorPolicy(),         // ✅ NEW
+            'two_factor_roles'        => $this->twoFactorRequiredRoles(),  // ✅ NEW
             'session_timeout_minutes' => $this->session_timeout,
             'max_login_attempts'      => $this->max_login_attempts,
             'password_expiry_days'    => $this->password_expiry_days,
@@ -850,9 +952,6 @@ class DeveloperSetting extends Model
         ];
     }
 
-    /**
-     * Aggregate config — extended with billing state.
-     */
     public function getAllConfig(): array
     {
         return [
@@ -889,7 +988,6 @@ class DeveloperSetting extends Model
                 'primary_contact'   => $this->getPrimaryBillingContact(),
                 'has_primary_sa'    => $this->hasPrimarySuperAdmin(),
 
-                // ✅ enforcement surface
                 'state'                 => $this->billing_state,
                 'days_until_due'        => $this->daysUntilBillingDue(),
                 'days_overdue'          => $this->daysOverdueOnBilling(),
@@ -905,11 +1003,16 @@ class DeveloperSetting extends Model
      * ============================================================ */
 
     /**
-     * Generate and persist a new secret key.
+     * Generate and persist a new API key pair.
      *
-     * NOTE: The schema has no `developer_api_key` column, so only the
-     * secret is persisted. The plaintext api_key is returned for the
-     * caller to show once — it is not stored here.
+     * Both the public key and the secret are persisted now that
+     * `developer_api_key` exists (migration 091742). The plaintext
+     * values are ALSO returned so the caller can display them once.
+     *
+     * NOTE: The `developer_secret_key` column is NOT hashed here —
+     * see `verifyApiKey()` which does a constant-time comparison of
+     * the raw value. If you later want to hash it, update both this
+     * method and `verifyApiKey()` together.
      */
     public function generateApiKey(): array
     {
@@ -917,6 +1020,7 @@ class DeveloperSetting extends Model
         $secretKey = bin2hex(random_bytes(32));
 
         $update = [
+            'developer_api_key'    => $apiKey,
             'developer_secret_key' => $secretKey,
         ];
 
@@ -925,7 +1029,6 @@ class DeveloperSetting extends Model
         }
 
         $this->update($update);
-
         $this->clearCache();
 
         return [
@@ -944,11 +1047,6 @@ class DeveloperSetting extends Model
      | EMAIL CONFIG UPDATE
      * ============================================================ */
 
-    /**
-     * IMPORTANT: `developer_smtp_password` uses the `encrypted` cast.
-     * Passing a plaintext value here is correct — the cast encrypts it.
-     * Do NOT pre-encrypt with Crypt::encryptString (that would double-encrypt).
-     */
     public function updateEmailConfig(array $config): self
     {
         $validated = [
@@ -976,13 +1074,6 @@ class DeveloperSetting extends Model
      | BILLING RULES UPDATE
      * ============================================================ */
 
-    /**
-     * Merge new billing_rules with the existing ones and persist.
-     *
-     * Use this from any caller that needs to toggle flags without
-     * clobbering the other keys. Also clears the billing-state cache
-     * so enforcement flips immediately.
-     */
     public function updateBillingRules(array $newRules): self
     {
         $merged = array_replace($this->getBillingRulesArray(), $newRules);
@@ -1061,7 +1152,6 @@ class DeveloperSetting extends Model
         Cache::forget('email_configuration_status');
         Cache::forget('developer_settings_' . auth()->id());
 
-        // Billing-related caches that reference this record
         Cache::forget('developer_billing_settings_v2:' . $this->id);
         Cache::forget('developer_primary_super_admin');
         Cache::forget('developer_setting_current');
@@ -1072,18 +1162,23 @@ class DeveloperSetting extends Model
         ]);
     }
 
-    /**
-     * ✅ BILLING: forget just the billing-state caches.
-     *
-     * Called by the model's saved/deleted hooks so any write flips the
-     * cached state. Also called explicitly by the payment / signature
-     * flow to make enforcement react instantly.
-     */
     public function clearBillingStateCache(): void
     {
         Cache::forget(self::BILLING_STATE_CACHE_KEY);
         Cache::forget(self::PRIMARY_AGREEMENT_CACHE_KEY);
         Cache::forget('developer_setting_current');
+    }
+
+    /**
+     * ✅ NEW: forget the 2FA policy cache.
+     *
+     * Kept separate from clearBillingStateCache() because a policy change
+     * doesn't touch billing, and a billing change doesn't touch 2FA.
+     * Callers that touch both (e.g. setTwoFactorPolicy) call both.
+     */
+    public function clearTwoFactorPolicyCache(): void
+    {
+        Cache::forget(self::TWO_FACTOR_POLICY_CACHE_KEY);
     }
 
     /* ============================================================
@@ -1112,6 +1207,11 @@ class DeveloperSetting extends Model
             'enable_analytics'               => true,
             'analytics_provider'             => 'internal',
             'enable_daily_reports'           => true,
+
+            // 2FA defaults — see constants above
+            'enable_two_factor'              => false,
+            'two_factor_policy'              => self::TWO_FACTOR_OPTIONAL,
+            'two_factor_required_roles'      => null,
 
             // Billing defaults (safe, inactive)
             'monthly_billing_amount'         => 0.00,
@@ -1158,11 +1258,6 @@ class DeveloperSetting extends Model
         return $query;
     }
 
-    /**
-     * ✅ BILLING: records whose primary agreement is currently due.
-     * Note: due_soon/overdue are state-machine concepts, so this scope
-     * is a coarse DB-level filter — refine in PHP with billing_state.
-     */
     public function scopeWithDueBilling($query)
     {
         return $query->whereHas('primaryBillingAgreement', function ($q) {
@@ -1170,5 +1265,13 @@ class DeveloperSetting extends Model
               ->whereNotNull('due_date')
               ->whereDate('due_date', '<=', now());
         });
+    }
+
+    /**
+     * ✅ NEW: rows that enforce 2FA for at least one role.
+     */
+    public function scopeRequiringTwoFactor($query)
+    {
+        return $query->where('two_factor_policy', self::TWO_FACTOR_REQUIRED);
     }
 }
